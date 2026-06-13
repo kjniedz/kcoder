@@ -1,0 +1,22 @@
+# Python build / cache artifacts (regenerated automatically)
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+
+# Personal Claude Code settings (not meant to be shared)
+.claude/settings.local.json
+
+# Credentials never live in the repo, but guard against accidents
+credentials.json

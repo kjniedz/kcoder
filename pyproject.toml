@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kcoder"
+version = "0.1.0"
+description = "kcoder - a terminal coding agent developed by Kyle Niedzwiecki"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Kyle Niedzwiecki" }]
+dependencies = [
+    "anthropic>=0.50.0",
+    "openai>=1.60.0",
+    "rich>=13.0.0",
+    "pyfiglet>=1.0.0",
+]
+
+[project.scripts]
+kcoder = "kcoder.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kcoder*"]
