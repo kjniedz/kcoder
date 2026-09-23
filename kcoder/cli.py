@@ -1,6 +1,8 @@
 """kcoder - terminal client for the kcoder session daemon.
 
     kcoder                new session here (or attach to one already here)
+    kcoder "task"         one-shot: run a task, print the result, exit
+    echo task | kcoder    same, headless (no banner, no prompts)
     kcoder ls             list sessions
     kcoder attach <id>    attach to a session (id prefix or name)
     kcoder rm <id>        close and delete a session
@@ -19,7 +21,6 @@ import sys
 import time
 import webbrowser
 
-import pyfiglet
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
@@ -29,28 +30,53 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, auth, paths, ui
+from . import __version__, auth, banner, config, paths, ui
 from .client import ClientError, DaemonClient, DaemonUnavailable, daemon_url
 from .daemon import already_running
+from .input import Prompt
 from .providers import PROVIDERS
 
 ACCENT = ui.ACCENT
 
 console = Console()
+errconsole = Console(stderr=True)
+
+USAGE_HINT = (
+    "kcoder: terminal coding agent. Interactive: run `kcoder` in a terminal. "
+    "Headless: `kcoder \"task\"` or `echo task | kcoder` (add -y to allow tools). "
+    "See `kcoder --help`."
+)
+
+
+class Detach(Exception):
+    """Raised inside the chat loop to leave the session (it keeps running)."""
 
 
 # ----------------------------------------------------------------------
 # chrome
 # ----------------------------------------------------------------------
 
-def print_banner() -> None:
+def print_banner(args=None, *, compact: bool = False) -> None:
+    """Brand banner. Never printed when stdout isn't a terminal."""
+    if not sys.stdout.isatty():
+        return
+    if args is not None and getattr(args, "no_banner", False):
+        return
+    if not config.load().get("banner", True):
+        return
+    banner.print_banner(console, compact=compact)
+
+
+def print_context_line(client: DaemonClient) -> None:
+    """'4 sessions, 1 running · 1 waiting on you · $3.12 today' under the banner."""
+    if not sys.stdout.isatty():
+        return
     try:
-        banner = pyfiglet.figlet_format("KCODER", font="ansi_shadow")
-    except pyfiglet.FontNotFound:
-        banner = pyfiglet.figlet_format("KCODER", font="big")
-    console.print(banner, style=f"bold {ACCENT}", highlight=False)
-    console.print("developed by Kyle Niedzwiecki", style="italic dim")
-    console.print("© 2026 Kyer's Reserve LLC\n", style="dim")
+        stats = client.request("stats", timeout=5)["stats"]
+    except ClientError:
+        stats = None
+    console.print(banner.context_line(stats), highlight=False)
+    console.print()
 
 
 def print_session_panel(meta: dict) -> None:
@@ -156,32 +182,6 @@ def process_input(text: str):
 
     return _PATH_RE.sub(repl, text), images
 
-
-def read_user_input() -> str:
-    """Prompt for input, capturing full multi-line pastes.
-
-    A paste containing newlines submits its first line immediately; the
-    remaining lines sit in the tty buffer. Keep draining complete lines
-    until the buffer goes quiet so the whole paste lands in one message.
-    """
-    first = console.input("[bold green]you>[/bold green] ")
-    lines = [first]
-    if sys.stdin.isatty():
-        while select.select([sys.stdin], [], [], 0.08)[0]:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            lines.append(line.rstrip("\n"))
-    if len(lines) > 1:
-        console.print(
-            f"[dim]… +{len(lines) - 1} pasted line{'s' if len(lines) > 2 else ''}[/dim]"
-        )
-    return "\n".join(lines).strip()
-
-
-# ----------------------------------------------------------------------
-# turn rendering (consumes daemon events)
-# ----------------------------------------------------------------------
 
 # Playful status words shown while the model is still thinking (before any
 # tokens stream). Shuffled per turn and rotated over time so it feels random.
@@ -358,44 +358,159 @@ class TurnRenderer:
                 console.print(f"[dim]{escape(ev['text'])}[/dim]", highlight=False)
 
 
-def run_turn(client: DaemonClient, sid: str, renderer: TurnRenderer) -> None:
-    """Consume events until this session's turn ends. Ctrl+C interrupts."""
-    interrupted = False
-    while True:
+_last_ctrl_c = 0.0   # when Ctrl+C last interrupted a turn (for "twice exits")
+
+
+class _KeyWatcher:
+    """Puts the terminal in cbreak mode for the duration of a turn so a bare
+    Esc can be detected without waiting for Enter. Ctrl+C still raises
+    KeyboardInterrupt in cbreak mode."""
+
+    def __init__(self):
+        self.fd = None
+        self._old = None
+        self.typed = b""   # text typed while the agent was busy; prefills the next prompt
+
+    def __enter__(self):
+        if not sys.stdin.isatty():
+            return self
         try:
-            item = client.next_event(timeout=0.5)
-        except KeyboardInterrupt:
-            renderer.abort_stream()
-            if not interrupted:
-                interrupted = True
-                console.print("\n[dim]interrupting…[/dim]")
-                try:
-                    client.request("interrupt", sid=sid)
-                except ClientError:
-                    pass
-            continue
+            import termios
+            import tty
+            self.fd = sys.stdin.fileno()
+            self._old = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+        except Exception:  # noqa: BLE001
+            self.fd = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None and self._old is not None:
+            import termios
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self._old)
+
+    def esc_pressed(self) -> bool:
+        if self.fd is None:
+            return False
+        pressed = False
+        while select.select([self.fd], [], [], 0)[0]:
+            data = os.read(self.fd, 4096)
+            if not data:
+                break
+            # Ctrl+C normally arrives as SIGINT; if the terminal isn't our
+            # controlling tty it shows up as a byte instead. Same meaning.
+            if b"\x03" in data:
+                raise KeyboardInterrupt
+            # a lone ESC byte (not the start of an arrow-key sequence)
+            if data == b"\x1b" or data.endswith(b"\x1b"):
+                pressed = True
+                data = data[:-1]
+            if b"\x1b" not in data:   # keep plain typed text, drop escape sequences
+                self.typed += data
+        return pressed
+
+    def typed_text(self) -> str:
+        text = self.typed.decode("utf-8", "ignore").replace("\r\n", "\n").replace("\r", "\n")
+        return "".join(ch for ch in text if ch == "\n" or ch >= " ").strip("\n")
+
+
+def run_turn(client: DaemonClient, sid: str, renderer: TurnRenderer) -> str:
+    """Consume events until this session's turn ends.
+
+    Esc or Ctrl+C interrupts the agent (the session survives, so you can
+    redirect it). A second Ctrl+C detaches. Returns any text typed while
+    the agent was working, so the next prompt can start with it.
+    """
+    interrupted = False
+    global _last_ctrl_c
+
+    def interrupt(source: str) -> None:
+        nonlocal interrupted
+        global _last_ctrl_c
+        renderer.abort_stream()
+        if source == "ctrl+c":
+            _last_ctrl_c = time.monotonic()
+        if interrupted:
+            return
+        interrupted = True
+        console.print(f"\n[dim]interrupting ({source})… ctrl+c again to detach[/dim]")
+        try:
+            client.request("interrupt", sid=sid)
+        except ClientError:
+            pass
+
+    with _KeyWatcher() as keys:
+        while True:
+            try:
+                item = client.next_event(timeout=0.1)
+                if keys.esc_pressed():
+                    interrupt("esc")
+            except KeyboardInterrupt:
+                if interrupted:
+                    renderer.abort_stream()
+                    raise Detach()
+                interrupt("ctrl+c")
+                continue
+            if item is None:
+                continue
+            kind, payload = item
+            if kind != "event" or payload.get("sid") != sid:
+                continue
+            ev = payload["ev"]
+            if ev["t"] == "turn_end":
+                renderer.abort_stream()
+                keys.esc_pressed()
+                return keys.typed_text()
+            if ev["t"] in ("user", "status", "system"):
+                continue
+            try:
+                renderer.handle(ev)
+            except KeyboardInterrupt:
+                if interrupted:
+                    renderer.abort_stream()
+                    raise Detach()
+                interrupt("ctrl+c")
+
+
+def run_turn_plain(client: DaemonClient, sid: str, *, allow_tools: bool) -> bool:
+    """Headless turn: stream text to stdout, notes to stderr, no prompts.
+    Returns True if the turn ended without error."""
+    ok = True
+    while True:
+        item = client.next_event(timeout=0.5)
         if item is None:
             continue
         kind, payload = item
         if kind != "event" or payload.get("sid") != sid:
             continue
         ev = payload["ev"]
-        if ev["t"] == "turn_end":
-            renderer.abort_stream()
-            return
-        if ev["t"] in ("user", "status", "system"):
-            continue
-        try:
-            renderer.handle(ev)
-        except KeyboardInterrupt:
-            renderer.abort_stream()
-            if not interrupted:
-                interrupted = True
-                console.print("\n[dim]interrupting…[/dim]")
-                try:
-                    client.request("interrupt", sid=sid)
-                except ClientError:
-                    pass
+        t = ev["t"]
+        if t == "text":
+            sys.stdout.write(ev["delta"])
+            sys.stdout.flush()
+        elif t == "assistant_end":
+            if ev.get("text"):
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+        elif t == "tool_call":
+            print(f"⚙ {ev['description']}", file=sys.stderr, flush=True)
+        elif t == "approval_request":
+            # Nobody is here to answer; declining is the safe default.
+            print(f"  ✗ declined (headless; run with -y to allow tools): {ev['description']}",
+                  file=sys.stderr, flush=True)
+            try:
+                client.request("approve", sid=sid, rid=ev["id"], approved=False)
+            except ClientError:
+                pass
+        elif t == "tool_result" and ev.get("is_error"):
+            first = (ev.get("content") or "").splitlines()[:1]
+            print(f"  ✗ {first[0] if first else 'error'}", file=sys.stderr, flush=True)
+        elif t in ("notice", "error"):
+            print(ev["text"], file=sys.stderr, flush=True)
+            if t == "error":
+                ok = False
+        elif t == "turn_end":
+            return ok and ev.get("result") == "ok"
 
 
 # ----------------------------------------------------------------------
@@ -441,33 +556,47 @@ def choose_provider(requested: str | None) -> str | None:
 # the chat loop
 # ----------------------------------------------------------------------
 
-def chat(client: DaemonClient, meta: dict, replay: list | None = None) -> None:
+def chat(client: DaemonClient, meta: dict, replay: list | None = None,
+         history: list | None = None) -> None:
     sid = meta["id"]
     print_session_panel(meta)
     renderer = TurnRenderer(client, sid)
+    prompt = Prompt(history_prompts=history)
 
     if replay:
         renderer.replay(replay)
         console.print()
 
-    # If we attached mid-turn, catch up on the live stream first.
-    if meta.get("status") in ("working", "waiting"):
-        console.print("[dim](session is working - attaching to the live turn)[/dim]")
-        if meta.get("pending_approval"):
-            console.print("[dim](a tool approval is pending in this session)[/dim]")
-        run_turn(client, sid, renderer)
-        console.print()
+    try:
+        # If we attached mid-turn, catch up on the live stream first.
+        if meta.get("status") in ("working", "waiting"):
+            console.print("[dim](session is working - attaching to the live turn)[/dim]")
+            if meta.get("pending_approval"):
+                console.print("[dim](a tool approval is pending in this session)[/dim]")
+            typed = run_turn(client, sid, renderer)
+            console.print()
+        else:
+            typed = ""
+        _chat_loop(client, meta, renderer, prompt, typed)
+    except Detach:
+        pass
+    console.print(f"[dim]detached - `kcoder attach {meta['name']}` to come back[/dim]")
 
+
+def _chat_loop(client: DaemonClient, meta: dict, renderer: TurnRenderer, prompt: Prompt,
+               typed: str = "") -> None:
+    sid = meta["id"]
     while True:
         client.drain_events()
         try:
-            user_input = read_user_input()
+            user_input = prompt.read(default=typed, ctrl_c_at=_last_ctrl_c)
+            typed = ""
         except KeyboardInterrupt:
             console.print()
             continue
         except EOFError:
-            console.print(f"\n[dim]detached - `kcoder attach {meta['name']}` to come back[/dim]")
-            break
+            console.print()
+            raise Detach()
 
         if not user_input:
             continue
@@ -480,7 +609,7 @@ def chat(client: DaemonClient, meta: dict, replay: list | None = None) -> None:
             try:
                 if _handle_command(client, meta, renderer, command, arg):
                     continue
-                break  # command asked to leave
+                return  # command asked to leave
             except ClientError as exc:
                 console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
                 continue
@@ -515,7 +644,7 @@ def chat(client: DaemonClient, meta: dict, replay: list | None = None) -> None:
         except ClientError as exc:
             console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
             continue
-        run_turn(client, sid, renderer)
+        typed = run_turn(client, sid, renderer)
         console.print()
 
 
@@ -537,12 +666,11 @@ def _handle_command(client, meta, renderer, command, arg) -> bool:
     """Returns True to keep chatting, False to leave."""
     sid = meta["id"]
     if command in ("/exit", "/quit"):
-        console.print(f"[dim]detached - `kcoder attach {meta['name']}` to come back[/dim]")
         return False
     if command == "/close":
         client.request("close", sid=sid)
         console.print("[dim]session closed. bye![/dim]")
-        return False
+        raise SystemExit(0)
     if command == "/clear":
         client.request("clear", sid=sid)
         console.print("[dim]conversation cleared[/dim]")
@@ -685,11 +813,16 @@ def cmd_attach(args) -> int:
         # Replay just the last turn so the terminal shows where things stand.
         starts = [i for i, e in enumerate(events) if e["t"] == "user"]
         last_turn = events[starts[-1]:] if starts else []
-        print_banner()
+        print_banner(args, compact=True)
+        print_context_line(client)
         if len(starts) > 1:
             console.print(f"[dim](attached - {len(starts) - 1} earlier turn(s) not shown)[/dim]")
-        chat(client, meta, replay=last_turn)
+        chat(client, meta, replay=last_turn, history=_prompt_history(events))
     return 0
+
+
+def _prompt_history(events: list) -> list:
+    return [e["text"] for e in events if e["t"] == "user" and e.get("text")]
 
 
 def cmd_rm(args) -> int:
@@ -768,7 +901,17 @@ def cmd_chat(args) -> int:
             console.print("[dim]No saved credentials found.[/dim]")
         return 0
 
-    print_banner()
+    prompt_text = " ".join(args.prompt).strip() if args.prompt else ""
+    headless = not sys.stdin.isatty() or not sys.stdout.isatty()
+    if headless and not prompt_text and not sys.stdin.isatty():
+        prompt_text = sys.stdin.read().strip()
+    if headless or prompt_text:
+        if not prompt_text:
+            print(USAGE_HINT)
+            return 0
+        return cmd_oneshot(args, prompt_text)
+
+    print_banner(args)
 
     provider_id = choose_provider(args.provider)
     if provider_id is None:
@@ -782,9 +925,11 @@ def cmd_chat(args) -> int:
         return 1
 
     with client:
+        print_context_line(client)
         here = [s for s in client.request("list")["sessions"] if s["cwd"] == cwd]
         meta = None
         replay: list = []
+        history: list = []
         if here and not args.new:
             labels = ["Start a new session here"] + [
                 f"Attach to [bold]{escape(s['name'])}[/bold]  [dim]{s['status']} · "
@@ -801,6 +946,7 @@ def cmd_chat(args) -> int:
                 events = reply["events"]
                 starts = [i for i, e in enumerate(events) if e["t"] == "user"]
                 replay = events[starts[-1]:] if starts else []
+                history = _prompt_history(events)
         if meta is None:
             model = args.model or os.environ.get("KCODER_MODEL") or PROVIDERS[provider_id].default_model
             try:
@@ -817,11 +963,67 @@ def cmd_chat(args) -> int:
                 return 1
             meta = reply["session"]
         try:
-            chat(client, meta, replay=replay)
+            chat(client, meta, replay=replay, history=history)
         except DaemonUnavailable as exc:
             console.print(f"\n[red]{escape(str(exc))}[/red]", highlight=False)
             return 1
     return 0
+
+
+def cmd_oneshot(args, prompt_text: str) -> int:
+    """Headless / one-shot: run one task in a fresh session and exit.
+
+    Nothing decorative is printed. Text streams to stdout, tool activity and
+    errors go to stderr, and the exit code is 0 on success. Tool approvals
+    are declined unless -y is given. The session is deleted afterwards
+    unless --keep is set.
+    """
+    config_data = auth.load_config()
+    provider_id = args.provider or config_data.get("default_provider")
+    if provider_id not in PROVIDERS or not auth.has_credentials(provider_id):
+        print(
+            f"kcoder: no credentials for provider {provider_id or '(none)'}; "
+            "run `kcoder` in a terminal once to sign in, or set the provider's API key env var.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        client = DaemonClient.connect()
+    except DaemonUnavailable as exc:
+        print(f"kcoder: {exc}", file=sys.stderr)
+        return 1
+    with client:
+        model = args.model or os.environ.get("KCODER_MODEL") or PROVIDERS[provider_id].default_model
+        try:
+            reply = client.request(
+                "create", cwd=os.getcwd(), provider=provider_id, model=model,
+                name=args.name or f"oneshot-{os.path.basename(os.getcwd()) or 'x'}",
+                auto_approve=bool(args.yes),
+            )
+            sid = reply["session"]["id"]
+            client.request("send", sid=sid, text=prompt_text)
+        except ClientError as exc:
+            print(f"kcoder: {exc}", file=sys.stderr)
+            return 1
+        interactive_tty = sys.stdin.isatty() and sys.stdout.isatty()
+        try:
+            if interactive_tty:
+                renderer = TurnRenderer(client, sid)
+                run_turn(client, sid, renderer)
+                ok = True
+            else:
+                ok = run_turn_plain(client, sid, allow_tools=bool(args.yes))
+        except (Detach, KeyboardInterrupt):
+            ok = False
+        finally:
+            if not args.keep:
+                try:
+                    client.request("delete", sid=sid)
+                except ClientError:
+                    pass
+            elif interactive_tty:
+                console.print(f"[dim]session kept - `kcoder attach {reply['session']['name']}`[/dim]")
+    return 0 if ok else 1
 
 
 # ----------------------------------------------------------------------
@@ -840,7 +1042,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("chat", help="start or attach to a session here (default)")
+    p.add_argument("prompt", nargs="*", help="one-shot task: run it, print the result, exit")
     p.add_argument("-y", "--yes", action="store_true", help="auto-approve all tool executions (no y/n prompts)")
+    p.add_argument("--no-banner", action="store_true", help="skip the startup banner")
+    p.add_argument("--keep", action="store_true", help="one-shot: keep the session instead of deleting it")
     p.add_argument("--provider", metavar="NAME", help=f"provider to use ({', '.join(PROVIDERS)})")
     p.add_argument("--model", metavar="NAME", help="model to start with")
     p.add_argument("--name", metavar="NAME", help="session name (default: directory name)")
@@ -871,7 +1076,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     argv = sys.argv[1:]
-    # `kcoder -y`, `kcoder --provider x`, bare `kcoder` → the chat command
+    # `kcoder -y`, `kcoder --provider x`, `kcoder "task"`, bare `kcoder` → the chat command
     if not argv or argv[0] not in SUBCOMMANDS | {"chat", "-h", "--help", "--version"}:
         argv = ["chat"] + argv
     parser = build_parser()

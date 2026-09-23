@@ -192,12 +192,14 @@ class AnthropicBackend:
                 response = stream.get_final_message()
 
             usage = response.usage
-            prompt_tokens = (
-                usage.input_tokens
-                + (getattr(usage, "cache_read_input_tokens", 0) or 0)
-                + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+            cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            hooks.usage(
+                usage.input_tokens + cache_read + cache_write,
+                usage.output_tokens,
+                cache_read=cache_read,
+                cache_write=cache_write,
             )
-            hooks.usage(prompt_tokens, usage.output_tokens)
 
             # Preserve full content (thinking/text/tool_use blocks) in history,
             # as plain dicts so the conversation can be saved and resumed.

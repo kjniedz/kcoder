@@ -39,7 +39,7 @@ from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, paths
+from . import __version__, auth, config, paths, pricing
 from .engine import Engine, EngineBusy
 from .providers import PROVIDERS
 
@@ -129,6 +129,10 @@ class Session:
         return out
 
 
+def _today() -> str:
+    return dt.date.today().strftime("%Y-%m-%d")
+
+
 def _atomic_write(path: str, text: str) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -154,11 +158,14 @@ class Manager:
         self.clients: set[Client] = set()
         self.stop = asyncio.Event()
         self._usage_file = None
+        self.today = {"date": _today(), "input": 0, "output": 0, "cost": 0.0, "calls": 0}
 
     # -- lifecycle -----------------------------------------------------
 
     def load_from_disk(self) -> None:
         paths.ensure_data_dir()
+        config.load()
+        self._load_today()
         for sid in sorted(os.listdir(paths.SESSIONS_DIR)):
             sdir = os.path.join(paths.SESSIONS_DIR, sid)
             meta_path = os.path.join(sdir, "meta.json")
@@ -187,6 +194,39 @@ class Manager:
                 log.info("loaded session %s (%s) in %s", sid, meta.get("name"), meta.get("cwd"))
             except Exception as exc:  # noqa: BLE001 - one bad session must not stop the daemon
                 log.exception("failed to load session %s: %s", sid, exc)
+
+    def _load_today(self) -> None:
+        """Sum today's calls from usage.jsonl so fleet stats survive restarts."""
+        today = _today()
+        self.today = {"date": today, "input": 0, "output": 0, "cost": 0.0, "calls": 0}
+        try:
+            with open(paths.USAGE_LOG_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if row.get("date") != today:
+                        continue
+                    self.today["input"] += int(row.get("input", 0))
+                    self.today["output"] += int(row.get("output", 0))
+                    self.today["cost"] += float(row.get("cost", 0.0))
+                    self.today["calls"] += 1
+        except FileNotFoundError:
+            pass
+
+    def stats(self) -> dict:
+        if self.today["date"] != _today():
+            self._load_today()
+        by_status = collections.Counter(s.engine.status for s in self.sessions.values())
+        return {
+            "sessions": len(self.sessions),
+            "working": by_status.get("working", 0),
+            "waiting": by_status.get("waiting", 0),
+            "idle": by_status.get("idle", 0),
+            "error": by_status.get("error", 0),
+            "today": dict(self.today),
+        }
 
     def shutdown(self) -> None:
         for session in self.sessions.values():
@@ -303,10 +343,23 @@ class Manager:
             return
         t = event["t"]
         if t == "usage":
+            uncached = max(0, event["input"] - event.get("cache_read", 0) - event.get("cache_write", 0))
+            event["cost"] = round(pricing.cost(
+                event.get("model") or session.engine.model, uncached, event["output"],
+                event.get("cache_read", 0), event.get("cache_write", 0),
+            ), 6)
             u = session.meta.setdefault("usage", {"input": 0, "output": 0, "calls": 0, "turns": 0})
+            u.setdefault("cost", 0.0)
             u["input"] += event["input"]
             u["output"] += event["output"]
+            u["cost"] = round(u["cost"] + event["cost"], 6)
             u["calls"] += 1
+            if self.today["date"] != _today():
+                self._load_today()
+            self.today["input"] += event["input"]
+            self.today["output"] += event["output"]
+            self.today["cost"] += event["cost"]
+            self.today["calls"] += 1
             self._log_usage(session, event)
         elif t == "turn_end":
             session.meta.setdefault("usage", {}).setdefault("turns", 0)
@@ -349,6 +402,9 @@ class Manager:
                 "model": event.get("model"),
                 "input": event["input"],
                 "output": event["output"],
+                "cache_read": event.get("cache_read", 0),
+                "cache_write": event.get("cache_write", 0),
+                "cost": event.get("cost", 0.0),
             }) + "\n")
             self._usage_file.flush()
         except OSError as exc:
@@ -381,7 +437,10 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {"pong": time.time(), "version": __version__}
 
     if t == "list":
-        return {"sessions": [s.snapshot() for s in manager.sessions.values()]}
+        return {"sessions": [s.snapshot() for s in manager.sessions.values()], "stats": manager.stats()}
+
+    if t == "stats":
+        return {"stats": manager.stats()}
 
     if t == "create":
         provider = req.get("provider")

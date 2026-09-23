@@ -26,8 +26,15 @@ terminal closes. The terminal client is one view onto the daemon; a browser
   survive terminal closes, daemon restarts, and crashes (history is persisted)
 - **Live progress wheel** while the model works, showing elapsed time and a
   running token estimate, then exact `in → out` token counts when it finishes
-- **Multi-line paste support** — paste or drag-and-drop content of any length
-  (far past 10 lines) and it lands as a single message
+- **Claude Code-style input** — bracketed paste means a paste never submits
+  by itself; big pastes collapse into a `[Pasted #1 · 142 lines]` chip
+  (Alt+E expands it for editing); Enter sends, Option+Enter inserts a
+  newline; Up recalls earlier prompts; `/` opens a command menu; anything
+  typed while the agent is busy lands in the next prompt
+- **Esc interrupts** the agent mid-turn without losing the session, so you can
+  redirect it; Ctrl+C once interrupts, twice detaches
+- **Headless one-shot mode** — `kcoder "task"` or `echo task | kcoder` runs a
+  single turn with no banner or prompts and exits 0 on success
 - **Image input** — drag an image file onto the prompt and it's sent to the
   model as `[Image #1]` (works with vision-capable models)
 - Works on **any folder you can reach** — your current directory, or projects
@@ -89,12 +96,17 @@ Optional environment variables:
 |---|---|---|
 | `KCODER_MODEL` | provider default | Model used at startup |
 | `KCODER_BASH_TIMEOUT` | `120` | Default `run_bash` timeout (seconds) |
+| `KCODER_NO_ANIMATION` | unset | Disable the banner reveal animation |
+| `NO_COLOR` | unset | Disable all colour output |
 
 ## Usage
 
 ```bash
 kcoder                      # new session in this directory (offers to attach if one exists here)
+kcoder "add tests for foo"  # one-shot: run one task, print the result, exit
+echo "task" | kcoder -y     # headless one-shot (tools allowed with -y; declined otherwise)
 kcoder --yes                # auto-approve mode: runs tools without asking
+kcoder --no-banner          # skip the startup banner (NO_COLOR is respected too)
 kcoder --provider deepseek  # start with a specific provider
 kcoder --model NAME         # start with a specific model
 kcoder --name api-work      # name the session (default: directory name)
@@ -124,11 +136,50 @@ and keep going until the task is done.
 
 While it works, a spinner shows the elapsed time and a live token estimate for
 the current turn; when the turn finishes, kcoder prints the exact prompt and
-response token counts (e.g. `✓ 4.2s · 12,043 in → 587 out tokens`).
+response token counts (e.g. `✓ 4.2s · 12,043 in → 587 out tokens`). Press
+**Esc** (or Ctrl+C) to interrupt the agent mid-turn — the session and its
+history survive, so you can just tell it what to do differently. Ctrl+C a
+second time detaches.
 
-You can paste as much as you want into the `you>` prompt — multi-line snippets,
-logs, or whole files. The entire paste is captured as one message (kcoder
-notes `… +N pasted lines`), so you're not limited to a single line.
+### The prompt
+
+| Key | Action |
+|---|---|
+| Enter | send |
+| Option+Enter | insert a newline (for Shift+Enter, set your terminal to send Option+Enter for it, as Claude Code's `/terminal-setup` does) |
+| Up / Down | recall earlier prompts (on the first / last line) |
+| paste | never submits by itself; 3+ lines or 400+ chars become a `[Pasted #N · L lines]` chip |
+| Alt+E | expand the paste chip under the cursor so you can edit it |
+| `/` | slash-command menu with autocomplete (Tab / arrows to pick) |
+| Ctrl+C | clear the line; twice on an empty line to detach |
+
+### Headless / one-shot
+
+When stdout isn't a terminal (another program's shell tool, a pipe, CI) kcoder
+prints nothing decorative. Give it a task and it runs one turn, streams the
+answer to stdout, sends tool activity and errors to stderr, and exits 0 on
+success:
+
+```bash
+kcoder "summarize what this repo does"
+echo "run the tests and fix the failures" | kcoder -y
+```
+
+Tool approvals are declined unless `-y` is given (nobody is there to answer).
+The one-shot session is deleted afterwards; pass `--keep` to keep it. With no
+task at all, kcoder prints a one-line usage hint and exits 0.
+
+### Banner
+
+The KCODER banner fades from kcoder's light blue into deep violet (truecolor,
+with 256- and 16-colour fallbacks), sweeps in over ~300ms on launch (any key
+skips it; it's off when not a TTY, when the OS "reduce motion" setting is on,
+or with `KCODER_NO_ANIMATION=1`), and shows a rotating tagline plus a live
+line from the daemon like `4 sessions, 2 running · 1 waiting on you · $3.12
+today`. Under 80 columns, or when re-attaching, it's a one-line wordmark.
+Edit `~/.config/kcoder/config.json` to change the taglines or turn the banner
+or animation off. The banner colour is brand, not state — errors and statuses
+are coloured elsewhere.
 
 **Images:** drag an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) onto
 the prompt — optionally with a question — and kcoder attaches it to your

@@ -11,7 +11,7 @@ Events (all carry "t" = type and "ts" = unix time):
     assistant_start   {}                       a streamed reply is beginning
     text              {delta}                  streamed text (not persisted)
     assistant_end     {text, elapsed}          full text of that reply segment
-    usage             {input, output, elapsed} one model call's token counts
+    usage             {input, output, cache_read, cache_write, model, elapsed}
     tool_call         {id, name, input, description}
     approval_request  {id, name, description, input}
     approval_result   {id, approved}
@@ -262,12 +262,17 @@ class Engine:
             self.emit("text", delta=piece)
         self.emit("assistant_end", text=text, elapsed=round(time.monotonic() - started, 2))
 
-    def usage(self, input_tokens: int, output_tokens: int) -> None:
+    def usage(self, input_tokens: int, output_tokens: int, cache_read: int = 0,
+              cache_write: int = 0) -> None:
+        """`input_tokens` is the full prompt size (cached portions included);
+        cache_read/cache_write break out the parts billed at cache rates."""
         self.last_input_tokens = int(input_tokens or 0)
         self.emit(
             "usage",
             input=int(input_tokens or 0),
             output=int(output_tokens or 0),
+            cache_read=int(cache_read or 0),
+            cache_write=int(cache_write or 0),
             model=self.model,
             elapsed=round(time.monotonic() - self._turn_started, 2),
         )

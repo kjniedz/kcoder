@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import select as _select
 import sys
+from contextlib import contextmanager
 
 from rich.console import Group
 from rich.live import Live
@@ -13,36 +14,51 @@ from rich.text import Text
 ACCENT = "#87CEFA"  # light sky blue - kcoder's accent color
 
 
-def _read_key() -> str:
-    """Read one keypress in raw mode. Returns 'up', 'down', 'enter', 'esc', or the char."""
+@contextmanager
+def cbreak_mode():
+    """Put the terminal in cbreak mode (no line buffering or echo, output
+    processing kept) for the whole lifetime of a widget. Switching modes
+    between keystrokes loses bytes that arrive in the gap, so widgets hold
+    the mode until they're done."""
     import termios
     import tty
 
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
-        tty.setraw(fd)
-        # Read raw bytes from the fd (not buffered sys.stdin), so the select()
-        # below accurately reflects whether more of an escape sequence is
-        # waiting — buffered reads would hide pending bytes from select().
-        ch = os.read(fd, 1)
-        if ch == b"\x03":  # Ctrl+C
-            raise KeyboardInterrupt
-        if ch == b"\x1b":
-            # Bare ESC, or the start of an escape sequence (arrow keys)?
-            if _select.select([fd], [], [], 0.05)[0]:
-                rest = os.read(fd, 8)
-                # Cursor keys come as CSI (ESC [ A) or SS3 (ESC O A); the final
-                # byte is A=up / B=down (ignore left/right and modified forms).
-                if rest[:1] in (b"[", b"O"):
-                    return {b"A": "up", b"B": "down"}.get(rest[-1:], "")
-                return ""
-            return "esc"
-        if ch in (b"\r", b"\n"):
-            return "enter"
-        return ch.decode("utf-8", "ignore")
+        tty.setcbreak(fd)
+        yield fd
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _read_key(fd: int) -> str:
+    """Read one keypress (terminal already in cbreak mode).
+    Returns 'up', 'down', 'enter', 'esc', or the character."""
+    ch = os.read(fd, 1)
+    if ch == b"\x03":  # Ctrl+C (cbreak normally raises via SIGINT; belt and braces)
+        raise KeyboardInterrupt
+    if ch == b"\x1b":
+        # Bare ESC, or the start of an escape sequence (arrow keys)?
+        if not _select.select([fd], [], [], 0.05)[0]:
+            return "esc"
+        nxt = os.read(fd, 1)
+        if nxt not in (b"[", b"O"):
+            return ""  # alt+<key>: ignore
+        # CSI / SS3: read exactly one sequence, up to its final byte
+        # (0x40-0x7E), leaving anything typed after it for the next call.
+        final = b""
+        while _select.select([fd], [], [], 0.05)[0]:
+            b = os.read(fd, 1)
+            if not b:
+                break
+            if 0x40 <= b[0] <= 0x7E:
+                final = b
+                break
+        return {b"A": "up", b"B": "down"}.get(final, "")
+    if ch in (b"\r", b"\n"):
+        return "enter"
+    return ch.decode("utf-8", "ignore")
 
 
 def _supports_raw_mode() -> bool:
@@ -92,9 +108,9 @@ def select(console, title: str, options: list, index: int = 0):
         lines.append(Text.from_markup("[dim]↑/↓ move · enter select · esc cancel[/dim]"))
         return Group(*lines)
 
-    with Live(render(), console=console, auto_refresh=False, transient=True) as live:
+    with cbreak_mode() as fd, Live(render(), console=console, auto_refresh=False, transient=True) as live:
         while True:
-            key = _read_key()
+            key = _read_key(fd)
             if key == "up":
                 index = (index - 1) % len(options)
             elif key == "down":
