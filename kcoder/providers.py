@@ -58,8 +58,9 @@ PROVIDERS = {
         key_url="https://claude.com/product/claude-code",
         base_url=None,
         # Claude Code aliases resolve to the plan's current models
-        models=["opus", "sonnet", "haiku", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
-        default_model="opus",
+        models=["fable", "opus", "sonnet", "haiku", "claude-fable-5-1", "claude-fable-5",
+                "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        default_model="fable",
     ),
     "anthropic": Provider(
         id="anthropic",

@@ -350,7 +350,7 @@ function buildChatHtml(store, sid, opts = {}) {
         break;
       }
       case 'usage':
-        if (!opts.compact) out.push(`<div class="note usage">✓ ${e.elapsed != null ? e.elapsed.toFixed ? e.elapsed.toFixed(1) + 's · ' : e.elapsed + 's · ' : ''}${fmtInt(e.input)} in → ${fmtInt(e.output)} out tokens${e.cost ? ' · ' + fmtUsd(e.cost) : ''}</div>`);
+        if (!opts.compact) out.push(`<div class="note usage">✓ ${e.elapsed != null ? e.elapsed.toFixed ? e.elapsed.toFixed(1) + 's · ' : e.elapsed + 's · ' : ''}${fmtInt(e.input)} in → ${fmtInt(e.output)} out tokens${e.plan ? ' · on your plan' : e.cost ? ' · ' + fmtUsd(e.cost) : ''}</div>`);
         break;
       case 'error': out.push(`<div class="note err">${esc(e.text)}</div>`); break;
       case 'notice': out.push(`<div class="note warn">${esc(e.text)}</div>`); break;
@@ -513,7 +513,7 @@ function renderPaneChrome(pane, s, num) {
   const ctx = s.context_tokens || 0;
   const git = state.gitInfo.get(s.id);
   $('.pane-status', pane).innerHTML =
-    `<span title="context used (last prompt)">ctx ${fmtTokens(ctx)}</span><span title="tokens in+out">${fmtTokens((u.input || 0) + (u.output || 0))} tok</span><span>${fmtUsd(u.cost || 0)}</span>` +
+    `<span title="context used (last prompt)">ctx ${fmtTokens(ctx)}</span><span title="tokens in+out">${fmtTokens((u.input || 0) + (u.output || 0))} tok</span><span title="${s.plan ? 'covered by your Claude plan' : 'API spend'}">${s.plan ? 'plan' : fmtUsd(u.cost || 0)}</span>` +
     (s.queue && s.queue.length ? `<span title="queued tasks">▶ ${s.queue.length} queued</span>` : '') +
     (git ? `<span class="git-line" title="git">${esc(git.branch || '')}${git.dirty ? ` <span class="dirty">±${git.dirty}</span>` : ''}${git.ahead ? ` ↑${git.ahead}` : ''}</span>` : '') +
     `<span class="spacer"></span>` +
@@ -545,8 +545,11 @@ function renderPaneChrome(pane, s, num) {
     fillModelSelect($('select[data-act="model"]', acts), s);
   }
   const slot = $('.composer-slot', pane);
-  slot.hidden = !focused || paneViewOf(s.id) === 'shell';
-  if (focused && !slot.hidden && !slot.firstChild) mountComposer(slot, s.id, paneViewOf(s.id) === 'term');
+  slot.hidden = paneViewOf(s.id) === 'shell';
+  if (!slot.hidden && !slot.firstChild) mountComposer(slot, s.id, paneViewOf(s.id) === 'term');
+  else if (!slot.hidden) updateComposerState(slot, s.id);
+  pane.classList.toggle('compact', !focused);
+  const ta = $('.composer textarea', slot); if (ta) ta.placeholder = focused ? 'Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)' : 'Message ' + s.name + '…';
 }
 
 function fillModelSelect(sel, s) {
@@ -763,7 +766,7 @@ function renderTitlebars() {
   const s = state.sid ? (state.sessions.get(state.sid) || state.chats.find((c) => c.id === state.sid)) : null;
   const html = !s ? '<span class="meta">pick a chat on the left, or press n for a new one</span>' :
     `<span class="dot ${s.archived ? 'archived' : s.status}"></span><span class="title">${esc(s.title || s.name)}</span><span class="meta">${esc((s.project || {}).name || '')}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} · ${esc(shortHome(s.cwd))}</span><span class="spacer"></span>` +
-    `<span class="meta">ctx ${fmtTokens(s.context_tokens || 0)} · ${fmtUsd((s.usage || {}).cost || 0)}</span>` +
+    `<span class="meta">ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? 'on your plan' : fmtUsd((s.usage || {}).cost || 0)}</span>` +
     `<select data-act="trust" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option></select>` +
     `<select data-act="model" title="model"></select>` +
     `<button data-act="interrupt" title="Esc" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■</button>` +

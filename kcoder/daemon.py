@@ -106,6 +106,7 @@ class Session:
         m["archived"] = False
         m["queue"] = list(self.meta.get("queue") or [])
         m["shell"] = self.shell is not None
+        m["plan"] = self.engine.provider.kind == "claude"
         return m
 
     def save_meta(self) -> None:
@@ -576,6 +577,12 @@ class Manager:
                     event.get("model") or session.engine.model, uncached, event["output"],
                     event.get("cache_read", 0), event.get("cache_write", 0),
                 ), 6)
+            if session.engine.provider.kind == "claude":
+                # covered by the user's Claude plan: keep the API-equivalent for
+                # reference, but it is not money spent
+                event["api_equivalent"] = event["cost"]
+                event["cost"] = 0.0
+                event["plan"] = True
             u = session.meta.setdefault("usage", {"input": 0, "output": 0, "calls": 0, "turns": 0})
             u.setdefault("cost", 0.0)
             u["input"] += event["input"]
