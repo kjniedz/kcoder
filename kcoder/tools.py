@@ -1,5 +1,7 @@
 """Tool definitions and executors for kcoder."""
 
+from __future__ import annotations
+
 import os
 import subprocess
 
@@ -8,6 +10,7 @@ DEFAULT_BASH_TIMEOUT = int(os.environ.get("KCODER_BASH_TIMEOUT", "120"))
 # Tools that mutate state and therefore require user approval
 # (unless auto-approve mode is on).
 DANGEROUS_TOOLS = {"write_file", "edit_file", "run_bash"}
+READ_ONLY_TOOLS = {"read_file", "list_dir"}
 
 TOOLS = [
     {
@@ -114,25 +117,33 @@ TOOLS = [
 ]
 
 
-def read_file(path: str) -> str:
-    with open(os.path.expanduser(path), "r", encoding="utf-8", errors="replace") as f:
+def resolve(path: str, cwd: str) -> str:
+    """Expand ~ and resolve a relative path against the session's cwd."""
+    path = os.path.expanduser(path)
+    if not os.path.isabs(path):
+        path = os.path.join(cwd, path)
+    return os.path.normpath(path)
+
+
+def read_file(path: str, cwd: str = ".") -> str:
+    with open(resolve(path, cwd), "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
     if not content:
         return "(file is empty)"
     return content
 
 
-def write_file(path: str, content: str) -> str:
-    path = os.path.expanduser(path)
-    parent = os.path.dirname(os.path.abspath(path))
+def write_file(path: str, content: str, cwd: str = ".") -> str:
+    path = resolve(path, cwd)
+    parent = os.path.dirname(path)
     os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return f"Wrote {len(content)} bytes to {path}"
 
 
-def edit_file(path: str, old_str: str, new_str: str) -> str:
-    path = os.path.expanduser(path)
+def edit_file(path: str, old_str: str, new_str: str, cwd: str = ".") -> str:
+    path = resolve(path, cwd)
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     count = content.count(old_str)
@@ -148,8 +159,8 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     return f"Edited {path}"
 
 
-def list_dir(path: str = ".") -> str:
-    path = os.path.expanduser(path)
+def list_dir(path: str = ".", cwd: str = ".") -> str:
+    path = resolve(path, cwd)
     entries = sorted(os.listdir(path))
     if not entries:
         return "(directory is empty)"
@@ -162,7 +173,7 @@ def list_dir(path: str = ".") -> str:
     return "\n".join(lines)
 
 
-def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT) -> str:
+def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".") -> str:
     try:
         result = subprocess.run(
             command,
@@ -170,6 +181,7 @@ def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired:
         return f"Error: command timed out after {timeout}s"
@@ -198,19 +210,24 @@ def describe_tool_call(name: str, tool_input: dict) -> str:
     return f"{name}: {tool_input}"
 
 
-def execute_tool(name: str, tool_input: dict) -> str:
-    """Dispatch a tool call. Raises on unknown tool; tool errors propagate."""
+def execute_tool(name: str, tool_input: dict, cwd: str | None = None) -> str:
+    """Dispatch a tool call against `cwd` (defaults to the process cwd).
+
+    Raises on unknown tool; tool errors propagate.
+    """
+    cwd = cwd or os.getcwd()
     if name == "read_file":
-        return read_file(tool_input["path"])
+        return read_file(tool_input["path"], cwd)
     if name == "write_file":
-        return write_file(tool_input["path"], tool_input["content"])
+        return write_file(tool_input["path"], tool_input["content"], cwd)
     if name == "edit_file":
-        return edit_file(tool_input["path"], tool_input["old_str"], tool_input["new_str"])
+        return edit_file(tool_input["path"], tool_input["old_str"], tool_input["new_str"], cwd)
     if name == "list_dir":
-        return list_dir(tool_input.get("path", "."))
+        return list_dir(tool_input.get("path", "."), cwd)
     if name == "run_bash":
         return run_bash(
             tool_input["command"],
             timeout=tool_input.get("timeout", DEFAULT_BASH_TIMEOUT),
+            cwd=cwd,
         )
     raise ValueError(f"Unknown tool: {name}")

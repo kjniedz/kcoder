@@ -1,17 +1,24 @@
-"""kcoder - interactive terminal coding agent."""
+"""kcoder - terminal client for the kcoder session daemon.
+
+    kcoder                new session here (or attach to one already here)
+    kcoder ls             list sessions
+    kcoder attach <id>    attach to a session (id prefix or name)
+    kcoder rm <id>        close and delete a session
+    kcoder ui             open the web app
+    kcoder daemon ...     start | stop | status | run
+"""
+
+from __future__ import annotations
 
 import argparse
-import base64
-import mimetypes
 import os
 import random
 import re
 import select
 import sys
 import time
+import webbrowser
 
-import anthropic
-import openai
 import pyfiglet
 from rich.console import Console, Group
 from rich.live import Live
@@ -22,30 +29,19 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import auth, ui
+from . import __version__, auth, paths, ui
+from .client import ClientError, DaemonClient, DaemonUnavailable, daemon_url
+from .daemon import already_running
 from .providers import PROVIDERS
-from .tools import DANGEROUS_TOOLS, describe_tool_call, execute_tool
 
 ACCENT = ui.ACCENT
 
-SYSTEM_PROMPT = """\
-You are kcoder, a terminal coding agent developed by Kyle Niedzwiecki.
-
-You help with software engineering tasks in the user's current working
-directory: {cwd}
-
-You have tools to read, write, and edit files, list directories, and run
-bash commands. Use them to get things done rather than just describing
-what the user could do. Read files before editing them. When a task needs
-multiple steps, work through them with tool calls until it's complete,
-then summarize what you did.
-
-Keep responses concise and terminal-friendly. Use markdown for structure
-and code blocks for code.\
-"""
-
 console = Console()
 
+
+# ----------------------------------------------------------------------
+# chrome
+# ----------------------------------------------------------------------
 
 def print_banner() -> None:
     try:
@@ -57,16 +53,18 @@ def print_banner() -> None:
     console.print("© 2026 Kyer's Reserve LLC\n", style="dim")
 
 
-def print_session_panel(provider, model: str, auto_approve: bool) -> None:
+def print_session_panel(meta: dict) -> None:
+    provider = PROVIDERS.get(meta["provider"])
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="dim", justify="right")
     grid.add_column()
-    grid.add_row("provider", f"[bold]{provider.label}[/bold]")
-    grid.add_row("model", f"[bold]{model}[/bold]")
-    grid.add_row("cwd", escape(os.getcwd()))
+    grid.add_row("session", f"[bold]{escape(meta['name'])}[/bold]  [dim]{meta['id']}[/dim]")
+    grid.add_row("provider", f"[bold]{provider.label if provider else meta['provider']}[/bold]")
+    grid.add_row("model", f"[bold]{escape(meta['model'])}[/bold]")
+    grid.add_row("cwd", escape(meta["cwd"]))
     grid.add_row(
         "auto-approve",
-        "[bold green]on[/bold green]" if auto_approve else "[dim]off[/dim]",
+        "[bold green]on[/bold green]" if meta.get("auto_approve") else "[dim]off[/dim]",
     )
     console.print(
         Panel(
@@ -84,13 +82,16 @@ def print_session_panel(provider, model: str, auto_approve: bool) -> None:
 def print_help() -> None:
     console.print(
         "\n[bold]Commands[/bold]\n"
-        "  /exit, /quit      leave kcoder\n"
+        "  /exit, /quit      detach; the session keeps running in kcoderd\n"
+        "  /close            end this session and detach\n"
         "  /clear            reset conversation history\n"
         "  /cd [path]        change working directory (no arg: home; or drag a folder in)\n"
         "  /provider [name]  switch provider (anthropic, xiaomi, deepseek, qwen,\n"
         "                    kimi, glm, minimax, xiaokai); no arg: pick interactively\n"
         "  /model [name]     show/switch model; no arg: pick interactively\n"
         "  /auto             toggle auto-approve for tool execution\n"
+        "  /name [name]      rename this session\n"
+        "  /sessions         list all sessions in kcoderd\n"
         "  /help             show this help\n",
         highlight=False,
     )
@@ -111,6 +112,10 @@ def pick_model_interactively(provider, current: str) -> str:
         return typed or current
     return provider.models[choice]
 
+
+# ----------------------------------------------------------------------
+# input handling
+# ----------------------------------------------------------------------
 
 def clean_path(raw: str) -> str:
     """Normalize a path the way a terminal hands it over on drag-and-drop:
@@ -152,31 +157,6 @@ def process_input(text: str):
     return _PATH_RE.sub(repl, text), images
 
 
-def build_user_content(text: str, image_paths: list, kind: str):
-    """Build the message `content` for a turn. Plain string when there are no
-    images; otherwise a list of text + image blocks in the provider's format."""
-    if not image_paths:
-        return text
-    blocks: list = []
-    if text.strip():
-        blocks.append({"type": "text", "text": text})
-    for path in image_paths:
-        media_type = mimetypes.guess_type(path)[0] or "image/png"
-        with open(path, "rb") as f:
-            data = base64.standard_b64encode(f.read()).decode()
-        if kind == "anthropic":
-            blocks.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": media_type, "data": data},
-            })
-        else:  # openai-compatible
-            blocks.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{media_type};base64,{data}"},
-            })
-    return blocks
-
-
 def read_user_input() -> str:
     """Prompt for input, capturing full multi-line pastes.
 
@@ -198,6 +178,10 @@ def read_user_input() -> str:
         )
     return "\n".join(lines).strip()
 
+
+# ----------------------------------------------------------------------
+# turn rendering (consumes daemon events)
+# ----------------------------------------------------------------------
 
 # Playful status words shown while the model is still thinking (before any
 # tokens stream). Shuffled per turn and rotated over time so it feels random.
@@ -251,133 +235,238 @@ class _StreamStats:
             yield Text(f"{self.elapsed:.0f}s · {word}…", style="dim")
 
 
-class TurnUI:
-    """Display + approval callbacks the backends use during a turn."""
+class TurnRenderer:
+    """Renders one session's event stream in the terminal, exactly like the
+    old in-process UI did, and answers approval requests from the keyboard."""
 
-    def __init__(self, auto_approve: bool):
-        self.auto_approve = auto_approve
+    def __init__(self, client: DaemonClient, sid: str):
+        self.client = client
+        self.sid = sid
+        self.live: Live | None = None
+        self.stats: _StreamStats | None = None
+        self.spinner = None
+        self.text = ""
         self.last_elapsed = 0.0
 
-    def render_stream(self, text_iterator) -> None:
+    # -- live stream ---------------------------------------------------
+
+    def _start_stream(self) -> None:
         console.print("[bold magenta]kcoder>[/bold magenta]")
-        text = ""
-        stats = _StreamStats()
-        spinner = Spinner("dots", text=stats, style=ACCENT)
-        with Live(
-            Group(spinner),
+        self.text = ""
+        self.stats = _StreamStats()
+        self.spinner = Spinner("dots", text=self.stats, style=ACCENT)
+        self.live = Live(
+            Group(self.spinner),
             console=console,
             refresh_per_second=12,
             vertical_overflow="visible",
-        ) as live:
-            for piece in text_iterator:
-                text += piece
-                stats.chars = len(text)
-                live.update(Group(Markdown(text), spinner))
-            live.update(Markdown(text) if text else Group())
-        self.last_elapsed = stats.elapsed
-
-    def usage(self, input_tokens: int, output_tokens: int) -> None:
-        console.print(
-            f"[dim]✓ {self.last_elapsed:.1f}s · "
-            f"{input_tokens:,} in → {output_tokens:,} out tokens[/dim]",
-            highlight=False,
         )
+        self.live.start()
 
-    def handle_tool_call(self, name: str, tool_input: dict):
-        """Returns (result_content, is_error)."""
-        description = describe_tool_call(name, tool_input)
-        console.print(f"[dim]⚙ {escape(description)}[/dim]", highlight=False)
+    def _end_stream(self, full_text: str | None = None) -> None:
+        if self.live is None:
+            return
+        text = full_text if full_text is not None else self.text
+        self.live.update(Markdown(text) if text else Group())
+        self.live.stop()
+        self.last_elapsed = self.stats.elapsed if self.stats else 0.0
+        self.live = None
 
-        if name in DANGEROUS_TOOLS and not self.auto_approve:
-            approved = ui.confirm(
-                console,
-                f"[yellow]Allow[/yellow] [bold]{escape(description)}[/bold]?",
-                yes_label="Yes, run it",
-                no_label="No, skip this",
+    def abort_stream(self) -> None:
+        if self.live is not None:
+            self._end_stream()
+
+    # -- events --------------------------------------------------------
+
+    def handle(self, ev: dict) -> None:
+        t = ev["t"]
+        if t == "assistant_start":
+            self._start_stream()
+        elif t == "text":
+            if self.live is None:
+                self._start_stream()
+            self.text += ev["delta"]
+            self.stats.chars = len(self.text)
+            self.live.update(Group(Markdown(self.text), self.spinner))
+        elif t == "assistant_end":
+            self._end_stream(ev.get("text"))
+        elif t == "usage":
+            console.print(
+                f"[dim]✓ {self.last_elapsed:.1f}s · "
+                f"{ev['input']:,} in → {ev['output']:,} out tokens[/dim]",
+                highlight=False,
             )
-            if not approved:
-                console.print("[dim]  ✗ declined[/dim]")
-                return "The user declined to allow this tool call.", True
-            console.print("[dim]  ✓ approved[/dim]")
+        elif t == "tool_call":
+            self.abort_stream()
+            console.print(f"[dim]⚙ {escape(ev['description'])}[/dim]", highlight=False)
+        elif t == "approval_request":
+            self.abort_stream()
+            try:
+                approved = ui.confirm(
+                    console,
+                    f"[yellow]Allow[/yellow] [bold]{escape(ev['description'])}[/bold]?",
+                    yes_label="Yes, run it",
+                    no_label="No, skip this",
+                )
+            except KeyboardInterrupt:
+                approved = False
+                raise
+            finally:
+                # a KeyboardInterrupt here still needs an answer sent so the
+                # engine isn't left waiting; interrupt() follows from the caller
+                try:
+                    self.client.request("approve", sid=self.sid, rid=ev["id"], approved=approved)
+                except ClientError:
+                    pass
+            console.print("[dim]  ✓ approved[/dim]" if approved else "[dim]  ✗ declined[/dim]")
+        elif t == "tool_result":
+            if ev.get("is_error"):
+                first = (ev.get("content") or "").splitlines()[:1]
+                console.print(f"[dim]  ✗ {escape(first[0] if first else 'error')}[/dim]", highlight=False)
+        elif t == "notice":
+            self.abort_stream()
+            console.print(f"[red]{escape(ev['text'])}[/red]", highlight=False)
+        elif t == "error":
+            self.abort_stream()
+            console.print(f"[red]{escape(ev['text'])}[/red]", highlight=False)
+        elif t == "info":
+            self.abort_stream()
+            console.print(f"[dim]{escape(ev['text'])}[/dim]", highlight=False)
 
+    def replay(self, events: list) -> None:
+        """Non-live rendering of persisted events (used on attach)."""
+        for ev in events:
+            t = ev["t"]
+            if t == "user":
+                imgs = "".join(f" [{ACCENT}]🖼 {escape(i)}[/{ACCENT}]" for i in ev.get("images", []))
+                console.print(f"[bold green]you>[/bold green] {escape(ev['text'])}{imgs}", highlight=False)
+            elif t == "assistant_end":
+                console.print("[bold magenta]kcoder>[/bold magenta]")
+                if ev.get("text"):
+                    console.print(Markdown(ev["text"]))
+            elif t == "usage":
+                console.print(
+                    f"[dim]✓ {ev['input']:,} in → {ev['output']:,} out tokens[/dim]", highlight=False
+                )
+            elif t == "tool_call":
+                console.print(f"[dim]⚙ {escape(ev['description'])}[/dim]", highlight=False)
+            elif t == "approval_result":
+                console.print("[dim]  ✓ approved[/dim]" if ev.get("approved") else "[dim]  ✗ declined[/dim]")
+            elif t in ("notice", "error"):
+                console.print(f"[red]{escape(ev['text'])}[/red]", highlight=False)
+            elif t in ("info", "system"):
+                console.print(f"[dim]{escape(ev['text'])}[/dim]", highlight=False)
+
+
+def run_turn(client: DaemonClient, sid: str, renderer: TurnRenderer) -> None:
+    """Consume events until this session's turn ends. Ctrl+C interrupts."""
+    interrupted = False
+    while True:
         try:
-            return execute_tool(name, tool_input), False
-        except Exception as exc:
-            console.print(f"[dim]  ✗ error: {exc}[/dim]", highlight=False)
-            return f"Error: {exc}", True
+            item = client.next_event(timeout=0.5)
+        except KeyboardInterrupt:
+            renderer.abort_stream()
+            if not interrupted:
+                interrupted = True
+                console.print("\n[dim]interrupting…[/dim]")
+                try:
+                    client.request("interrupt", sid=sid)
+                except ClientError:
+                    pass
+            continue
+        if item is None:
+            continue
+        kind, payload = item
+        if kind != "event" or payload.get("sid") != sid:
+            continue
+        ev = payload["ev"]
+        if ev["t"] == "turn_end":
+            renderer.abort_stream()
+            return
+        if ev["t"] in ("user", "status", "system"):
+            continue
+        try:
+            renderer.handle(ev)
+        except KeyboardInterrupt:
+            renderer.abort_stream()
+            if not interrupted:
+                interrupted = True
+                console.print("\n[dim]interrupting…[/dim]")
+                try:
+                    client.request("interrupt", sid=sid)
+                except ClientError:
+                    pass
 
-    def notice(self, message: str) -> None:
-        console.print(f"[red]{message}[/red]", highlight=False)
 
-    def info(self, message: str) -> None:
-        console.print(f"[dim]{message}[/dim]", highlight=False)
+# ----------------------------------------------------------------------
+# credentials (interactive setup happens in the terminal, never the daemon)
+# ----------------------------------------------------------------------
+
+def ensure_credentials(provider_id: str) -> bool:
+    """Make sure the daemon will be able to build a backend for provider_id,
+    running the interactive sign-in flow here if needed."""
+    if auth.has_credentials(provider_id):
+        return True
+    try:
+        result = auth.connect(provider_id, console)
+    except KeyboardInterrupt:
+        console.print("\n[dim]setup cancelled[/dim]")
+        return False
+    return result is not None
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="kcoder",
-        description="kcoder - a terminal coding agent developed by Kyle Niedzwiecki",
-    )
-    parser.add_argument(
-        "-y", "--yes",
-        action="store_true",
-        help="auto-approve all tool executions (no y/n prompts)",
-    )
-    parser.add_argument(
-        "--provider",
-        metavar="NAME",
-        help=f"provider to use ({', '.join(PROVIDERS)})",
-    )
-    parser.add_argument(
-        "--logout",
-        action="store_true",
-        help="forget all saved credentials and exit",
-    )
-    args = parser.parse_args()
-
-    if args.logout:
-        if auth.delete_credentials():
-            console.print("[dim]Saved credentials removed. kcoder will ask again next run.[/dim]")
-        else:
-            console.print("[dim]No saved credentials found.[/dim]")
-        return
-
-    print_banner()
-
+def choose_provider(requested: str | None) -> str | None:
     config = auth.load_config()
-    provider_id = args.provider or config.get("default_provider")
+    provider_id = requested or config.get("default_provider")
     if provider_id is not None and provider_id not in PROVIDERS:
         console.print(f"[red]Unknown provider: {provider_id}[/red]", highlight=False)
-        sys.exit(1)
-
+        return None
     try:
         if provider_id is None:
             result = auth.first_run(console)
-        else:
-            result = auth.connect(provider_id, console)
-            if result is not None:
-                auth.set_default_provider(provider_id)
+            if result is None:
+                return None
+            return result[0].id
     except KeyboardInterrupt:
         console.print("\n[dim]setup cancelled[/dim]")
-        sys.exit(1)
-    if result is None:
-        sys.exit(1)
-    provider, backend = result
+        return None
+    if not ensure_credentials(provider_id):
+        return None
+    if requested:
+        auth.set_default_provider(provider_id)
+    return provider_id
 
-    model = os.environ.get("KCODER_MODEL") or provider.default_model
-    auto_approve = args.yes
-    messages: list = []
 
-    print_session_panel(provider, model, auto_approve)
+# ----------------------------------------------------------------------
+# the chat loop
+# ----------------------------------------------------------------------
+
+def chat(client: DaemonClient, meta: dict, replay: list | None = None) -> None:
+    sid = meta["id"]
+    print_session_panel(meta)
+    renderer = TurnRenderer(client, sid)
+
+    if replay:
+        renderer.replay(replay)
+        console.print()
+
+    # If we attached mid-turn, catch up on the live stream first.
+    if meta.get("status") in ("working", "waiting"):
+        console.print("[dim](session is working - attaching to the live turn)[/dim]")
+        if meta.get("pending_approval"):
+            console.print("[dim](a tool approval is pending in this session)[/dim]")
+        run_turn(client, sid, renderer)
+        console.print()
 
     while True:
+        client.drain_events()
         try:
             user_input = read_user_input()
         except KeyboardInterrupt:
             console.print()
             continue
         except EOFError:
-            console.print("\n[dim]bye![/dim]")
+            console.print(f"\n[dim]detached - `kcoder attach {meta['name']}` to come back[/dim]")
             break
 
         if not user_input:
@@ -388,83 +477,26 @@ def main() -> None:
         # and pasted code, which start with "/" but aren't a bare word.
         if parts and re.fullmatch(r"/[a-zA-Z]+", parts[0]):
             command, arg = parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
-
-            if command in ("/exit", "/quit"):
-                console.print("[dim]bye![/dim]")
-                break
-            if command == "/clear":
-                messages.clear()
-                console.print("[dim]conversation cleared[/dim]")
-                continue
-            if command == "/cd":
-                target = clean_path(arg) if arg else os.path.expanduser("~")
-                try:
-                    os.chdir(target)
-                    console.print(f"[dim]cwd → {escape(os.getcwd())}[/dim]", highlight=False)
-                except (FileNotFoundError, NotADirectoryError):
-                    console.print(f"[red]No such directory: {escape(target)}[/red]", highlight=False)
-                except OSError as exc:
-                    console.print(f"[red]Couldn't change directory: {exc}[/red]", highlight=False)
-                continue
-            if command == "/auto":
-                auto_approve = not auto_approve
-                console.print(f"[dim]auto-approve: {'on' if auto_approve else 'off'}[/dim]")
-                continue
-            if command == "/provider":
-                if arg:
-                    if arg not in PROVIDERS:
-                        console.print(
-                            f"[red]Unknown provider: {escape(arg)}[/red] "
-                            f"(options: {', '.join(PROVIDERS)})",
-                            highlight=False,
-                        )
-                        continue
-                    new_id = arg
-                else:
-                    new_id = auth.pick_provider(console, current=provider.id)
-                    if new_id is None:
-                        continue
-                try:
-                    switched = auth.connect(new_id, console)
-                except KeyboardInterrupt:
-                    console.print("\n[dim]cancelled[/dim]")
+            try:
+                if _handle_command(client, meta, renderer, command, arg):
                     continue
-                if switched is None:
-                    continue
-                provider, backend = switched
-                auth.set_default_provider(new_id)
-                model = provider.default_model
-                if messages:
-                    messages.clear()
-                    console.print("[dim]conversation cleared (history formats differ between providers)[/dim]")
-                print_session_panel(provider, model, auto_approve)
+                break  # command asked to leave
+            except ClientError as exc:
+                console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
                 continue
-            if command == "/model":
-                if arg:
-                    model = arg
-                else:
-                    model = pick_model_interactively(provider, model)
-                console.print(f"[bold {ACCENT}]✓[/bold {ACCENT}] [dim]model →[/dim] [bold]{escape(model)}[/bold]", highlight=False)
-                continue
-            if command == "/help":
-                print_help()
-                continue
-            console.print(f"[red]Unknown command: {escape(command)}[/red] (try /help)", highlight=False)
-            continue
 
         # A bare folder path on its own line (e.g. a drag-and-dropped folder):
         # offer to make it the working directory instead of sending it as a chat.
         if "\n" not in user_input:
             dropped = clean_path(user_input)
-            if os.path.isabs(dropped) and os.path.isdir(dropped) and dropped != os.getcwd():
+            if os.path.isabs(dropped) and os.path.isdir(dropped) and dropped != meta["cwd"]:
                 if ui.confirm(
                     console,
                     f"Switch working directory to [bold]{escape(dropped)}[/bold]?",
                     yes_label="Yes, work here",
                     no_label="No, send as a message",
                 ):
-                    os.chdir(dropped)
-                    console.print(f"[dim]cwd → {escape(os.getcwd())}[/dim]", highlight=False)
+                    _set_cwd(client, meta, dropped)
                     continue
 
         # Resolve dragged paths: images become attachments, other paths are
@@ -476,38 +508,383 @@ def main() -> None:
                 highlight=False,
             )
 
-        turn_start = len(messages)
-        messages.append({"role": "user", "content": build_user_content(text, image_paths, provider.kind)})
         try:
-            backend.run_turn(
-                messages, model, SYSTEM_PROMPT.format(cwd=os.getcwd()), TurnUI(auto_approve)
-            )
-        except KeyboardInterrupt:
-            console.print("\n[dim]interrupted[/dim]")
-            del messages[turn_start:]
-        except (anthropic.AuthenticationError, openai.AuthenticationError):
-            console.print(
-                "[red]Authentication failed.[/red] "
-                "Run [bold]kcoder --logout[/bold] then restart kcoder to reconnect.",
-                highlight=False,
-            )
-            del messages[turn_start:]
-        except (anthropic.NotFoundError, openai.NotFoundError):
-            console.print(
-                f"[red]Model not found: {model}[/red] (try /model, or /provider)",
-                highlight=False,
-            )
-            del messages[turn_start:]
-        except (anthropic.RateLimitError, openai.RateLimitError):
-            console.print("[red]Rate limited - wait a moment and try again.[/red]")
-            del messages[turn_start:]
-        except (anthropic.APIConnectionError, openai.APIConnectionError):
-            console.print("[red]Couldn't reach the API - check your internet connection.[/red]")
-            del messages[turn_start:]
-        except (anthropic.APIError, openai.APIError) as exc:
-            console.print(f"[red]API error: {getattr(exc, 'message', exc)}[/red]", highlight=False)
-            del messages[turn_start:]
+            client.request("send", sid=sid, text=text, images=image_paths)
+        except DaemonUnavailable:
+            raise
+        except ClientError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+            continue
+        run_turn(client, sid, renderer)
         console.print()
+
+
+def _set_cwd(client: DaemonClient, meta: dict, target: str) -> None:
+    try:
+        reply = client.request("set", sid=meta["id"], cwd=target)
+    except ClientError as exc:
+        msg = str(exc)
+        if "no such directory" in msg:
+            console.print(f"[red]No such directory: {escape(target)}[/red]", highlight=False)
+        else:
+            console.print(f"[red]Couldn't change directory: {escape(msg)}[/red]", highlight=False)
+        return
+    meta.update(reply["session"])
+    console.print(f"[dim]cwd → {escape(meta['cwd'])}[/dim]", highlight=False)
+
+
+def _handle_command(client, meta, renderer, command, arg) -> bool:
+    """Returns True to keep chatting, False to leave."""
+    sid = meta["id"]
+    if command in ("/exit", "/quit"):
+        console.print(f"[dim]detached - `kcoder attach {meta['name']}` to come back[/dim]")
+        return False
+    if command == "/close":
+        client.request("close", sid=sid)
+        console.print("[dim]session closed. bye![/dim]")
+        return False
+    if command == "/clear":
+        client.request("clear", sid=sid)
+        console.print("[dim]conversation cleared[/dim]")
+        return True
+    if command == "/cd":
+        target = clean_path(arg) if arg else os.path.expanduser("~")
+        _set_cwd(client, meta, target)
+        return True
+    if command == "/auto":
+        reply = client.request("set", sid=sid, auto_approve=not meta.get("auto_approve"))
+        meta.update(reply["session"])
+        console.print(f"[dim]auto-approve: {'on' if meta['auto_approve'] else 'off'}[/dim]")
+        return True
+    if command == "/provider":
+        if arg:
+            if arg not in PROVIDERS:
+                console.print(
+                    f"[red]Unknown provider: {escape(arg)}[/red] "
+                    f"(options: {', '.join(PROVIDERS)})",
+                    highlight=False,
+                )
+                return True
+            new_id = arg
+        else:
+            new_id = auth.pick_provider(console, current=meta["provider"])
+            if new_id is None:
+                return True
+        if not ensure_credentials(new_id):
+            return True
+        reply = client.request("set", sid=sid, provider=new_id)
+        auth.set_default_provider(new_id)
+        meta.update(reply["session"])
+        if reply["changed"].get("cleared"):
+            console.print("[dim]conversation cleared (history formats differ between providers)[/dim]")
+        print_session_panel(meta)
+        return True
+    if command == "/model":
+        provider = PROVIDERS[meta["provider"]]
+        model = arg or pick_model_interactively(provider, meta["model"])
+        reply = client.request("set", sid=sid, model=model)
+        meta.update(reply["session"])
+        console.print(
+            f"[bold {ACCENT}]✓[/bold {ACCENT}] [dim]model →[/dim] [bold]{escape(meta['model'])}[/bold]",
+            highlight=False,
+        )
+        return True
+    if command == "/name":
+        if not arg:
+            console.print(f"[dim]session name: {escape(meta['name'])}[/dim]", highlight=False)
+            return True
+        reply = client.request("rename", sid=sid, name=arg)
+        meta.update(reply["session"])
+        console.print(f"[dim]session → {escape(meta['name'])}[/dim]", highlight=False)
+        return True
+    if command == "/sessions":
+        print_sessions(client.request("list")["sessions"], current=sid)
+        return True
+    if command == "/help":
+        print_help()
+        return True
+    console.print(f"[red]Unknown command: {escape(command)}[/red] (try /help)", highlight=False)
+    return True
+
+
+# ----------------------------------------------------------------------
+# subcommands
+# ----------------------------------------------------------------------
+
+STATUS_STYLE = {
+    "idle": "green",
+    "working": ACCENT,
+    "waiting": "bold yellow",
+    "error": "red",
+}
+
+
+def _age(ts: float) -> str:
+    delta = max(0, time.time() - (ts or 0))
+    if delta < 60:
+        return f"{int(delta)}s"
+    if delta < 3600:
+        return f"{int(delta // 60)}m"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h"
+    return f"{int(delta // 86400)}d"
+
+
+def print_sessions(sessions: list, current: str | None = None) -> None:
+    if not sessions:
+        console.print("[dim]no sessions - run `kcoder` to start one[/dim]")
+        return
+    table = Table(box=None, pad_edge=False, header_style=f"bold {ACCENT}")
+    for col in ("id", "name", "status", "model", "tokens", "last", "cwd"):
+        table.add_column(col)
+    for s in sorted(sessions, key=lambda s: s.get("last_activity", 0), reverse=True):
+        status = s.get("status", "?")
+        style = STATUS_STYLE.get(status, "")
+        status_text = f"[{style}]{status}[/{style}]" if style else status
+        if status == "waiting":
+            status_text += " [yellow]⏳[/yellow]"
+        usage = s.get("usage", {})
+        tokens = f"{usage.get('input', 0) + usage.get('output', 0):,}"
+        marker = f"[{ACCENT}]*[/{ACCENT}]" if s["id"] == current else " "
+        table.add_row(
+            f"{marker}{s['id']}",
+            escape(s["name"]),
+            status_text,
+            escape(s.get("model") or ""),
+            tokens,
+            _age(s.get("last_activity", 0)),
+            escape(_short_home(s["cwd"])),
+        )
+    console.print(table)
+
+
+def _short_home(path: str) -> str:
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def cmd_ls(args) -> int:
+    running = already_running()
+    if not running:
+        console.print("[dim]kcoderd is not running - no sessions[/dim]")
+        return 0
+    with DaemonClient.connect(autostart=False) as client:
+        print_sessions(client.request("list")["sessions"])
+    return 0
+
+
+def cmd_attach(args) -> int:
+    with DaemonClient.connect() as client:
+        try:
+            reply = client.request("attach", sid=args.session, replay=200)
+        except ClientError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+            return 1
+        meta = reply["session"]
+        events = reply["events"]
+        # Replay just the last turn so the terminal shows where things stand.
+        starts = [i for i, e in enumerate(events) if e["t"] == "user"]
+        last_turn = events[starts[-1]:] if starts else []
+        print_banner()
+        if len(starts) > 1:
+            console.print(f"[dim](attached - {len(starts) - 1} earlier turn(s) not shown)[/dim]")
+        chat(client, meta, replay=last_turn)
+    return 0
+
+
+def cmd_rm(args) -> int:
+    with DaemonClient.connect(autostart=False) as client:
+        for sid in args.session:
+            try:
+                client.request("delete", sid=sid)
+                console.print(f"[dim]deleted session {escape(sid)}[/dim]", highlight=False)
+            except ClientError as exc:
+                console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+    return 0
+
+
+def cmd_ui(args) -> int:
+    with DaemonClient.connect() as client:
+        url = daemon_url()
+        token = open(paths.TOKEN_PATH).read().strip()
+    full = f"{url}#token={token}"
+    console.print(f"[dim]web app:[/dim] {url}")
+    if not args.no_open:
+        webbrowser.open(full)
+    return 0
+
+
+def cmd_daemon(args) -> int:
+    action = args.action
+    if action == "run":
+        from . import daemon
+        daemon.main([])
+        return 0
+    if action == "start":
+        running = already_running()
+        if running:
+            console.print(f"[dim]kcoderd already running (pid {running['pid']}, port {running['port']})[/dim]")
+            return 0
+        from .client import ensure_daemon
+        info = ensure_daemon()
+        console.print(f"[green]✓[/green] kcoderd started (pid {info['pid']}, port {info['port']})")
+        return 0
+    if action == "stop":
+        running = already_running()
+        if not running:
+            console.print("[dim]kcoderd is not running[/dim]")
+            return 0
+        with DaemonClient.connect(autostart=False) as client:
+            client.request("shutdown")
+        for _ in range(50):
+            if not already_running():
+                break
+            time.sleep(0.1)
+        console.print("[dim]kcoderd stopped[/dim]")
+        return 0
+    if action == "status":
+        running = already_running()
+        if not running:
+            console.print("[dim]kcoderd is not running[/dim]")
+            return 1
+        with DaemonClient.connect(autostart=False) as client:
+            n = len(client.request("list")["sessions"])
+        console.print(
+            f"kcoderd {running.get('version', '')} running: pid {running['pid']}, "
+            f"ws://{running['host']}:{running['port']}/ws, {n} session(s)\n"
+            f"[dim]log: {paths.DAEMON_LOG_PATH}[/dim]"
+        )
+        return 0
+    return 1
+
+
+def cmd_chat(args) -> int:
+    """`kcoder` with no subcommand: start a session here, or attach to one
+    that's already working in this directory."""
+    if args.logout:
+        if auth.delete_credentials():
+            console.print("[dim]Saved credentials removed. kcoder will ask again next run.[/dim]")
+        else:
+            console.print("[dim]No saved credentials found.[/dim]")
+        return 0
+
+    print_banner()
+
+    provider_id = choose_provider(args.provider)
+    if provider_id is None:
+        return 1
+
+    cwd = os.getcwd()
+    try:
+        client = DaemonClient.connect()
+    except DaemonUnavailable as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+        return 1
+
+    with client:
+        here = [s for s in client.request("list")["sessions"] if s["cwd"] == cwd]
+        meta = None
+        replay: list = []
+        if here and not args.new:
+            labels = ["Start a new session here"] + [
+                f"Attach to [bold]{escape(s['name'])}[/bold]  [dim]{s['status']} · "
+                f"{escape(s.get('model') or '')} · {_age(s.get('last_activity', 0))} ago[/dim]"
+                for s in here
+            ]
+            choice = ui.select(console, "Sessions in this directory", labels)
+            if choice is None:
+                return 0
+            if choice > 0:
+                target = here[choice - 1]
+                reply = client.request("attach", sid=target["id"], replay=200)
+                meta = reply["session"]
+                events = reply["events"]
+                starts = [i for i, e in enumerate(events) if e["t"] == "user"]
+                replay = events[starts[-1]:] if starts else []
+        if meta is None:
+            model = args.model or os.environ.get("KCODER_MODEL") or PROVIDERS[provider_id].default_model
+            try:
+                reply = client.request(
+                    "create",
+                    cwd=cwd,
+                    provider=provider_id,
+                    model=model,
+                    name=args.name,
+                    auto_approve=bool(args.yes),
+                )
+            except ClientError as exc:
+                console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+                return 1
+            meta = reply["session"]
+        try:
+            chat(client, meta, replay=replay)
+        except DaemonUnavailable as exc:
+            console.print(f"\n[red]{escape(str(exc))}[/red]", highlight=False)
+            return 1
+    return 0
+
+
+# ----------------------------------------------------------------------
+# entry point
+# ----------------------------------------------------------------------
+
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "daemon", "help"}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="kcoder",
+        description="kcoder - a terminal coding agent developed by Kyle Niedzwiecki",
+    )
+    parser.add_argument("--version", action="version", version=f"kcoder {__version__}")
+    sub = parser.add_subparsers(dest="command")
+
+    p = sub.add_parser("chat", help="start or attach to a session here (default)")
+    p.add_argument("-y", "--yes", action="store_true", help="auto-approve all tool executions (no y/n prompts)")
+    p.add_argument("--provider", metavar="NAME", help=f"provider to use ({', '.join(PROVIDERS)})")
+    p.add_argument("--model", metavar="NAME", help="model to start with")
+    p.add_argument("--name", metavar="NAME", help="session name (default: directory name)")
+    p.add_argument("--new", action="store_true", help="always start a new session (don't offer to attach)")
+    p.add_argument("--logout", action="store_true", help="forget all saved credentials and exit")
+    p.set_defaults(func=cmd_chat)
+
+    p = sub.add_parser("ls", aliases=["list"], help="list sessions")
+    p.set_defaults(func=cmd_ls)
+
+    p = sub.add_parser("attach", help="attach to a session by id prefix or name")
+    p.add_argument("session")
+    p.set_defaults(func=cmd_attach)
+
+    p = sub.add_parser("rm", help="close and delete sessions")
+    p.add_argument("session", nargs="+")
+    p.set_defaults(func=cmd_rm)
+
+    p = sub.add_parser("ui", help="open the web app in your browser")
+    p.add_argument("--no-open", action="store_true", help="print the URL instead of opening it")
+    p.set_defaults(func=cmd_ui)
+
+    p = sub.add_parser("daemon", help="manage kcoderd")
+    p.add_argument("action", choices=["start", "stop", "status", "run"], nargs="?", default="status")
+    p.set_defaults(func=cmd_daemon)
+    return parser
+
+
+def main() -> None:
+    argv = sys.argv[1:]
+    # `kcoder -y`, `kcoder --provider x`, bare `kcoder` → the chat command
+    if not argv or argv[0] not in SUBCOMMANDS | {"chat", "-h", "--help", "--version"}:
+        argv = ["chat"] + argv
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        code = args.func(args)
+    except DaemonUnavailable as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+        code = 1
+    except KeyboardInterrupt:
+        console.print()
+        code = 130
+    sys.exit(code or 0)
 
 
 if __name__ == "__main__":

@@ -13,9 +13,17 @@ A terminal coding agent developed by Kyle Niedzwiecki. kcoder chats with you
 in your terminal and can actually **read/write files and run shell commands**
 in your current working directory — not just talk about it.
 
+Sessions live in a local daemon (`kcoderd`), so you can run many agents at
+once, detach and re-attach from any terminal, and nothing is lost if a
+terminal closes. The terminal client is one view onto the daemon; a browser
+"wall of sessions" is the other (coming in the next phase).
+
 ## Features
 
 - Interactive REPL with streamed, markdown-rendered responses
+- **Many sessions at once** — each session runs in the `kcoderd` daemon;
+  `kcoder ls` / `kcoder attach <id>` to move between them, and sessions
+  survive terminal closes, daemon restarts, and crashes (history is persisted)
 - **Live progress wheel** while the model works, showing elapsed time and a
   running token estimate, then exact `in → out` token counts when it finishes
 - **Multi-line paste support** — paste or drag-and-drop content of any length
@@ -85,11 +93,25 @@ Optional environment variables:
 ## Usage
 
 ```bash
-kcoder                      # normal mode: asks y/n before writes/edits/shell commands
+kcoder                      # new session in this directory (offers to attach if one exists here)
 kcoder --yes                # auto-approve mode: runs tools without asking
 kcoder --provider deepseek  # start with a specific provider
+kcoder --model NAME         # start with a specific model
+kcoder --name api-work      # name the session (default: directory name)
+kcoder --new                # always start fresh, don't offer to attach
 kcoder --logout             # forget all saved credentials
+
+kcoder ls                   # list every session in the daemon
+kcoder attach api-work      # attach to a session by name or id prefix
+kcoder rm api-work          # close and delete a session
+kcoder ui                   # open the browser app (phase 2)
+kcoder daemon status        # start | stop | status | run (foreground)
 ```
+
+The first `kcoder` command starts `kcoderd` in the background automatically.
+Leaving a session with `/exit` or Ctrl+D **detaches** — the session keeps
+running in the daemon and you can come back to it with `kcoder attach`. Use
+`/close` to end a session for good.
 
 Then just talk to it:
 
@@ -154,7 +176,8 @@ tools and shell commands all operate from there.
 
 | Command | Action |
 |---|---|
-| `/exit`, `/quit` | Leave kcoder |
+| `/exit`, `/quit` | Detach; the session keeps running in kcoderd |
+| `/close` | End this session and detach |
 | `/clear` | Reset conversation history |
 | `/cd [path]` | Change working directory (no arg → home; or drag a folder in) |
 | `/provider` | List providers and pick one interactively |
@@ -162,6 +185,8 @@ tools and shell commands all operate from there.
 | `/model` | List the active provider's models and pick one |
 | `/model deepseek-reasoner` | Switch model immediately (any name accepted) |
 | `/auto` | Toggle auto-approve for tool execution |
+| `/name [name]` | Rename this session |
+| `/sessions` | List all sessions in the daemon |
 | `/help` | List commands |
 
 Switching providers clears the conversation history (the two API families
@@ -173,3 +198,37 @@ By default, kcoder prints every `write_file`, `edit_file`, and `run_bash`
 action and asks for confirmation before executing it. Read-only tools
 (`read_file`, `list_dir`) run without prompting. Use `--yes` or `/auto`
 at your own discretion.
+
+`kcoderd` can run shell commands, so it only ever binds to `127.0.0.1` and
+every client must present the token stored in `~/.local/share/kcoder/token`
+(mode `600`) as its first message. Browser clients are additionally limited
+to same-origin connections.
+
+## Architecture
+
+```
+ terminal(s)            browser (phase 2)
+  kcoder attach  ──┐   ┌── kcoder ui
+                   ▼   ▼
+             ┌──────────────┐   WebSocket, 127.0.0.1 only, token-authenticated
+             │   kcoderd    │
+             │  ┌────────┐  │   one Engine per session, each turn on its own thread
+             │  │ Engine │… │   emits structured events, accepts input + approvals
+             │  └────────┘  │
+             └──────┬───────┘
+                    ▼
+         ~/.local/share/kcoder/sessions/<id>/   meta.json · messages.json · events.jsonl
+```
+
+| Module | Role |
+|---|---|
+| `kcoder/engine.py` | Headless agent loop. No terminal I/O: emits events (`text`, `tool_call`, `approval_request`, `usage`, `turn_end`, …) and takes `send()`, `approve()`, `interrupt()`. |
+| `kcoder/providers.py` | Anthropic and OpenAI-compatible backends; drive the tool loop through the engine's hooks. |
+| `kcoder/daemon.py` | `kcoderd`: owns sessions, runs them concurrently, persists them, streams events over WebSocket. |
+| `kcoder/client.py` | Small synchronous client used by the CLI (auto-starts the daemon). |
+| `kcoder/cli.py` | The terminal UI: a thin client that renders events and answers approvals. |
+| `kcoder/tools.py` | Tool definitions and executors, scoped to each session's working directory. |
+
+Daemon data lives in `~/.local/share/kcoder/` (override with `KCODER_DATA_DIR`);
+the port defaults to `47321` (`KCODER_PORT`). Every model call is appended to
+`usage.jsonl` for per-session and fleet-wide token accounting.

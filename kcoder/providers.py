@@ -5,6 +5,18 @@ Two backend kinds:
 - "openai":    any OpenAI-compatible /chat/completions API, which covers
                DeepSeek, Xiaomi MiMo, Qwen, Kimi, GLM, MiniMax, and most
                other providers (plus local servers like Ollama/vLLM)
+
+Backends are headless. `run_turn` drives the agentic loop and reports
+everything through a `hooks` object (see `kcoder.engine.Engine`):
+
+    hooks.on_stream(text_iterator)          consume streamed assistant text
+    hooks.usage(input_tokens, output_tokens)
+    hooks.handle_tool_call(name, input)     -> (result_content, is_error)
+    hooks.notice(message)                   something the user must see
+    hooks.info(message)                     low-key informational line
+
+History (`messages`) is a list of plain JSON-serialisable dicts in the
+provider's native format so it can be persisted and resumed.
 """
 
 from __future__ import annotations
@@ -148,10 +160,10 @@ class AnthropicBackend:
         """Raise anthropic.AuthenticationError if credentials are bad. Free call."""
         self.client.models.retrieve("claude-opus-4-8")
 
-    def run_turn(self, messages: list, model: str, system: str, ui) -> None:
+    def run_turn(self, messages: list, model: str, system: str, hooks) -> None:
         """Run the agentic loop until the model stops requesting tools.
 
-        Mutates `messages` (Anthropic Messages format) in place.
+        Mutates `messages` (Anthropic Messages format, plain dicts) in place.
         """
         while True:
             kwargs = dict(
@@ -176,7 +188,7 @@ class AnthropicBackend:
                 stream_cm = self.client.messages.stream(messages=messages, **kwargs)
 
             with stream_cm as stream:
-                ui.render_stream(stream.text_stream)
+                hooks.on_stream(stream.text_stream)
                 response = stream.get_final_message()
 
             usage = response.usage
@@ -185,22 +197,26 @@ class AnthropicBackend:
                 + (getattr(usage, "cache_read_input_tokens", 0) or 0)
                 + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
             )
-            ui.usage(prompt_tokens, usage.output_tokens)
+            hooks.usage(prompt_tokens, usage.output_tokens)
 
-            # Preserve full content (thinking/text/tool_use blocks) in history
-            messages.append({"role": "assistant", "content": response.content})
-
+            # Preserve full content (thinking/text/tool_use blocks) in history,
+            # as plain dicts so the conversation can be saved and resumed.
+            # Informational "fallback" blocks are not valid input, so drop them.
+            content = []
             for block in response.content:
                 if getattr(block, "type", None) == "fallback":
-                    ui.info(
+                    hooks.info(
                         f"{block.from_.model} declined; answer served by {block.to.model}"
                     )
+                    continue
+                content.append(block.to_dict())
+            messages.append({"role": "assistant", "content": content})
 
             if response.stop_reason == "refusal":
-                ui.notice("kcoder declined this request for safety reasons.")
+                hooks.notice("kcoder declined this request for safety reasons.")
                 return
             if response.stop_reason == "max_tokens":
-                ui.notice("Response hit the output token limit and may be incomplete.")
+                hooks.notice("Response hit the output token limit and may be incomplete.")
                 return
 
             tool_uses = [b for b in response.content if b.type == "tool_use"]
@@ -209,7 +225,9 @@ class AnthropicBackend:
 
             results = []
             for block in tool_uses:
-                content, is_error = ui.handle_tool_call(block.name, dict(block.input))
+                content, is_error = hooks.handle_tool_call(
+                    block.name, dict(block.input), call_id=block.id
+                )
                 result = {
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -246,7 +264,7 @@ class OpenAIBackend:
         except Exception:
             pass
 
-    def run_turn(self, messages: list, model: str, system: str, ui) -> None:
+    def run_turn(self, messages: list, model: str, system: str, hooks) -> None:
         """Agentic loop over an OpenAI-compatible /chat/completions API.
 
         Mutates `messages` (OpenAI chat format) in place.
@@ -289,11 +307,11 @@ class OpenAIBackend:
                                 if tc.function.arguments:
                                     slot["args"] += tc.function.arguments
 
-            ui.render_stream(text_iter())
+            hooks.on_stream(text_iter())
 
             # Some providers attach usage to the final chunk without being asked
             if state["usage"] is not None:
-                ui.usage(state["usage"].prompt_tokens, state["usage"].completion_tokens)
+                hooks.usage(state["usage"].prompt_tokens, state["usage"].completion_tokens)
 
             calls = [state["calls"][i] for i in sorted(state["calls"])]
             assistant: dict = {"role": "assistant", "content": state["text"]}
@@ -310,13 +328,13 @@ class OpenAIBackend:
 
             if not calls:
                 if state["finish"] == "length":
-                    ui.notice("Response hit the output token limit and may be incomplete.")
+                    hooks.notice("Response hit the output token limit and may be incomplete.")
                 return
 
             for c in calls:
                 try:
                     tool_input = json.loads(c["args"]) if c["args"] else {}
-                    content, is_error = ui.handle_tool_call(c["name"], tool_input)
+                    content, is_error = hooks.handle_tool_call(c["name"], tool_input, call_id=c["id"])
                 except json.JSONDecodeError as exc:
                     content = f"Error: tool arguments were not valid JSON: {exc}"
                 messages.append({

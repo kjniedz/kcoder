@@ -24,12 +24,8 @@ import anthropic
 import openai
 
 from . import ui
+from .paths import CONFIG_DIR, CREDENTIALS_PATH
 from .providers import PROVIDERS, Provider, make_backend
-
-CONFIG_DIR = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "kcoder"
-)
-CREDENTIALS_PATH = os.path.join(CONFIG_DIR, "credentials.json")
 
 
 # --------------------------------------------------------------------------
@@ -192,11 +188,12 @@ def _setup_anthropic_browser(console):
     return backend
 
 
-def connect(provider_id: str, console, *, interactive: bool = True):
-    """Get a working backend for a provider, prompting for setup if needed.
+def resolve_backend(provider_id: str):
+    """Build a backend from stored credentials without any prompting.
 
-    Returns (provider, backend) or None.
-    Priority: provider env var > saved credentials > interactive setup.
+    Priority: provider env var > saved credentials. Returns (provider, backend)
+    or None when nothing usable is configured. Used by the daemon, which never
+    talks to a terminal.
     """
     config = load_config()
     saved = config["providers"].get(provider_id, {})
@@ -214,6 +211,23 @@ def connect(provider_id: str, console, *, interactive: bool = True):
         return provider, make_backend(provider, None)
     if saved.get("api_key") and (provider.base_url or provider.kind == "anthropic"):
         return provider, make_backend(provider, saved["api_key"], saved.get("base_url"))
+    return None
+
+
+def has_credentials(provider_id: str) -> bool:
+    return resolve_backend(provider_id) is not None
+
+
+def connect(provider_id: str, console, *, interactive: bool = True):
+    """Get a working backend for a provider, prompting for setup if needed.
+
+    Returns (provider, backend) or None.
+    Priority: provider env var > saved credentials > interactive setup.
+    """
+    resolved = resolve_backend(provider_id)
+    if resolved is not None:
+        return resolved
+    provider = PROVIDERS[provider_id]
 
     # 3. interactive setup
     if not interactive or not sys.stdin.isatty():
