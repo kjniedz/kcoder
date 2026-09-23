@@ -14,6 +14,9 @@ Events (all carry "t" = type and "ts" = unix time):
     usage             {input, output, cache_read, cache_write, model, elapsed}
     tool_call         {id, name, input, description}
     approval_request  {id, name, description, input}
+    retry             {attempt, max, delay, reason}   backing off before retrying
+    compaction_start  {tokens}
+    compaction        {summary, messages_before, tokens_before}
     approval_result   {id, approved}
     tool_result       {id, name, content, is_error, elapsed}
     notice            {text}                   something the user must see
@@ -30,6 +33,7 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import random
 import threading
 import time
 import uuid
@@ -37,7 +41,8 @@ import uuid
 import anthropic
 import openai
 
-from .tools import DANGEROUS_TOOLS, describe_tool_call, execute_tool
+from . import projects
+from .tools import DANGEROUS_TOOLS, READ_ONLY_TOOLS, describe_tool_call, execute_tool
 
 SYSTEM_PROMPT = """\
 You are kcoder, a terminal coding agent developed by Kyle Niedzwiecki.
@@ -63,6 +68,34 @@ STATUS_IDLE = "idle"
 STATUS_WORKING = "working"
 STATUS_WAITING = "waiting"
 STATUS_ERROR = "error"
+
+# Trust levels: which tools run without asking.
+TRUST_AUTO = "auto"     # everything
+TRUST_WRITE = "write"   # reads + file writes/edits; shell is gated
+TRUST_READ = "read"     # reads only; writes, edits and shell are gated (default)
+TRUST_NONE = "none"     # everything is gated
+TRUST_LEVELS = (TRUST_AUTO, TRUST_WRITE, TRUST_READ, TRUST_NONE)
+
+MAX_RETRIES = 5
+RETRY_BASE_SECONDS = 2.0
+RETRY_MAX_SECONDS = 30.0
+
+# Context compaction: when the last prompt reached this many tokens, the
+# history is summarised before the next turn.
+DEFAULT_COMPACT_AT = 150_000
+
+COMPACT_PROMPT = """We are about to compact this conversation to free up context. Write a
+thorough handoff summary for a fresh instance of yourself that will continue
+the work with no other memory. Do not use any tools. Include, in markdown:
+
+1. The user's overall goal and any standing instructions or preferences.
+2. What has been done so far, with the exact file paths that were read,
+   created, or changed, and what changed in them.
+3. Decisions made and why, and anything tried that did not work.
+4. Current state: what is in progress, what is verified, what is not.
+5. Precise next steps.
+
+Be concrete. Prefer exact names, paths, commands, and error text over prose."""
 
 
 class Interrupted(Exception):
@@ -105,6 +138,44 @@ class _Approval:
         self.approved = False
 
 
+class _CaptureHooks:
+    """Hooks that collect streamed text and refuse tools (used for compaction)."""
+
+    def __init__(self):
+        self.text = ""
+        self.usage_in = 0
+        self.usage_out = 0
+
+    def on_stream(self, it):
+        for piece in it:
+            self.text += piece or ""
+
+    def usage(self, i, o, **kw):
+        self.usage_in += int(i or 0)
+        self.usage_out += int(o or 0)
+
+    def handle_tool_call(self, name, tool_input, call_id=None):
+        return "Tools are unavailable while compacting; write the summary instead.", True
+
+    def notice(self, m):
+        pass
+
+    def info(self, m):
+        pass
+
+
+def _retryable(exc: Exception) -> str | None:
+    """Reason string if the error is worth retrying with backoff."""
+    if isinstance(exc, (anthropic.RateLimitError, openai.RateLimitError)):
+        return "rate limited"
+    if isinstance(exc, (anthropic.APIConnectionError, openai.APIConnectionError)):
+        return "connection error"
+    status = getattr(exc, "status_code", None)
+    if status in (500, 502, 503, 529):
+        return "overloaded" if status == 529 else f"server error {status}"
+    return None
+
+
 class Engine:
     def __init__(
         self,
@@ -114,14 +185,19 @@ class Engine:
         model: str,
         cwd: str,
         auto_approve: bool = False,
+        trust: str | None = None,
+        project_root: str | None = None,
         messages: list | None = None,
         emit=None,
+        compact_at: int = DEFAULT_COMPACT_AT,
     ):
         self.provider = provider
         self.backend = backend
         self.model = model
         self.cwd = cwd
-        self.auto_approve = auto_approve
+        self.trust = trust if trust in TRUST_LEVELS else (TRUST_AUTO if auto_approve else TRUST_READ)
+        self.project_root = project_root or cwd
+        self.compact_at = compact_at
         self.messages: list = messages if messages is not None else []
         self._emit = emit or (lambda ev: None)
 
@@ -140,6 +216,36 @@ class Engine:
     @property
     def busy(self) -> bool:
         return self.status in (STATUS_WORKING, STATUS_WAITING)
+
+    @property
+    def auto_approve(self) -> bool:
+        return self.trust == TRUST_AUTO
+
+    @auto_approve.setter
+    def auto_approve(self, value: bool) -> None:
+        self.trust = TRUST_AUTO if value else TRUST_READ
+
+    def needs_approval(self, tool_name: str) -> bool:
+        if self.trust == TRUST_AUTO:
+            return False
+        if self.trust == TRUST_WRITE:
+            return tool_name == "run_bash"
+        if self.trust == TRUST_NONE:
+            return True
+        return tool_name in DANGEROUS_TOOLS  # TRUST_READ
+
+    def system_prompt(self) -> str:
+        base = SYSTEM_PROMPT.format(cwd=self.cwd)
+        extra = projects.load_instructions(self.project_root, self.cwd)
+        if extra:
+            base += "\n\n# Project instructions (KCODER.md)\n\n" + extra
+        return base
+
+    def truncate(self, index: int) -> None:
+        """Drop history from message `index` on (for edit-and-resend)."""
+        if self.busy:
+            raise EngineBusy("can't edit history while a turn is running")
+        del self.messages[index:]
 
     def send(self, text: str, image_paths: list | None = None) -> None:
         """Start a turn with a user message. Raises EngineBusy if one is running."""
@@ -199,15 +305,22 @@ class Engine:
     # ------------------------------------------------------------------
 
     def _run_turn(self, content) -> None:
+        self._turn_started = time.monotonic()
+        try:
+            self._maybe_compact()
+        except Interrupted:
+            with self._lock:
+                self._set_status(STATUS_IDLE)
+            self.emit("turn_end", result="interrupted", elapsed=0.0)
+            return
+        except Exception as exc:  # noqa: BLE001 - compaction failure shouldn't block the turn
+            self.emit("notice", text=f"Context compaction failed ({type(exc).__name__}: {exc}); continuing without it.")
         turn_start = len(self.messages)
         self.messages.append({"role": "user", "content": content})
-        self._turn_started = time.monotonic()
         self.emit("turn_start")
         result = "ok"
         try:
-            self.backend.run_turn(
-                self.messages, self.model, SYSTEM_PROMPT.format(cwd=self.cwd), self
-            )
+            self._run_with_retries(turn_start)
         except Interrupted:
             result = "interrupted"
             del self.messages[turn_start:]
@@ -244,6 +357,63 @@ class Engine:
             with self._lock:
                 self._set_status(STATUS_ERROR if result == "error" else STATUS_IDLE)
             self.emit("turn_end", result=result, elapsed=round(time.monotonic() - self._turn_started, 2))
+
+    def _run_with_retries(self, turn_start: int) -> None:
+        """Call the backend, retrying with backoff on rate limits and
+        overloads. The history is only ever appended by the backend after a
+        complete model call, so a retry never replays a tool call."""
+        attempt = 0
+        while True:
+            try:
+                self.backend.run_turn(self.messages, self.model, self.system_prompt(), self)
+                return
+            except (anthropic.APIError, openai.APIError) as exc:
+                reason = _retryable(exc)
+                if reason is None or attempt >= MAX_RETRIES:
+                    raise
+                attempt += 1
+                delay = min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * (2 ** (attempt - 1))) + random.uniform(0, 1)
+                retry_after = getattr(getattr(exc, "response", None), "headers", {}) or {}
+                try:
+                    delay = max(delay, float(retry_after.get("retry-after", 0)))
+                except (TypeError, ValueError):
+                    pass
+                self.emit("retry", attempt=attempt, max=MAX_RETRIES, delay=round(delay, 1), reason=reason)
+                end = time.monotonic() + delay
+                while time.monotonic() < end:
+                    self._check_interrupt()
+                    time.sleep(0.25)
+
+    def _maybe_compact(self) -> None:
+        if not self.compact_at or self.last_input_tokens < self.compact_at or len(self.messages) < 4:
+            return
+        self.compact()
+
+    def compact(self) -> None:
+        """Summarise the history into a single handoff message."""
+        self.emit("compaction_start", tokens=self.last_input_tokens)
+        hooks = _CaptureHooks()
+        temp = list(self.messages) + [{"role": "user", "content": COMPACT_PROMPT}]
+        self.backend.run_turn(temp, self.model, self.system_prompt(), hooks)
+        summary = hooks.text.strip()
+        if not summary:
+            raise RuntimeError("empty summary")
+        before = len(self.messages)
+        user_msg = {
+            "role": "user",
+            "content": "[Context was compacted. Summary of the conversation so far:]\n\n" + summary,
+        }
+        ack = "Understood - continuing from that summary."
+        if self.provider.kind == "anthropic":
+            assistant_msg = {"role": "assistant", "content": [{"type": "text", "text": ack}]}
+        else:
+            assistant_msg = {"role": "assistant", "content": ack}
+        self.messages[:] = [user_msg, assistant_msg]
+        self.last_input_tokens = hooks.usage_out
+        self.emit("compaction", summary=summary, messages_before=before,
+                  tokens_before=hooks.usage_in, input=hooks.usage_in, output=hooks.usage_out)
+        self.emit("usage", input=hooks.usage_in, output=hooks.usage_out, cache_read=0, cache_write=0,
+                  model=self.model, elapsed=round(time.monotonic() - self._turn_started, 2))
 
     # ------------------------------------------------------------------
     # hooks used by the backends (run on the turn thread)
@@ -284,7 +454,7 @@ class Engine:
         description = describe_tool_call(name, tool_input)
         self.emit("tool_call", id=call_id, name=name, input=tool_input, description=description)
 
-        if name in DANGEROUS_TOOLS and not self.auto_approve:
+        if self.needs_approval(name):
             if not self._request_approval(call_id, name, description, tool_input):
                 return "The user declined to allow this tool call.", True
 

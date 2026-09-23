@@ -39,6 +39,9 @@ DEFAULTS = {
     "animation": True,
     "taglines": DEFAULT_TAGLINES,
     "pricing": {},
+    "daily_cap_usd": 0,        # 0 = no cap; sessions pause when today's spend reaches it
+    "compact_at": 150000,      # compact history when the last prompt reached this many tokens
+    "worktrees": True,         # web-created sessions in git repos get their own worktree
 }
 
 _cache: dict | None = None
@@ -74,3 +77,23 @@ def load(create: bool = True) -> dict:
     pricing.set_overrides(merged.get("pricing") or {})
     _cache = merged
     return merged
+
+
+def save(updates: dict) -> dict:
+    """Merge `updates` into the config file (keeps unknown keys)."""
+    global _cache
+    data = {}
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    data.update(updates)
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    _cache = None
+    return load()

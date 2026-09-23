@@ -3,9 +3,12 @@
     kcoder                new session here (or attach to one already here)
     kcoder "task"         one-shot: run a task, print the result, exit
     echo task | kcoder    same, headless (no banner, no prompts)
-    kcoder ls             list sessions
-    kcoder attach <id>    attach to a session (id prefix or name)
-    kcoder rm <id>        close and delete a session
+    kcoder ls             list running sessions
+    kcoder history        list chats (this project, or --all)
+    kcoder search <q>     full-text search across chats
+    kcoder attach <id>    attach to / resume a chat (id prefix or name)
+    kcoder export <id>    print a chat as markdown
+    kcoder rm <id>        delete a chat
     kcoder ui             open the web app
     kcoder daemon ...     start | stop | status | run
 """
@@ -30,9 +33,10 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, auth, banner, config, paths, ui
+from . import __version__, auth, banner, config, paths, projects, ui
 from .client import ClientError, DaemonClient, DaemonUnavailable, daemon_url
 from .daemon import already_running
+from .engine import TRUST_LEVELS
 from .input import Prompt
 from .providers import PROVIDERS
 
@@ -84,14 +88,23 @@ def print_session_panel(meta: dict) -> None:
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="dim", justify="right")
     grid.add_column()
-    grid.add_row("session", f"[bold]{escape(meta['name'])}[/bold]  [dim]{meta['id']}[/dim]")
+    title = meta.get("title") or ""
+    grid.add_row("session", f"[bold]{escape(meta['name'])}[/bold]  [dim]{meta['id']}[/dim]"
+                 + (f"  [dim italic]{escape(title)}[/dim italic]" if title and title != meta["name"] else ""))
+    proj = meta.get("project") or {}
+    if proj.get("path") and proj.get("path") != meta["cwd"]:
+        grid.add_row("project", f"{escape(proj.get('name', ''))}  [dim]{escape(_short_home(proj['path']))}[/dim]")
+    if meta.get("worktree"):
+        grid.add_row("branch", f"[bold]{escape(meta['worktree'].get('branch', ''))}[/bold]  [dim]worktree[/dim]")
     grid.add_row("provider", f"[bold]{provider.label if provider else meta['provider']}[/bold]")
     grid.add_row("model", f"[bold]{escape(meta['model'])}[/bold]")
     grid.add_row("cwd", escape(meta["cwd"]))
-    grid.add_row(
-        "auto-approve",
-        "[bold green]on[/bold green]" if meta.get("auto_approve") else "[dim]off[/dim]",
-    )
+    trust = meta.get("trust") or ("auto" if meta.get("auto_approve") else "read")
+    trust_desc = {"auto": "[bold green]auto[/bold green] [dim](everything runs)[/dim]",
+                  "write": "[green]write[/green] [dim](shell is gated)[/dim]",
+                  "read": "[dim]read[/dim] [dim](writes and shell are gated)[/dim]",
+                  "none": "[yellow]none[/yellow] [dim](everything is gated)[/dim]"}[trust]
+    grid.add_row("trust", trust_desc)
     console.print(
         Panel(
             grid,
@@ -115,9 +128,16 @@ def print_help() -> None:
         "  /provider [name]  switch provider (anthropic, xiaomi, deepseek, qwen,\n"
         "                    kimi, glm, minimax, xiaokai); no arg: pick interactively\n"
         "  /model [name]     show/switch model; no arg: pick interactively\n"
-        "  /auto             toggle auto-approve for tool execution\n"
-        "  /name [name]      rename this session\n"
-        "  /sessions         list all sessions in kcoderd\n"
+        "  /auto             toggle auto-approve (trust auto <-> read)\n"
+        "  /trust [level]    auto | write | read | none - what runs without asking\n"
+        "  /name [name]      rename this session (short name)\n"
+        "  /title [text]     set the chat title\n"
+        "  /queue [task]     add a follow-up task (no arg: show the queue; /queue clear)\n"
+        "  /fork             fork this chat into a new one\n"
+        "  /compact          summarise the history to free up context\n"
+        "  /export [file]    write this chat as markdown\n"
+        "  /sessions         list running sessions\n"
+        "  /history          list chats in this project\n"
         "  /help             show this help\n",
         highlight=False,
     )
@@ -332,6 +352,18 @@ class TurnRenderer:
         elif t == "info":
             self.abort_stream()
             console.print(f"[dim]{escape(ev['text'])}[/dim]", highlight=False)
+        elif t == "retry":
+            self.abort_stream()
+            console.print(f"[yellow]↻ {escape(ev.get('reason', 'error'))} - retrying in {ev.get('delay')}s "
+                          f"({ev.get('attempt')}/{ev.get('max')})[/yellow]", highlight=False)
+        elif t == "compaction_start":
+            self.abort_stream()
+            console.print(f"[dim]✂ context at {ev.get('tokens', 0):,} tokens - compacting…[/dim]")
+        elif t == "compaction":
+            console.print(f"[dim]✂ compacted {ev.get('messages_before', 0)} messages into a summary[/dim]")
+        elif t == "queue":
+            console.print(f"[dim]▶ next queued task ({ev.get('remaining', 0)} left): "
+                          f"{escape(ev.get('started', ''))}[/dim]", highlight=False)
 
     def replay(self, events: list) -> None:
         """Non-live rendering of persisted events (used on attach)."""
@@ -354,8 +386,10 @@ class TurnRenderer:
                 console.print("[dim]  ✓ approved[/dim]" if ev.get("approved") else "[dim]  ✗ declined[/dim]")
             elif t in ("notice", "error"):
                 console.print(f"[red]{escape(ev['text'])}[/red]", highlight=False)
-            elif t in ("info", "system"):
-                console.print(f"[dim]{escape(ev['text'])}[/dim]", highlight=False)
+            elif t in ("info", "system", "history_reset"):
+                console.print(f"[dim]{escape(ev.get('text', ''))}[/dim]", highlight=False)
+            elif t == "compaction":
+                console.print("[dim]✂ context compacted here[/dim]")
 
 
 _last_ctrl_c = 0.0   # when Ctrl+C last interrupted a turn (for "twice exits")
@@ -472,6 +506,28 @@ def run_turn(client: DaemonClient, sid: str, renderer: TurnRenderer) -> str:
                 interrupt("ctrl+c")
 
 
+def run_turn_until(client: DaemonClient, sid: str, renderer: TurnRenderer, stop_types: set,
+                   timeout: float = 600) -> None:
+    """Consume events for sid until one of stop_types arrives (or turn_end)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        item = client.next_event(timeout=0.5)
+        if item is None:
+            continue
+        kind, payload = item
+        if kind != "event" or payload.get("sid") != sid:
+            continue
+        ev = payload["ev"]
+        if ev["t"] == "compaction":
+            console.print(f"[dim]✂ compacted {ev.get('messages_before', 0)} messages into a summary[/dim]")
+            return
+        if ev["t"] in stop_types or ev["t"] == "turn_end":
+            renderer.handle(ev)
+            return
+        if ev["t"] not in ("user", "status", "system"):
+            renderer.handle(ev)
+
+
 def run_turn_plain(client: DaemonClient, sid: str, *, allow_tools: bool) -> bool:
     """Headless turn: stream text to stdout, notes to stderr, no prompts.
     Returns True if the turn ended without error."""
@@ -567,6 +623,16 @@ def chat(client: DaemonClient, meta: dict, replay: list | None = None,
         renderer.replay(replay)
         console.print()
 
+    if meta.get("interrupted") and meta.get("resume_text"):
+        console.print("[yellow]This session was interrupted by a daemon restart before its last turn finished.[/yellow]")
+        console.print(f"[dim]last message:[/dim] {escape(meta['resume_text'][:200])}", highlight=False)
+        if ui.confirm(console, "Resume by sending it again?", yes_label="Yes, resume", no_label="No, start fresh from here"):
+            try:
+                client.request("resume_turn", sid=sid)
+                run_turn(client, sid, renderer)
+                console.print()
+            except ClientError as exc:
+                console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
     try:
         # If we attached mid-turn, catch up on the live stream first.
         if meta.get("status") in ("working", "waiting"):
@@ -728,6 +794,62 @@ def _handle_command(client, meta, renderer, command, arg) -> bool:
     if command == "/sessions":
         print_sessions(client.request("list")["sessions"], current=sid)
         return True
+    if command == "/trust":
+        if arg:
+            if arg not in TRUST_LEVELS:
+                console.print(f"[red]trust must be one of {', '.join(TRUST_LEVELS)}[/red]")
+                return True
+            reply = client.request("set", sid=sid, trust=arg)
+            meta.update(reply["session"])
+        console.print(f"[dim]trust: {meta.get('trust')}[/dim]")
+        return True
+    if command == "/title":
+        if arg:
+            reply = client.request("title", sid=sid, title=arg)
+            meta.update(reply["session"])
+        console.print(f"[dim]title: {escape(meta.get('title') or '')}[/dim]", highlight=False)
+        return True
+    if command == "/queue":
+        if arg == "clear":
+            reply = client.request("queue", sid=sid, action="clear")
+        elif arg:
+            reply = client.request("queue", sid=sid, action="add", text=arg)
+            console.print(f"[dim]queued ({len(reply['queue'])} task(s) waiting)[/dim]")
+            return True
+        else:
+            reply = {"queue": meta.get("queue") or client.request("list")["sessions"] and
+                     next((s.get("queue", []) for s in client.request("list")["sessions"] if s["id"] == sid), [])}
+        q = reply.get("queue") or []
+        if not q:
+            console.print("[dim]queue is empty[/dim]")
+        for i, task in enumerate(q, 1):
+            console.print(f"[dim]{i}.[/dim] {escape(task.get('text', str(task)))}", highlight=False)
+        return True
+    if command == "/fork":
+        reply = client.request("fork", sid=sid)
+        new = reply["session"]
+        console.print(f"[dim]forked → {escape(new['name'])} ({new['id']}); `kcoder attach {escape(new['name'])}`[/dim]",
+                      highlight=False)
+        return True
+    if command == "/compact":
+        client.request("compact", sid=sid)
+        console.print("[dim]compacting…[/dim]")
+        run_turn_until(client, sid, renderer, {"compaction", "notice"})
+        return True
+    if command == "/export":
+        reply = client.request("export", sid=sid)
+        if arg:
+            path = os.path.expanduser(arg)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(reply["markdown"])
+            console.print(f"[dim]exported → {escape(path)}[/dim]", highlight=False)
+        else:
+            console.print(Markdown(reply["markdown"]))
+        return True
+    if command == "/history":
+        proj = (meta.get("project") or {}).get("id")
+        print_history(client.request("history", project=proj)["chats"], current=sid)
+        return True
     if command == "/help":
         print_help()
         return True
@@ -784,6 +906,64 @@ def print_sessions(sessions: list, current: str | None = None) -> None:
             escape(_short_home(s["cwd"])),
         )
     console.print(table)
+
+
+def print_history(chats: list, current: str | None = None) -> None:
+    if not chats:
+        console.print("[dim]no chats yet[/dim]")
+        return
+    table = Table(box=None, pad_edge=False, header_style=f"bold {ACCENT}")
+    for col in ("", "id", "name", "title", "status", "project", "last"):
+        table.add_column(col)
+    for c in chats:
+        status = c.get("status", "archived")
+        style = STATUS_STYLE.get(status, "dim")
+        marks = ("📌" if c.get("pinned") else "") + (f"[{ACCENT}]*[/{ACCENT}]" if c["id"] == current else "")
+        table.add_row(
+            marks, c["id"], escape(c["name"]), escape((c.get("title") or "")[:50]),
+            f"[{style}]{status}[/{style}]", escape((c.get("project") or {}).get("name", "")),
+            _age(c.get("last_activity", 0)),
+        )
+    console.print(table)
+
+
+def cmd_history(args) -> int:
+    with DaemonClient.connect() as client:
+        proj = None if args.all else projects.project_id(projects.project_root(os.getcwd()))
+        reply = client.request("history", project=proj, limit=args.limit)
+        if not reply["chats"] and proj and not args.all:
+            console.print("[dim]no chats in this project yet (try `kcoder history --all`)[/dim]")
+            return 0
+        print_history(reply["chats"])
+    return 0
+
+
+def cmd_search(args) -> int:
+    with DaemonClient.connect() as client:
+        proj = None if args.all else projects.project_id(projects.project_root(os.getcwd()))
+        results = client.request("search", q=" ".join(args.query), project=proj)["results"]
+        if not results:
+            console.print("[dim]no matches[/dim]")
+            return 0
+        for r in results:
+            console.print(f"[bold]{escape(r.get('title') or r['name'])}[/bold]  [dim]{r['id']} · "
+                          f"{escape((r.get('project') or {}).get('name', ''))} · {_age(r.get('last_activity', 0))} ago[/dim]",
+                          highlight=False)
+            for h in r.get("hits", []):
+                console.print(f"  [dim]{h['who']}:[/dim] {escape(h['snippet'])}", highlight=False)
+    return 0
+
+
+def cmd_export(args) -> int:
+    with DaemonClient.connect() as client:
+        reply = client.request("export", sid=args.session)
+    if args.output:
+        with open(os.path.expanduser(args.output), "w", encoding="utf-8") as f:
+            f.write(reply["markdown"])
+        console.print(f"[dim]exported → {escape(args.output)}[/dim]", highlight=False)
+    else:
+        sys.stdout.write(reply["markdown"])
+    return 0
 
 
 def _short_home(path: str) -> str:
@@ -926,21 +1106,23 @@ def cmd_chat(args) -> int:
 
     with client:
         print_context_line(client)
-        here = [s for s in client.request("list")["sessions"] if s["cwd"] == cwd]
+        proj_id = projects.project_id(projects.project_root(cwd))
+        recent = client.request("history", project=proj_id, limit=8)["chats"]
         meta = None
         replay: list = []
         history: list = []
-        if here and not args.new:
-            labels = ["Start a new session here"] + [
-                f"Attach to [bold]{escape(s['name'])}[/bold]  [dim]{s['status']} · "
-                f"{escape(s.get('model') or '')} · {_age(s.get('last_activity', 0))} ago[/dim]"
-                for s in here
+        if recent and not args.new:
+            labels = ["Start a new chat here"] + [
+                f"{'Attach to' if c.get('status') not in ('archived', None) else 'Resume'} "
+                f"[bold]{escape(c.get('title') or c['name'])}[/bold]  [dim]{c['name']} · {c.get('status', 'archived')} · "
+                f"{escape(c.get('model') or '')} · {_age(c.get('last_activity', 0))} ago[/dim]"
+                for c in recent
             ]
-            choice = ui.select(console, "Sessions in this directory", labels)
+            choice = ui.select(console, "Chats in this project", labels)
             if choice is None:
                 return 0
             if choice > 0:
-                target = here[choice - 1]
+                target = recent[choice - 1]
                 reply = client.request("attach", sid=target["id"], replay=200)
                 meta = reply["session"]
                 events = reply["events"]
@@ -956,7 +1138,8 @@ def cmd_chat(args) -> int:
                     provider=provider_id,
                     model=model,
                     name=args.name,
-                    auto_approve=bool(args.yes),
+                    trust=args.trust or ("auto" if args.yes else "read"),
+                    worktree=bool(args.worktree),
                 )
             except ClientError as exc:
                 console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
@@ -1030,7 +1213,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
 # entry point
 # ----------------------------------------------------------------------
 
-SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "daemon", "help"}
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "daemon", "help", "history", "search", "export"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1045,6 +1228,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("prompt", nargs="*", help="one-shot task: run it, print the result, exit")
     p.add_argument("-y", "--yes", action="store_true", help="auto-approve all tool executions (no y/n prompts)")
     p.add_argument("--no-banner", action="store_true", help="skip the startup banner")
+    p.add_argument("--trust", choices=list(TRUST_LEVELS), help="what runs without asking (default: read)")
+    p.add_argument("--worktree", action="store_true", help="work on a fresh git worktree + branch for this session")
     p.add_argument("--keep", action="store_true", help="one-shot: keep the session instead of deleting it")
     p.add_argument("--provider", metavar="NAME", help=f"provider to use ({', '.join(PROVIDERS)})")
     p.add_argument("--model", metavar="NAME", help="model to start with")
@@ -1056,7 +1241,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ls", aliases=["list"], help="list sessions")
     p.set_defaults(func=cmd_ls)
 
-    p = sub.add_parser("attach", help="attach to a session by id prefix or name")
+    p = sub.add_parser("history", help="list chats in this project (or all)")
+    p.add_argument("--all", action="store_true", help="all projects")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_history)
+
+    p = sub.add_parser("search", help="full-text search across chats")
+    p.add_argument("query", nargs="+")
+    p.add_argument("--all", action="store_true", help="all projects (default: this project)")
+    p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("export", help="print a chat as markdown")
+    p.add_argument("session")
+    p.add_argument("-o", "--output", help="write to a file instead of stdout")
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("attach", help="attach to / resume a chat by id prefix or name")
     p.add_argument("session")
     p.set_defaults(func=cmd_attach)
 

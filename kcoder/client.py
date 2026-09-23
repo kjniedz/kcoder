@@ -84,6 +84,9 @@ class DaemonClient:
         self._reply_events: dict[int, threading.Event] = {}
         self._events: queue.Queue = queue.Queue()
         self.sessions: list = []
+        self.stats: dict = {}
+        self.chats: list = []
+        self.projects: list = []
         self.closed = threading.Event()
         self._reader = threading.Thread(target=self._read_loop, daemon=True, name="kcoder-ws")
         self._reader.start()
@@ -189,7 +192,11 @@ class DaemonClient:
                     self._events.put(("event", msg))
                 elif t == "sessions":
                     self.sessions = msg.get("sessions", [])
+                    self.stats = msg.get("stats", {})
                     self._events.put(("sessions", self.sessions))
+                elif t == "chats":
+                    self.chats = msg.get("chats", [])
+                    self.projects = msg.get("projects", [])
         except ConnectionClosed:
             pass
         except Exception:  # noqa: BLE001
