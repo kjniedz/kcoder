@@ -108,29 +108,18 @@ PROVIDERS = {
         models=["MiniMax-M2"],
         default_model="MiniMax-M2",
     ),
-    "custom": Provider(
-        id="custom",
-        label="Custom (any OpenAI-compatible URL)",
+    "xiaokai": Provider(
+        id="xiaokai",
+        label="XiaoKai",
         kind="openai",
-        key_env="KCODER_CUSTOM_API_KEY",
+        key_env="XIAOKAI_API_KEY",
         key_url="",
-        base_url=None,  # asked for during setup
+        # TODO: point this at the real XiaoKai endpoint once it's live.
+        base_url="https://api.xiaokai.ai/v1",
+        models=["xiaokai"],
+        default_model="xiaokai",
     ),
 }
-
-
-def custom_provider(base_url: str, model: str) -> Provider:
-    """A concrete provider for a user-supplied OpenAI-compatible endpoint."""
-    return Provider(
-        id="custom",
-        label=f"Custom ({base_url})",
-        kind="openai",
-        key_env="KCODER_CUSTOM_API_KEY",
-        key_url="",
-        base_url=base_url,
-        models=[model],
-        default_model=model,
-    )
 
 
 def _openai_tools() -> list:

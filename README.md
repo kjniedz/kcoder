@@ -20,11 +20,12 @@ in your current working directory — not just talk about it.
   running token estimate, then exact `in → out` token counts when it finishes
 - **Multi-line paste support** — paste or drag-and-drop content of any length
   (far past 10 lines) and it lands as a single message
+- **Image input** — drag an image file onto the prompt and it's sent to the
+  model as `[Image #1]` (works with vision-capable models)
 - Works on **any folder you can reach** — your current directory, or projects
   in `~/Desktop`, `~/Downloads`, etc. (no sandbox)
 - **Multiple providers**: Anthropic (Claude), Xiaomi MiMo, DeepSeek, Qwen,
-  Kimi (Moonshot), GLM (Zhipu), MiniMax — or any OpenAI-compatible endpoint
-  (including local servers like Ollama)
+  Kimi (Moonshot), GLM (Zhipu), MiniMax, and XiaoKai
 - Agentic tool use: `read_file`, `write_file`, `edit_file`, `list_dir`, `run_bash`
 - Safety prompts before any write, edit, or shell command (y/n approval)
 - Auto-approve mode via `--yes` / `-y` flag or the `/auto` command
@@ -63,7 +64,7 @@ back and forth never re-asks. To wipe everything, run `kcoder --logout`.
 | Kimi (Moonshot) | `kimi` | `kimi-latest` | `MOONSHOT_API_KEY` |
 | GLM (Zhipu / Z.ai) | `glm` | `glm-4.6` | `ZAI_API_KEY` |
 | MiniMax | `minimax` | `MiniMax-M2` | `MINIMAX_API_KEY` |
-| Custom OpenAI-compatible URL | `custom` | (you choose) | `KCODER_CUSTOM_API_KEY` |
+| XiaoKai | `xiaokai` | `xiaokai` | `XIAOKAI_API_KEY` |
 
 Anthropic models include `claude-fable-5` (Anthropic's most capable model),
 `claude-opus-4-8`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001` —
@@ -73,8 +74,6 @@ a benign request the answer is re-served by Opus inside the same call
 (kcoder prints a dim note when that happens).
 
 If a provider's env var is set, it takes priority over saved credentials.
-The `custom` provider accepts any OpenAI-compatible `/chat/completions`
-endpoint — hosted, or local (e.g. Ollama at `http://localhost:11434/v1`).
 
 Optional environment variables:
 
@@ -95,7 +94,7 @@ kcoder --logout             # forget all saved credentials
 Then just talk to it:
 
 ```
-k> add a --verbose flag to scripts/deploy.py and run the tests
+you> add a --verbose flag to scripts/deploy.py and run the tests
 ```
 
 kcoder will read files, make edits (asking for approval first), run commands,
@@ -105,9 +104,16 @@ While it works, a spinner shows the elapsed time and a live token estimate for
 the current turn; when the turn finishes, kcoder prints the exact prompt and
 response token counts (e.g. `✓ 4.2s · 12,043 in → 587 out tokens`).
 
-You can paste as much as you want into the `k>` prompt — multi-line snippets,
+You can paste as much as you want into the `you>` prompt — multi-line snippets,
 logs, or whole files. The entire paste is captured as one message (kcoder
 notes `… +N pasted lines`), so you're not limited to a single line.
+
+**Images:** drag an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) onto
+the prompt — optionally with a question — and kcoder attaches it to your
+message as `[Image #1]` and sends it to the model. You can include several
+images in one message; they're numbered in order. Other dragged file or folder
+paths are kept as clean text in your message (escaped spaces and brackets are
+tidied up automatically), so the agent can read them with its tools.
 
 ### Working on a folder
 
@@ -124,8 +130,8 @@ anywhere your user account can, including projects in `~/Desktop` and
 - **Switch directories from inside a session** with `/cd`:
 
   ```
-  k> /cd ~/Downloads/my-project   # change the working directory
-  k> /cd                          # back to your home directory
+  you> /cd ~/Downloads/my-project   # change the working directory
+  you> /cd                          # back to your home directory
   ```
 
 - **Drag and drop the folder onto the prompt.** Most terminals paste the
@@ -134,7 +140,7 @@ anywhere your user account can, including projects in `~/Desktop` and
   your message:
 
   ```
-  k> set up tests for the project at /Users/you/Downloads/my-project
+  you> set up tests for the project at /Users/you/Downloads/my-project
   ```
 
   Quoted paths and backslash-escaped spaces (how terminals encode folders with

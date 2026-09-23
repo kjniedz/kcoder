@@ -1,7 +1,11 @@
 """kcoder - interactive terminal coding agent."""
 
 import argparse
+import base64
+import mimetypes
 import os
+import random
+import re
 import select
 import sys
 import time
@@ -84,7 +88,7 @@ def print_help() -> None:
         "  /clear            reset conversation history\n"
         "  /cd [path]        change working directory (no arg: home; or drag a folder in)\n"
         "  /provider [name]  switch provider (anthropic, xiaomi, deepseek, qwen,\n"
-        "                    kimi, glm, minimax, custom); no arg: pick interactively\n"
+        "                    kimi, glm, minimax, xiaokai); no arg: pick interactively\n"
         "  /model [name]     show/switch model; no arg: pick interactively\n"
         "  /auto             toggle auto-approve for tool execution\n"
         "  /help             show this help\n",
@@ -110,12 +114,67 @@ def pick_model_interactively(provider, current: str) -> str:
 
 def clean_path(raw: str) -> str:
     """Normalize a path the way a terminal hands it over on drag-and-drop:
-    strip surrounding quotes and un-escape backslash-spaces, then expand ~."""
+    strip surrounding quotes and un-escape backslashed characters (spaces,
+    brackets, parens, etc.), then expand ~."""
     s = raw.strip()
     if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
         s = s[1:-1]
-    s = s.replace("\\ ", " ")
+    s = re.sub(r"\\(.)", r"\1", s)  # \[ -> [, "\ " -> " ", \( -> (, ...
     return os.path.expanduser(s)
+
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+# A drag-and-dropped path: starts with / or ~, then either an escaped char
+# (\ , \[, ...) or any non-space, non-backslash character.
+_PATH_RE = re.compile(r"(?:[~/])(?:\\.|[^\s\\])*")
+
+
+def process_input(text: str):
+    """Pull drag-and-dropped file paths out of a message.
+
+    Image paths become `[Image #N]` placeholders (and are returned for
+    attachment); other real paths are un-escaped in place so the agent sees
+    a clean path. Returns (new_text, [image_path, ...]).
+    """
+    images: list[str] = []
+
+    def repl(match: re.Match) -> str:
+        cleaned = clean_path(match.group())
+        if not os.path.exists(cleaned):
+            return match.group()  # not a real path - leave the text untouched
+        ext = os.path.splitext(cleaned)[1].lower()
+        if ext in IMAGE_EXTS and os.path.isfile(cleaned):
+            images.append(cleaned)
+            return f"[Image #{len(images)}]"
+        return cleaned
+
+    return _PATH_RE.sub(repl, text), images
+
+
+def build_user_content(text: str, image_paths: list, kind: str):
+    """Build the message `content` for a turn. Plain string when there are no
+    images; otherwise a list of text + image blocks in the provider's format."""
+    if not image_paths:
+        return text
+    blocks: list = []
+    if text.strip():
+        blocks.append({"type": "text", "text": text})
+    for path in image_paths:
+        media_type = mimetypes.guess_type(path)[0] or "image/png"
+        with open(path, "rb") as f:
+            data = base64.standard_b64encode(f.read()).decode()
+        if kind == "anthropic":
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": data},
+            })
+        else:  # openai-compatible
+            blocks.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
+            })
+    return blocks
 
 
 def read_user_input() -> str:
@@ -125,7 +184,7 @@ def read_user_input() -> str:
     remaining lines sit in the tty buffer. Keep draining complete lines
     until the buffer goes quiet so the whole paste lands in one message.
     """
-    first = console.input("[bold green]k>[/bold green] ")
+    first = console.input("[bold green]you>[/bold green] ")
     lines = [first]
     if sys.stdin.isatty():
         while select.select([sys.stdin], [], [], 0.08)[0]:
@@ -140,12 +199,43 @@ def read_user_input() -> str:
     return "\n".join(lines).strip()
 
 
+# Playful status words shown while the model is still thinking (before any
+# tokens stream). Shuffled per turn and rotated over time so it feels random.
+THINKING_WORDS = [
+    "cooking",
+    "loading genius",
+    "bribing the algorithm",
+    "stalling convincingly",
+    "rolling shpli",
+    "wibbling",
+    "woobling",
+    "calculating",
+    "processing",
+    "working on it",
+    "analyzing",
+    "computing",
+    "pondering",
+    "generating",
+    "reflecting",
+    "crunching",
+    "considering",
+    "reasoning",
+    "developing",
+    "railing lines",
+]
+
+# Seconds each word stays up before rotating to the next.
+_WORD_INTERVAL = 2.0
+
+
 class _StreamStats:
     """Elapsed time + token estimate, re-rendered live next to the spinner."""
 
     def __init__(self):
         self.start = time.monotonic()
         self.chars = 0
+        # A fresh random order each turn; cycled through as time elapses.
+        self._words = random.sample(THINKING_WORDS, len(THINKING_WORDS))
 
     @property
     def elapsed(self) -> float:
@@ -157,7 +247,8 @@ class _StreamStats:
                 f"{self.elapsed:.0f}s · ~{self.chars // 4:,} tokens", style="dim"
             )
         else:
-            yield Text(f"{self.elapsed:.0f}s · thinking…", style="dim")
+            word = self._words[int(self.elapsed / _WORD_INTERVAL) % len(self._words)]
+            yield Text(f"{self.elapsed:.0f}s · {word}…", style="dim")
 
 
 class TurnUI:
@@ -292,8 +383,10 @@ def main() -> None:
         if not user_input:
             continue
 
-        if user_input.startswith("/") and "\n" not in user_input:
-            parts = user_input.split(maxsplit=1)
+        parts = user_input.split(maxsplit=1)
+        # A command is "/word" — this excludes dragged paths like /Users/...
+        # and pasted code, which start with "/" but aren't a bare word.
+        if parts and re.fullmatch(r"/[a-zA-Z]+", parts[0]):
             command, arg = parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")
 
             if command in ("/exit", "/quit"):
@@ -321,7 +414,7 @@ def main() -> None:
                 if arg:
                     if arg not in PROVIDERS:
                         console.print(
-                            f"[red]Unknown provider: {arg}[/red] "
+                            f"[red]Unknown provider: {escape(arg)}[/red] "
                             f"(options: {', '.join(PROVIDERS)})",
                             highlight=False,
                         )
@@ -351,12 +444,12 @@ def main() -> None:
                     model = arg
                 else:
                     model = pick_model_interactively(provider, model)
-                console.print(f"[bold {ACCENT}]✓[/bold {ACCENT}] [dim]model →[/dim] [bold]{model}[/bold]", highlight=False)
+                console.print(f"[bold {ACCENT}]✓[/bold {ACCENT}] [dim]model →[/dim] [bold]{escape(model)}[/bold]", highlight=False)
                 continue
             if command == "/help":
                 print_help()
                 continue
-            console.print(f"[red]Unknown command: {command}[/red] (try /help)", highlight=False)
+            console.print(f"[red]Unknown command: {escape(command)}[/red] (try /help)", highlight=False)
             continue
 
         # A bare folder path on its own line (e.g. a drag-and-dropped folder):
@@ -374,8 +467,17 @@ def main() -> None:
                     console.print(f"[dim]cwd → {escape(os.getcwd())}[/dim]", highlight=False)
                     continue
 
+        # Resolve dragged paths: images become attachments, other paths are
+        # un-escaped inline so the agent sees clean paths.
+        text, image_paths = process_input(user_input)
+        for i, path in enumerate(image_paths, 1):
+            console.print(
+                f"[{ACCENT}]🖼 Image #{i}[/{ACCENT}] [dim]← {escape(os.path.basename(path))}[/dim]",
+                highlight=False,
+            )
+
         turn_start = len(messages)
-        messages.append({"role": "user", "content": user_input})
+        messages.append({"role": "user", "content": build_user_content(text, image_paths, provider.kind)})
         try:
             backend.run_turn(
                 messages, model, SYSTEM_PROMPT.format(cwd=os.getcwd()), TurnUI(auto_approve)

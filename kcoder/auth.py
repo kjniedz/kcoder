@@ -6,9 +6,7 @@ Credentials live in ~/.config/kcoder/credentials.json (chmod 600):
       "default_provider": "deepseek",
       "providers": {
         "anthropic": {"auth": "api_key", "api_key": "sk-ant-..."},
-        "deepseek":  {"auth": "api_key", "api_key": "sk-..."},
-        "custom":    {"auth": "api_key", "api_key": "...",
-                      "base_url": "http://localhost:11434/v1", "model": "qwen3:32b"}
+        "deepseek":  {"auth": "api_key", "api_key": "sk-..."}
       }
     }
 """
@@ -26,7 +24,7 @@ import anthropic
 import openai
 
 from . import ui
-from .providers import PROVIDERS, Provider, custom_provider, make_backend
+from .providers import PROVIDERS, Provider, make_backend
 
 CONFIG_DIR = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "kcoder"
@@ -86,9 +84,7 @@ def _save_provider(provider_id: str, entry: dict) -> None:
 # --------------------------------------------------------------------------
 
 def _resolve_provider(provider_id: str, saved: dict) -> Provider:
-    """Build the Provider object, materializing 'custom' from saved config."""
-    if provider_id == "custom" and saved.get("base_url"):
-        return custom_provider(saved["base_url"], saved.get("model", ""))
+    """Build the Provider object for a provider id."""
     return PROVIDERS[provider_id]
 
 
@@ -126,36 +122,6 @@ def _connect_with_key(provider: Provider, key: str, console, base_url: str | Non
         console.print("[red]Couldn't reach the API - check your internet connection.[/red]")
         return None
     return backend
-
-
-def _setup_custom(console):
-    """Collect base URL + model + key for any OpenAI-compatible endpoint."""
-    console.print(
-        "\n[dim]Any OpenAI-compatible /chat/completions endpoint works here "
-        "(hosted providers, or local servers like Ollama: http://localhost:11434/v1)[/dim]",
-        highlight=False,
-    )
-    base_url = console.input("[bold]Base URL:[/bold] ").strip().rstrip("/")
-    if not base_url:
-        console.print("[red]A base URL is required.[/red]")
-        return None
-    model = console.input("[bold]Model name (e.g. deepseek-chat):[/bold] ").strip()
-    if not model:
-        console.print("[red]A model name is required.[/red]")
-        return None
-    provider = custom_provider(base_url, model)
-    key = _prompt_for_key(provider, console, allow_empty=True)
-    backend = _connect_with_key(provider, key or "EMPTY", console, base_url)
-    if backend is None:
-        return None
-    _save_provider("custom", {
-        "auth": "api_key",
-        "api_key": key or "EMPTY",
-        "base_url": base_url,
-        "model": model,
-    })
-    console.print(f"[green]✓ Connected to {base_url}.[/green]\n")
-    return provider, backend
 
 
 def _ensure_ant_installed(console) -> bool:
@@ -236,7 +202,7 @@ def connect(provider_id: str, console, *, interactive: bool = True):
     saved = config["providers"].get(provider_id, {})
     provider = _resolve_provider(provider_id, saved)
 
-    # 1. environment variable (custom needs a saved base_url for this to apply)
+    # 1. environment variable
     env_key = os.environ.get(provider.key_env)
     if env_key and (provider.base_url or provider.kind == "anthropic"):
         return provider, make_backend(provider, env_key, saved.get("base_url"))
@@ -257,9 +223,6 @@ def connect(provider_id: str, console, *, interactive: bool = True):
             highlight=False,
         )
         return None
-
-    if provider_id == "custom":
-        return _setup_custom(console)
 
     if provider_id == "anthropic":
         while True:

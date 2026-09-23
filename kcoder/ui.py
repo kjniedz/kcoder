@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import select as _select
 import sys
 
@@ -21,21 +22,25 @@ def _read_key() -> str:
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == "\x03":  # Ctrl+C
+        # Read raw bytes from the fd (not buffered sys.stdin), so the select()
+        # below accurately reflects whether more of an escape sequence is
+        # waiting — buffered reads would hide pending bytes from select().
+        ch = os.read(fd, 1)
+        if ch == b"\x03":  # Ctrl+C
             raise KeyboardInterrupt
-        if ch == "\x1b":
-            # distinguish a bare ESC from an escape sequence (arrow keys)
-            if _select.select([sys.stdin], [], [], 0.05)[0]:
-                seq = sys.stdin.read(1)
-                if seq == "[" and _select.select([sys.stdin], [], [], 0.05)[0]:
-                    code = sys.stdin.read(1)
-                    return {"A": "up", "B": "down"}.get(code, "")
+        if ch == b"\x1b":
+            # Bare ESC, or the start of an escape sequence (arrow keys)?
+            if _select.select([fd], [], [], 0.05)[0]:
+                rest = os.read(fd, 8)
+                # Cursor keys come as CSI (ESC [ A) or SS3 (ESC O A); the final
+                # byte is A=up / B=down (ignore left/right and modified forms).
+                if rest[:1] in (b"[", b"O"):
+                    return {b"A": "up", b"B": "down"}.get(rest[-1:], "")
                 return ""
             return "esc"
-        if ch in ("\r", "\n"):
+        if ch in (b"\r", b"\n"):
             return "enter"
-        return ch
+        return ch.decode("utf-8", "ignore")
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 

@@ -18,5 +18,25 @@ env/
 # Personal Claude Code settings (not meant to be shared)
 .claude/settings.local.json
 
-# Credentials never live in the repo, but guard against accidents
+# Secrets: env files, API keys, credentials
+.env
+.env.*
+*.env
+*.key
+*.pem
 credentials.json
+secrets.json
+kcoder-token*
+
+# kcoder daemon local data (sessions, transcripts, token, logs) if ever
+# pointed at a directory inside the repo
+.kcoder/
+kcoder-data/
+data/
+sessions/
+*.jsonl
+*.log
+daemon.json
+
+# Node (web UI tooling, if any)
+node_modules/
