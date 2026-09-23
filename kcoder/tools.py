@@ -173,24 +173,84 @@ def list_dir(path: str = ".", cwd: str = ".") -> str:
     return "\n".join(lines)
 
 
-def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".") -> str:
+MAX_OUTPUT = 200_000
+
+
+def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
+             on_output=None, proc_slot=None) -> str:
+    """Run a shell command, streaming combined output through `on_output`
+    (if given) while it runs. `proc_slot` (any object) gets a `.proc`
+    attribute so the caller can kill a runaway command."""
+    import time
+
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd,
+        proc = subprocess.Popen(
+            command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        return f"Error: command timed out after {timeout}s"
+    except OSError as exc:
+        return f"Error: {exc}"
+    if proc_slot is not None:
+        proc_slot.proc = proc
+    chunks: list[bytes] = []
+    total = 0
+    deadline = time.monotonic() + (timeout or DEFAULT_BASH_TIMEOUT)
+    timed_out = False
+    killed = False
+    import select as _select
+    fd = proc.stdout
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            ready, _, _ = _select.select([fd], [], [], min(0.5, remaining))
+            if ready:
+                data = os.read(fd.fileno(), 65536)
+                if not data:
+                    break
+                total += len(data)
+                if total <= MAX_OUTPUT:
+                    chunks.append(data)
+                if on_output is not None:
+                    try:
+                        on_output(data.decode("utf-8", "replace"))
+                    except Exception:  # noqa: BLE001
+                        pass
+            elif proc.poll() is not None:
+                # drain anything left
+                rest = fd.read()
+                if rest:
+                    chunks.append(rest)
+                break
+            if proc_slot is not None and getattr(proc_slot, "kill_requested", False):
+                killed = True
+                break
+    finally:
+        if timed_out or killed:
+            try:
+                os.killpg(proc.pid, 9)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        if proc_slot is not None:
+            proc_slot.proc = None
+            proc_slot.kill_requested = False
+    output = b"".join(chunks).decode("utf-8", "replace").rstrip("\n")
+    if total > MAX_OUTPUT:
+        output += f"\n… output truncated ({total:,} bytes)"
     parts = []
-    if result.stdout:
-        parts.append(result.stdout.rstrip("\n"))
-    if result.stderr:
-        parts.append(f"[stderr]\n{result.stderr.rstrip(chr(10))}")
-    parts.append(f"[exit code: {result.returncode}]")
+    if output:
+        parts.append(output)
+    if timed_out:
+        parts.append(f"[error: command timed out after {timeout}s and was killed]")
+    elif killed:
+        parts.append("[killed by the user]")
+    parts.append(f"[exit code: {proc.returncode}]")
     return "\n".join(parts)
 
 
@@ -210,7 +270,8 @@ def describe_tool_call(name: str, tool_input: dict) -> str:
     return f"{name}: {tool_input}"
 
 
-def execute_tool(name: str, tool_input: dict, cwd: str | None = None) -> str:
+def execute_tool(name: str, tool_input: dict, cwd: str | None = None,
+                 on_output=None, proc_slot=None) -> str:
     """Dispatch a tool call against `cwd` (defaults to the process cwd).
 
     Raises on unknown tool; tool errors propagate.
@@ -229,5 +290,7 @@ def execute_tool(name: str, tool_input: dict, cwd: str | None = None) -> str:
             tool_input["command"],
             timeout=tool_input.get("timeout", DEFAULT_BASH_TIMEOUT),
             cwd=cwd,
+            on_output=on_output,
+            proc_slot=proc_slot,
         )
     raise ValueError(f"Unknown tool: {name}")

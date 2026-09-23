@@ -18,6 +18,7 @@ Events (all carry "t" = type and "ts" = unix time):
     compaction_start  {tokens}
     compaction        {summary, messages_before, tokens_before}
     approval_result   {id, approved}
+    tool_output       {id, delta}                  live output of a running command (not persisted)
     tool_result       {id, name, content, is_error, elapsed}
     notice            {text}                   something the user must see
     info              {text}                   low-key informational line
@@ -208,6 +209,8 @@ class Engine:
         self._pending: _Approval | None = None
         self._turn_started = 0.0
         self.last_input_tokens = 0
+        self.proc = None               # running run_bash subprocess, if any
+        self.kill_requested = False
 
     # ------------------------------------------------------------------
     # public API (called from any thread)
@@ -293,6 +296,23 @@ class Engine:
         self.backend = backend
         self.model = model or provider.default_model
         self.messages.clear()
+
+    def kill_tool(self) -> bool:
+        """Kill the shell command a tool is currently running (if any)."""
+        proc = self.proc
+        if proc is None:
+            return False
+        self.kill_requested = True
+        try:
+            import os
+            import signal
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, AttributeError):
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        return True
 
     def pending_approval(self) -> str | None:
         pending = self._pending
@@ -459,8 +479,19 @@ class Engine:
                 return "The user declined to allow this tool call.", True
 
         started = time.monotonic()
+        last_emit = [0.0]
+        buf = [""]
+
+        def on_output(chunk: str) -> None:
+            buf[0] += chunk
+            now = time.monotonic()
+            if now - last_emit[0] > 0.15 or len(buf[0]) > 2000:
+                self.emit("tool_output", id=call_id, delta=buf[0][-8000:])
+                buf[0] = ""
+                last_emit[0] = now
+
         try:
-            content = execute_tool(name, tool_input, self.cwd)
+            content = execute_tool(name, tool_input, self.cwd, on_output=on_output, proc_slot=self)
             is_error = False
         except Exception as exc:  # noqa: BLE001 - tool errors go back to the model
             content = f"Error: {exc}"

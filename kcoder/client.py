@@ -197,6 +197,8 @@ class DaemonClient:
                 elif t == "chats":
                     self.chats = msg.get("chats", [])
                     self.projects = msg.get("projects", [])
+                elif t == "shell":
+                    self._events.put(("shell", msg))
         except ConnectionClosed:
             pass
         except Exception:  # noqa: BLE001
