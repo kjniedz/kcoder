@@ -1138,7 +1138,7 @@ def cmd_chat(args) -> int:
                     provider=provider_id,
                     model=model,
                     name=args.name,
-                    trust=args.trust or ("auto" if args.yes else "read"),
+                    trust=args.trust or ("auto" if args.yes else config.load().get("default_trust") or "auto"),
                     worktree=bool(args.worktree),
                 )
             except ClientError as exc:
@@ -1181,7 +1181,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
             reply = client.request(
                 "create", cwd=os.getcwd(), provider=provider_id, model=model,
                 name=args.name or f"oneshot-{os.path.basename(os.getcwd()) or 'x'}",
-                auto_approve=bool(args.yes),
+                trust=args.trust or ("auto" if args.yes else "read"),   # nobody is here to approve
             )
             sid = reply["session"]["id"]
             client.request("send", sid=sid, text=prompt_text)
@@ -1228,7 +1228,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("prompt", nargs="*", help="one-shot task: run it, print the result, exit")
     p.add_argument("-y", "--yes", action="store_true", help="auto-approve all tool executions (no y/n prompts)")
     p.add_argument("--no-banner", action="store_true", help="skip the startup banner")
-    p.add_argument("--trust", choices=list(TRUST_LEVELS), help="what runs without asking (default: read)")
+    p.add_argument("--trust", choices=list(TRUST_LEVELS), help="what runs without asking (default: config default_trust, auto)")
     p.add_argument("--worktree", action="store_true", help="work on a fresh git worktree + branch for this session")
     p.add_argument("--keep", action="store_true", help="one-shot: keep the session instead of deleting it")
     p.add_argument("--provider", metavar="NAME", help=f"provider to use ({', '.join(PROVIDERS)})")

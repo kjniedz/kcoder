@@ -121,6 +121,7 @@ async function onFrame(msg) {
 async function onConnected() {
   await request('attach', { sid: '*' });
   try { state.providers = (await request('providers')).providers; } catch {}
+  try { state.config = (await request('config')).config; } catch {}
   applyUrlParams();
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
@@ -153,7 +154,10 @@ async function loadEvents(sid, replay) {
     }
     if (r.session) upsertSession(r.session);
     queueRender(sid);
-  } catch (e) { toast(e.message, 'err'); }
+  } catch (e) {
+    if (/no session/.test(e.message)) { if (state.sid === sid) { state.sid = null; localStorage.removeItem('kcoder.sid'); } return null; }
+    toast(e.message, 'err');
+  }
   return store;
 }
 
@@ -286,12 +290,14 @@ function renderDiff(oldS, newS) {
 function toolBodyHtml(call, result) {
   const inp = call.input || {};
   let h = '';
-  if (call.name === 'edit_file') {
-    h += `<div class="label">${esc(inp.path || '')}</div>` + renderDiff(inp.old_str || '', inp.new_str || '');
-  } else if (call.name === 'write_file') {
-    h += `<div class="label">${esc(inp.path || '')} · ${(inp.content || '').length} bytes</div><pre>${esc((inp.content || '').slice(0, 6000))}${(inp.content || '').length > 6000 ? '\n…' : ''}</pre>`;
-  } else if (call.name === 'run_bash') {
-    h += `<div class="label">command</div><pre>${esc(inp.command || '')}</pre>`;
+  if (call.name === 'edit_file' || call.name === 'Edit') {
+    h += `<div class="label">${esc(inp.path || inp.file_path || '')}</div>` + renderDiff(inp.old_str || inp.old_string || '', inp.new_str || inp.new_string || '');
+  } else if (call.name === 'MultiEdit') {
+    for (const ed of inp.edits || []) h += `<div class="label">${esc(inp.file_path || '')}</div>` + renderDiff(ed.old_string || '', ed.new_string || '');
+  } else if (call.name === 'write_file' || call.name === 'Write') {
+    h += `<div class="label">${esc(inp.path || inp.file_path || '')} · ${(inp.content || '').length} bytes</div><pre>${esc((inp.content || '').slice(0, 6000))}${(inp.content || '').length > 6000 ? '\n…' : ''}</pre>`;
+  } else if (call.name === 'run_bash' || call.name === 'Bash') {
+    h += `<div class="label">command${inp.description ? ' · ' + esc(inp.description) : ''}</div><pre>${esc(inp.command || '')}</pre>`;
   } else if (Object.keys(inp).length) {
     h += `<div class="label">input</div><pre>${esc(JSON.stringify(inp, null, 2))}</pre>`;
   }
@@ -330,7 +336,7 @@ function buildChatHtml(store, sid, opts = {}) {
         let status;
         if (appr === false) status = '<span class="res declined">declined</span>';
         else if (res) status = `<span class="res${res.is_error ? ' err' : ''}">${res.is_error ? '✗ error' : '✓'}${res.elapsed != null ? ' ' + res.elapsed + 's' : ''}</span>`;
-        else if (e.name === 'run_bash' && !(state.sessions.get(sid) || {}).pending_approval) status = `<span class="res pending">running… <button data-act="kill" data-cid="${esc(e.id)}" title="kill this command">■ kill</button></span>`;
+        else if ((e.name === 'run_bash' || e.name === 'Bash') && !(state.sessions.get(sid) || {}).pending_approval) status = `<span class="res pending">running… <button data-act="kill" data-cid="${esc(e.id)}" title="kill this command">■ kill</button></span>`;
         else status = `<span class="res pending">${(state.sessions.get(sid) || {}).pending_approval === e.id ? 'awaiting approval' : '…'}</span>`;
         const live = !res && store.toolLive && store.toolLive[e.id];
         out.push(`<details class="tool"${(res && res.is_error) || live ? ' open' : ''}><summary><span class="gear">⚙</span><span class="desc">${esc(e.description)}</span>${status}</summary><div class="body">${toolBodyHtml(e, res)}${live ? `<div class="label">live output</div><pre>${esc(stripAnsi(live))}</pre>` : ''}</div></details>`);
@@ -1123,30 +1129,53 @@ function inboxKey(e) {
 async function openNewSession(pre = {}) {
   if (!state.providers) { try { state.providers = (await request('providers')).providers; } catch {} }
   const provs = state.providers || [];
-  const def = provs.find((p) => p.default) || provs.find((p) => p.configured) || provs[0];
-  const recent = state.projects.map((p) => p.path);
-  const cwd = pre.cwd || (state.sid && state.sessions.get(state.sid) ? state.sessions.get(state.sid).cwd : recent[0] || '');
+  const def = provs.find((p) => p.default && p.configured) || provs.find((p) => p.configured) || provs[0];
+  const cfg = state.config || {};
+  const cwd = pre.cwd || (state.sid && state.sessions.get(state.sid) ? state.sessions.get(state.sid).cwd : '');
   const d = openDialog(`<h2>new session</h2><div class="body">
-    <label>repo / folder<input id="ns-cwd" list="ns-recent" value="${esc(cwd)}" placeholder="/path/to/project"><datalist id="ns-recent">${recent.map((p) => `<option value="${esc(p)}">`).join('')}</datalist></label>
+    <label>repo / folder <span class="help" style="text-transform:none;letter-spacing:0">local path, owner/name, or a GitHub URL (cloned into ${esc(shortHome(cfg.projects_dir || '~/kcoder-projects'))} on first use)</span>
+      <input id="ns-cwd" value="${esc(cwd)}" placeholder="/path/to/project  ·  owner/repo  ·  https://github.com/owner/repo" autocomplete="off">
+      <div class="menu repo-menu" id="ns-repos" hidden></div>
+    </label>
     <div class="row">
-      <label>provider<select id="ns-provider">${provs.map((p) => `<option value="${p.id}"${p === def ? ' selected' : ''}${p.configured ? '' : ' disabled'}>${esc(p.label)}${p.configured ? '' : ' (no credentials)'}</option>`).join('')}</select></label>
+      <label>provider<select id="ns-provider">${provs.map((p) => `<option value="${p.id}"${p === def ? ' selected' : ''}${p.configured ? '' : ' disabled'}>${esc(p.label)}${p.configured ? '' : ' (not set up)'}</option>`).join('')}</select></label>
       <label>model<select id="ns-model"></select></label>
-      <label>trust<select id="ns-trust"><option value="read">read (gate writes + shell)</option><option value="write">write (gate shell)</option><option value="auto">auto (never ask)</option><option value="none">none (ask for everything)</option></select></label>
+      <label>trust<select id="ns-trust"><option value="auto">auto (never ask)</option><option value="write">write (gate shell)</option><option value="read">read (gate writes + shell)</option><option value="none">none (ask for everything)</option></select></label>
     </div>
     <label>session name (optional)<input id="ns-name" placeholder="defaults to the folder name"></label>
     <label>initial task<textarea id="ns-task" placeholder="what should it do first?"></textarea></label>
     <label>follow-up tasks, one per line (optional)<textarea id="ns-queue" placeholder="run the tests&#10;open a PR"></textarea></label>
-    <label class="check"><input type="checkbox" id="ns-wt" checked> use a separate git worktree + branch (recommended when running several sessions on one repo)</label>
-  </div><div class="foot"><button data-x="cancel">cancel</button><button class="primary" data-x="ok">start</button></div>`, 'new');
-  const modelSel = $('#ns-model', d), provSel = $('#ns-provider', d);
+    <label class="check"><input type="checkbox" id="ns-wt" ${cfg.worktrees === false ? '' : 'checked'}> use a separate git worktree + branch (recommended when running several sessions on one repo)</label>
+  </div><div class="foot"><span class="help" id="ns-status"></span><span class="spacer" style="flex:1"></span><button data-x="cancel">cancel</button><button class="primary" data-x="ok">start</button></div>`, 'new');
+  const modelSel = $('#ns-model', d), provSel = $('#ns-provider', d), cwdIn = $('#ns-cwd', d), repoMenu = $('#ns-repos', d), status = $('#ns-status', d);
+  $('#ns-trust', d).value = state.config && state.config.default_trust ? state.config.default_trust : 'auto';
   const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; modelSel.innerHTML = (p.models || []).map((m) => `<option${m === p.default_model ? ' selected' : ''}>${esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
   provSel.addEventListener('change', fill); fill();
-  $('#ns-task', d).focus();
+  // repo picker: local git repos + GitHub repos via gh
+  let repos = state.repoCache;
+  const renderRepos = () => {
+    if (!repos) { repoMenu.hidden = false; repoMenu.innerHTML = '<div class="item"><span class="meta">looking for repos…</span></div>'; return; }
+    const q = cwdIn.value.trim().toLowerCase();
+    const local = repos.local.filter((r) => !q || fuzzy((r.name + ' ' + r.path).toLowerCase(), q)).slice(0, 12);
+    const gh = repos.github.filter((r) => !local.some((l) => l.path === r.path) && (!q || fuzzy(r.spec.toLowerCase(), q))).slice(0, 12);
+    const items = local.map((r) => ({ v: r.path, label: r.name, meta: shortHome(r.path) })).concat(gh.map((r) => ({ v: r.path || r.spec, label: r.spec, meta: r.path ? 'github · cloned' : 'github · clone' })));
+    repoMenu.hidden = items.length === 0;
+    repoMenu.innerHTML = items.map((it) => `<div class="item" data-v="${esc(it.v)}"><span>${esc(it.label)}</span><span class="meta">${esc(it.meta)}</span></div>`).join('');
+  };
+  const loadRepos = async () => { try { repos = await request('repos'); state.repoCache = repos; } catch { repos = { local: [], github: [] }; } renderRepos(); };
+  cwdIn.addEventListener('focus', () => { renderRepos(); if (!repos) loadRepos(); });
+  cwdIn.addEventListener('input', renderRepos);
+  cwdIn.addEventListener('blur', () => setTimeout(() => (repoMenu.hidden = true), 150));
+  repoMenu.addEventListener('mousedown', (e) => { const it = e.target.closest('[data-v]'); if (it) { e.preventDefault(); cwdIn.value = it.dataset.v; repoMenu.hidden = true; $('#ns-task', d).focus(); } });
+  if (!cwd) { setTimeout(() => cwdIn.focus(), 20); } else $('#ns-task', d).focus();
   const submit = async () => {
     let model = modelSel.value; if (model === '__other') { model = await promptDialog('Model name', ''); if (!model) return; }
-    const fields = { cwd: $('#ns-cwd', d).value.trim(), provider: provSel.value, model, trust: $('#ns-trust', d).value, name: $('#ns-name', d).value.trim() || undefined, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked };
-    try { const r = await request('create', fields); closeDialog(); state.sid = r.session.id; localStorage.setItem('kcoder.sid', r.session.id); loadEvents(r.session.id, -1); if (state.view === 'wall') focusPane(r.session.id); toast('started ' + r.session.name, 'ok'); }
-    catch (e) { toast(e.message, 'err'); }
+    const spec = cwdIn.value.trim();
+    const fields = { cwd: spec, provider: provSel.value, model, trust: $('#ns-trust', d).value, name: $('#ns-name', d).value.trim() || undefined, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked };
+    if (/^(https?:\/\/github\.com\/|git@github\.com:)?[\w.-]+\/[\w.-]+\/?$/.test(spec) && !spec.startsWith('/') && !spec.startsWith('~') && !spec.startsWith('.')) status.textContent = 'cloning ' + spec + '…';
+    $('[data-x="ok"]', d).disabled = true;
+    try { const r = await request('create', fields); closeDialog(); state.repoCache = null; state.sid = r.session.id; localStorage.setItem('kcoder.sid', r.session.id); loadEvents(r.session.id, -1); if (state.view === 'wall') focusPane(r.session.id); toast('started ' + r.session.name + ' in ' + shortHome(r.session.cwd), 'ok'); }
+    catch (e) { toast(e.message, 'err'); status.textContent = e.message; $('[data-x="ok"]', d).disabled = false; }
   };
   d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; b.dataset.x === 'ok' ? submit() : closeDialog(); });
   d.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); });
@@ -1158,6 +1187,7 @@ function paletteItems() {
     ['new session', () => openNewSession(), 'n'], ['approval inbox', openInbox, 'a'], ['cycle waiting sessions', cycleWaiting, 'w'],
     ['wall view', () => setView('wall'), 'alt+1'], ['chat view', () => setView('chat'), 'alt+2'], ['terminal view', () => setView('terminal'), 'alt+3'],
     ['toggle sound', toggleSound], ['enable browser notifications', () => Notification.requestPermission().then((p) => toast('notifications: ' + p))],
+    ['set default trust for new sessions', async () => { const v = await chooseDialog('Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']]); if (v) { const r = await request('config', { default_trust: v }); state.config = r.config; toast('default trust: ' + v, 'ok'); } }],
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
     ['keyboard help', helpDialog, '?'],

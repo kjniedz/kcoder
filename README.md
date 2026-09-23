@@ -57,7 +57,15 @@ pip install -e .
 
 ## Setup
 
-None needed — just run `kcoder`. The first time you launch it, kcoder shows a
+**Using your Claude plan (default):** if the Claude Code CLI (`claude`) is
+installed and signed in, kcoder uses it as its default provider. Turns run
+through `claude -p` on your Claude subscription - no API keys, no per-token
+billing - and Claude Code runs the tools itself (its own Read/Write/Edit/Bash,
+with your trust level mapped onto its permission modes). The "cost" shown for
+these sessions is what the calls would have cost on the API, for reference.
+
+**Using API keys instead:** run `kcoder --provider anthropic` (or any other
+provider) once. The first time you launch it, kcoder shows a
 provider picker and walks you through a one-time connection setup: it opens
 the provider's API-key page in your browser, you paste the key, it's
 validated and saved to `~/.config/kcoder/credentials.json` (permissions `600`).
@@ -73,6 +81,7 @@ back and forth never re-asks. To wipe everything, run `kcoder --logout`.
 
 | Provider | id | Default model | Env var (optional) |
 |---|---|---|---|
+| Claude Code (your Claude plan) | `claude` | `opus` | - (uses the `claude` CLI login) |
 | Anthropic (Claude) | `anthropic` | `claude-opus-4-8` | `ANTHROPIC_API_KEY` |
 | Xiaomi MiMo | `xiaomi` | `MiMo-V2.5-Pro` | `XIAOMI_MIMO_API_KEY` |
 | DeepSeek | `deepseek` | `deepseek-chat` | `DEEPSEEK_API_KEY` |
@@ -270,8 +279,10 @@ Three views of the same sessions, switchable with the header buttons or
   or delete it.
 - **Terminal** - the same session rendered exactly like the CLI.
 
-Everywhere: <kbd>n</kbd> new session (repo/folder, model, trust level,
-initial task, follow-up tasks, worktree on/off), <kbd>a</kbd> the approval
+Everywhere: <kbd>n</kbd> new session - pick a repo from the list of local
+git repos and your GitHub repos (via `gh`), or type `owner/name` / a GitHub
+URL and it's cloned into `~/kcoder-projects` on first use - plus model,
+trust level, initial task, follow-up tasks, worktree on/off; <kbd>a</kbd> the approval
 inbox aggregating pending tool approvals from every session (<kbd>y</kbd> /
 <kbd>n</kbd> / <kbd>a</kbd> for all), <kbd>⌘K</kbd> the command palette,
 <kbd>?</kbd> keyboard help. The composer behaves like the CLI: Enter sends,
@@ -296,8 +307,9 @@ and runs `gh pr create`), and **discard** (deletes the worktree and branch).
 
 ### Trust levels, queues, caps, compaction
 
-- Trust per session: `auto` (never ask), `write` (shell is gated), `read`
-  (writes and shell are gated - the default), `none` (everything is gated).
+- Trust per session: `auto` (never ask - the default, change it with
+  `default_trust` in the config or `⌘K → set default trust`), `write` (shell
+  is gated), `read` (writes and shell are gated), `none` (everything is gated).
 - Follow-up task queue: sessions keep working through queued tasks after each
   turn (`/queue`, the "+ task" button, or the new-session dialog).
 - Daily spend cap (`⌘K → set daily spend cap`, or `daily_cap_usd` in the

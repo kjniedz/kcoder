@@ -22,6 +22,11 @@ provider's native format so it can be persisted and resumed.
 from __future__ import annotations
 
 import json
+import os
+import queue
+import shutil
+import subprocess
+import threading
 from dataclasses import dataclass, field
 
 import anthropic
@@ -45,6 +50,17 @@ class Provider:
 
 
 PROVIDERS = {
+    "claude": Provider(
+        id="claude",
+        label="Claude Code (your Claude plan)",
+        kind="claude",
+        key_env="",
+        key_url="https://claude.com/product/claude-code",
+        base_url=None,
+        # Claude Code aliases resolve to the plan's current models
+        models=["opus", "sonnet", "haiku", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        default_model="opus",
+    ),
     "anthropic": Provider(
         id="anthropic",
         label="Anthropic (Claude)",
@@ -346,7 +362,236 @@ class OpenAIBackend:
                 })
 
 
+# ----------------------------------------------------------------------
+# Claude Code: drive the `claude` CLI so usage comes out of the user's
+# Claude plan instead of API tokens. Claude Code runs the tools itself;
+# we mirror its stream-json events into kcoder's event stream.
+# ----------------------------------------------------------------------
+
+CLAUDE_BIN = "claude"
+
+
+def claude_available() -> bool:
+    return shutil.which(CLAUDE_BIN) is not None
+
+
+def _claude_env() -> dict:
+    env = dict(os.environ)
+    for k in list(env):
+        if k.startswith("CLAUDE_CODE") or k in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"):
+            env.pop(k, None)   # nested Claude Code sessions refuse to start
+    return env
+
+
+def describe_claude_tool(name: str, inp: dict) -> str:
+    inp = inp or {}
+    if name == "Bash":
+        return f"Bash: {inp.get('command', '')}"
+    if name in ("Read", "Write", "Edit", "MultiEdit", "NotebookEdit"):
+        return f"{name}: {inp.get('file_path') or inp.get('notebook_path') or ''}"
+    if name in ("Grep", "Glob"):
+        return f"{name}: {inp.get('pattern', '')}" + (f" in {inp['path']}" if inp.get("path") else "")
+    if name in ("WebFetch", "WebSearch"):
+        return f"{name}: {inp.get('url') or inp.get('query') or ''}"
+    if name == "Task":
+        return f"Task: {inp.get('description') or ''}"
+    if name == "TodoWrite":
+        return "TodoWrite"
+    short = json.dumps(inp)
+    return f"{name}: {short[:160]}" + ("…" if len(short) > 160 else "")
+
+
+class ClaudeCodeBackend:
+    kind = "claude"
+
+    def __init__(self, provider: Provider):
+        self.provider = provider
+        self.session_id: str | None = None   # Claude Code's own session, persisted by the daemon
+
+    def validate(self) -> None:
+        if not claude_available():
+            raise RuntimeError("the `claude` CLI is not installed")
+        subprocess.run([CLAUDE_BIN, "--version"], capture_output=True, timeout=20)
+
+    def run_turn(self, messages: list, model: str, system: str, hooks) -> None:
+        from .engine import Interrupted
+
+        last = messages[-1]
+        prompt = _prompt_text(last)
+        trust = getattr(hooks, "trust", "read")
+        args = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+        if model:
+            args += ["--model", model]
+        if trust == "auto":
+            args += ["--dangerously-skip-permissions"]
+        elif trust == "write":
+            args += ["--permission-mode", "acceptEdits"]
+        else:
+            args += ["--permission-mode", "default"]   # headless: anything needing approval is denied
+        if self.session_id:
+            args += ["--resume", self.session_id]
+        if system:
+            args += ["--append-system-prompt", system]
+        cwd = getattr(hooks, "cwd", None) or os.getcwd()
+        proc = subprocess.Popen(
+            args, cwd=cwd, env=_claude_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, start_new_session=True,
+        )
+        if hasattr(hooks, "proc"):
+            hooks.proc = proc
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+
+        lines: queue.Queue = queue.Queue()
+
+        def reader():
+            for line in proc.stdout:
+                lines.put(line)
+            lines.put(None)
+
+        threading.Thread(target=reader, daemon=True).start()
+
+        emit = getattr(hooks, "emit", None)
+        blocks: list = []          # content blocks of the current assistant message
+        text = ""                  # text of the current streaming text block
+        streaming = False
+        got_result = False
+        pending_tools: dict[str, str] = {}
+
+        def flush_assistant():
+            nonlocal blocks
+            if blocks:
+                messages.append({"role": "assistant", "content": blocks})
+                blocks = []
+
+        try:
+            while True:
+                try:
+                    line = lines.get(timeout=0.25)
+                except queue.Empty:
+                    check = getattr(hooks, "_check_interrupt", None)
+                    if check:
+                        check()
+                    continue
+                if line is None:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t = d.get("type")
+                if t == "system" and d.get("subtype") == "init":
+                    self.session_id = d.get("session_id") or self.session_id
+                elif t == "stream_event":
+                    ev = d.get("event") or {}
+                    et = ev.get("type")
+                    if et == "content_block_start" and (ev.get("content_block") or {}).get("type") == "text":
+                        text = ""
+                        streaming = True
+                        if emit:
+                            emit("assistant_start")
+                    elif et == "content_block_delta":
+                        delta = ev.get("delta") or {}
+                        if delta.get("type") == "text_delta" and streaming:
+                            piece = delta.get("text") or ""
+                            text += piece
+                            if emit and piece:
+                                emit("text", delta=piece)
+                    elif et == "content_block_stop" and streaming:
+                        streaming = False
+                        if emit:
+                            emit("assistant_end", text=text)
+                elif t == "assistant":
+                    for b in (d.get("message") or {}).get("content") or []:
+                        bt = b.get("type")
+                        if bt == "text":
+                            blocks.append({"type": "text", "text": b.get("text", "")})
+                            if not emit:
+                                hooks.on_stream(iter([b.get("text", "")]))
+                        elif bt == "tool_use":
+                            blocks.append({"type": "tool_use", "id": b.get("id"), "name": b.get("name"), "input": b.get("input") or {}})
+                            pending_tools[b.get("id")] = b.get("name")
+                            desc = describe_claude_tool(b.get("name"), b.get("input") or {})
+                            if hasattr(hooks, "on_external_tool_call"):
+                                hooks.on_external_tool_call(b.get("id"), b.get("name"), b.get("input") or {}, desc)
+                elif t == "user":
+                    flush_assistant()
+                    results = []
+                    for b in (d.get("message") or {}).get("content") or []:
+                        if b.get("type") != "tool_result":
+                            continue
+                        content = b.get("content")
+                        if isinstance(content, list):
+                            content = "\n".join(x.get("text", "") for x in content if isinstance(x, dict))
+                        content = str(content or "")
+                        results.append({"type": "tool_result", "tool_use_id": b.get("tool_use_id"), "content": content,
+                                        **({"is_error": True} if b.get("is_error") else {})})
+                        if hasattr(hooks, "on_external_tool_result"):
+                            hooks.on_external_tool_result(b.get("tool_use_id"), pending_tools.get(b.get("tool_use_id"), "tool"),
+                                                          content, bool(b.get("is_error")))
+                    if results:
+                        messages.append({"role": "user", "content": results})
+                elif t == "result":
+                    got_result = True
+                    self.session_id = d.get("session_id") or self.session_id
+                    u = d.get("usage") or {}
+                    cr = int(u.get("cache_read_input_tokens") or 0)
+                    cw = int(u.get("cache_creation_input_tokens") or 0)
+                    hooks.usage(int(u.get("input_tokens") or 0) + cr + cw, int(u.get("output_tokens") or 0),
+                                cache_read=cr, cache_write=cw, cost=float(d.get("total_cost_usd") or 0.0))
+                    if d.get("is_error") or d.get("subtype") not in (None, "success"):
+                        hooks.notice(f"Claude Code: {d.get('subtype')}: {str(d.get('result') or '')[:500]}")
+        except Interrupted:
+            _kill(proc)
+            raise
+        finally:
+            if hasattr(hooks, "proc"):
+                hooks.proc = None
+        flush_assistant()
+        code = proc.wait(timeout=10)
+        if not got_result:
+            err = (proc.stderr.read() or "").strip()
+            if "not logged in" in err.lower() or "login" in err.lower():
+                raise RuntimeError("Claude Code is not logged in - run `claude` once in a terminal and sign in.")
+            raise RuntimeError(f"claude exited with {code}: {err[-600:] or 'no output'}")
+
+
+def _prompt_text(msg: dict) -> str:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    parts = []
+    imgs = 0
+    for b in content or []:
+        if b.get("type") == "text":
+            parts.append(b["text"])
+        elif b.get("type") in ("image", "image_url"):
+            imgs += 1
+    if imgs:
+        parts.append(f"({imgs} image(s) were attached; see the uploads folder of this session)")
+    return "\n".join(parts)
+
+
+def _kill(proc) -> None:
+    import signal
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, AttributeError):
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def make_backend(provider: Provider, api_key: str | None, base_url: str | None = None):
+    if provider.kind == "claude":
+        return ClaudeCodeBackend(provider)
     if provider.kind == "anthropic":
         return AnthropicBackend(provider, api_key)
     return OpenAIBackend(provider, api_key or "", base_url)

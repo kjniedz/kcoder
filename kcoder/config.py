@@ -42,6 +42,8 @@ DEFAULTS = {
     "daily_cap_usd": 0,        # 0 = no cap; sessions pause when today's spend reaches it
     "compact_at": 150000,      # compact history when the last prompt reached this many tokens
     "worktrees": True,         # web-created sessions in git repos get their own worktree
+    "default_trust": "auto",   # auto | write | read | none - what new sessions run without asking
+    "projects_dir": "~/kcoder-projects",   # where GitHub repos are cloned
 }
 
 _cache: dict | None = None

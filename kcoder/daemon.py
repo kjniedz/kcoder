@@ -44,7 +44,7 @@ from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, chatlog, config, paths, pricing, projects
+from . import __version__, auth, chatlog, config, paths, pricing, projects, repos
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
 
@@ -343,6 +343,8 @@ class Manager:
             compact_at=int(self.cfg.get("compact_at") or DEFAULT_COMPACT_AT),
         )
         engine.last_input_tokens = int(meta.get("context_tokens", 0) or 0)
+        if hasattr(backend, "session_id"):
+            backend.session_id = meta.get("claude_session")
         meta["archived"] = False
         session = Session(self, meta, engine)
         self.sessions[sid] = session
@@ -569,10 +571,11 @@ class Manager:
         t = event["t"]
         if t == "usage":
             uncached = max(0, event["input"] - event.get("cache_read", 0) - event.get("cache_write", 0))
-            event["cost"] = round(pricing.cost(
-                event.get("model") or session.engine.model, uncached, event["output"],
-                event.get("cache_read", 0), event.get("cache_write", 0),
-            ), 6)
+            if "cost" not in event:
+                event["cost"] = round(pricing.cost(
+                    event.get("model") or session.engine.model, uncached, event["output"],
+                    event.get("cache_read", 0), event.get("cache_write", 0),
+                ), 6)
             u = session.meta.setdefault("usage", {"input": 0, "output": 0, "calls": 0, "turns": 0})
             u.setdefault("cost", 0.0)
             u["input"] += event["input"]
@@ -593,6 +596,8 @@ class Manager:
         elif t == "turn_end":
             session.meta.setdefault("usage", {}).setdefault("turns", 0)
             session.meta["usage"]["turns"] += 1
+            if hasattr(session.engine.backend, "session_id"):
+                session.meta["claude_session"] = session.engine.backend.session_id
             session.save_messages()
             if not session.meta.get("title"):
                 session.meta["title"] = chatlog.auto_title(session.engine.messages, session.meta["name"])
@@ -750,10 +755,27 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             manager.cfg["daily_cap_usd"] = cap
             config.save({"daily_cap_usd": cap})
             manager.broadcast_sessions()
+        if req.get("default_trust") in TRUST_LEVELS:
+            manager.cfg["default_trust"] = req["default_trust"]
+            config.save({"default_trust": req["default_trust"]})
         return {"config": {k: v for k, v in manager.cfg.items() if k != "pricing"}, "stats": manager.stats()}
 
     if t == "projects":
         return {"projects": manager.project_list()}
+
+    if t == "repos":
+        return {"local": repos.local_repos(), "github": repos.github_repos() if req.get("github", True) else [],
+                "projects_dir": repos.projects_dir()}
+
+    if t == "clone":
+        spec = repos.parse_spec(req.get("spec") or "")
+        if not spec:
+            raise RequestError("expected owner/name or a GitHub URL")
+        try:
+            path = await asyncio.get_running_loop().run_in_executor(None, repos.clone, spec, req.get("dest_dir"))
+        except Exception as exc:  # noqa: BLE001
+            raise RequestError(f"clone failed: {exc}")
+        return {"path": path, "spec": spec}
 
     if t == "providers":
         default = auth.load_config().get("default_provider")
@@ -776,10 +798,18 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             raise RequestError(f"unknown provider: {provider}")
         if manager.cap_reached():
             raise RequestError("daily spend cap reached")
-        trust = req.get("trust") or ("auto" if req.get("auto_approve") else "read")
+        default_trust = manager.cfg.get("default_trust") if manager.cfg.get("default_trust") in TRUST_LEVELS else "auto"
+        trust = req.get("trust") or ("auto" if req.get("auto_approve") else default_trust)
+        cwd = req.get("cwd") or os.getcwd()
+        spec = repos.parse_spec(cwd)
+        if spec:  # a GitHub repo: clone (or reuse) it first
+            try:
+                cwd = await asyncio.get_running_loop().run_in_executor(None, repos.clone, spec, None)
+            except Exception as exc:  # noqa: BLE001
+                raise RequestError(f"clone failed: {exc}")
         try:
             session = manager.create(
-                cwd=req.get("cwd") or os.getcwd(),
+                cwd=cwd,
                 provider=provider,
                 model=req.get("model"),
                 name=req.get("name"),
@@ -950,6 +980,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             raise RequestError("empty message")
         try:
             engine.truncate(turns[k])
+            if hasattr(engine.backend, "session_id"):
+                engine.backend.session_id = None   # Claude Code can't rewind; it restarts from our history summary
+                session.meta.pop("claude_session", None)
         except EngineBusy as exc:
             raise RequestError(str(exc))
         _truncate_events(session, k)
@@ -1050,6 +1083,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t == "clear":
         try:
             engine.clear()
+            if hasattr(engine.backend, "session_id"):
+                engine.backend.session_id = None
+                session.meta.pop("claude_session", None)
         except EngineBusy as exc:
             raise RequestError(str(exc))
         session.save_messages()

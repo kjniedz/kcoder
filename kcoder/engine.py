@@ -452,13 +452,20 @@ class Engine:
             self.emit("text", delta=piece)
         self.emit("assistant_end", text=text, elapsed=round(time.monotonic() - started, 2))
 
+    def on_external_tool_call(self, call_id: str, name: str, tool_input: dict, description: str) -> None:
+        """A tool the provider ran itself (Claude Code): mirror it as events."""
+        self.emit("tool_call", id=call_id, name=name, input=tool_input, description=description, external=True)
+
+    def on_external_tool_result(self, call_id: str, name: str, content: str, is_error: bool) -> None:
+        self.emit("tool_result", id=call_id, name=name, content=content[:TOOL_RESULT_PREVIEW],
+                  truncated=len(content) > TOOL_RESULT_PREVIEW, is_error=is_error, external=True)
+
     def usage(self, input_tokens: int, output_tokens: int, cache_read: int = 0,
-              cache_write: int = 0) -> None:
+              cache_write: int = 0, cost: float | None = None) -> None:
         """`input_tokens` is the full prompt size (cached portions included);
         cache_read/cache_write break out the parts billed at cache rates."""
         self.last_input_tokens = int(input_tokens or 0)
-        self.emit(
-            "usage",
+        fields = dict(
             input=int(input_tokens or 0),
             output=int(output_tokens or 0),
             cache_read=int(cache_read or 0),
@@ -466,6 +473,9 @@ class Engine:
             model=self.model,
             elapsed=round(time.monotonic() - self._turn_started, 2),
         )
+        if cost is not None:
+            fields["cost"] = round(float(cost), 6)
+        self.emit("usage", **fields)
 
     def handle_tool_call(self, name: str, tool_input: dict, call_id: str | None = None):
         """Returns (result_content, is_error)."""

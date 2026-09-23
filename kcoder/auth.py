@@ -199,6 +199,10 @@ def resolve_backend(provider_id: str):
     saved = config["providers"].get(provider_id, {})
     provider = _resolve_provider(provider_id, saved)
 
+    if provider.kind == "claude":
+        from .providers import claude_available
+        return (provider, make_backend(provider, None)) if claude_available() else None
+
     # 1. environment variable
     env_key = os.environ.get(provider.key_env)
     if env_key and (provider.base_url or provider.kind == "anthropic"):
@@ -228,6 +232,13 @@ def connect(provider_id: str, console, *, interactive: bool = True):
     if resolved is not None:
         return resolved
     provider = PROVIDERS[provider_id]
+    if provider.kind == "claude":
+        console.print(
+            "[red]Claude Code isn't installed.[/red] Install it (https://claude.com/product/claude-code), "
+            "run [bold]claude[/bold] once to sign in with your Claude plan, then retry.",
+            highlight=False,
+        )
+        return None
 
     # 3. interactive setup
     if not interactive or not sys.stdin.isatty():
@@ -283,7 +294,8 @@ def pick_provider(console, current: str | None = None) -> str | None:
     for pid in ids:
         provider = PROVIDERS[pid]
         markers = []
-        if os.environ.get(provider.key_env) or pid in config["providers"]:
+        if (provider.key_env and os.environ.get(provider.key_env)) or pid in config["providers"] \
+                or (provider.kind == "claude" and shutil.which("claude")):
             markers.append("[green]✓[/green]")
         if pid == current:
             markers.append(f"[dim {ui.ACCENT}](current)[/]")
