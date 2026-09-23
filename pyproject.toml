@@ -24,3 +24,6 @@ kcoderd = "kcoder.daemon:main"
 
 [tool.setuptools.packages.find]
 include = ["kcoder*"]
+
+[tool.setuptools.package-data]
+kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/vendor/*"]

@@ -15,8 +15,9 @@ in your current working directory — not just talk about it.
 
 Sessions live in a local daemon (`kcoderd`), so you can run many agents at
 once, detach and re-attach from any terminal, and nothing is lost if a
-terminal closes. The terminal client is one view onto the daemon; a browser
-"wall of sessions" is the other (coming in the next phase).
+terminal closes. The terminal client is one view onto the daemon; the
+browser app (`kcoder ui`) is the other: a wall of live session panes, a
+Claude-style chat view with project history, and a terminal view.
 
 ## Features
 
@@ -243,6 +244,71 @@ tools and shell commands all operate from there.
 Switching providers clears the conversation history (the two API families
 store history in different formats).
 
+## The web app
+
+```bash
+kcoder ui        # opens http://127.0.0.1:47321/ with the daemon token attached
+```
+
+Three views of the same sessions, switchable with the header buttons or
+<kbd>alt+1/2/3</kbd>:
+
+- **Wall** - a dense tiled grid of live panes, one per session, auto-reflowing
+  as sessions come and go. Each pane has a title bar (name, repo @ branch,
+  model, status dot), a live feed, and a status line (context used, tokens,
+  cost, last activity). Status is readable from across the room: working,
+  **waiting on you** (bright pulsing border), done, error, paused. Click a
+  pane (or press its number) to focus it full-size with its composer and
+  actions; <kbd>esc</kbd> goes back to the grid; <kbd>w</kbd> cycles through
+  sessions waiting on you; <kbd>v</kbd> flips a pane between chat, terminal,
+  and a real shell (xterm.js) in that session's working directory.
+- **Chat** - project sidebar on the left with every chat (active and
+  archived), full-text search, rendered markdown, syntax-highlighted code
+  with copy buttons, collapsible tool call / result blocks, inline diffs for
+  edits, live output for running commands (with a kill button), and per-message
+  edit-and-resend / fork. Right-click a chat to rename, pin, archive, export,
+  or delete it.
+- **Terminal** - the same session rendered exactly like the CLI.
+
+Everywhere: <kbd>n</kbd> new session (repo/folder, model, trust level,
+initial task, follow-up tasks, worktree on/off), <kbd>a</kbd> the approval
+inbox aggregating pending tool approvals from every session (<kbd>y</kbd> /
+<kbd>n</kbd> / <kbd>a</kbd> for all), <kbd>⌘K</kbd> the command palette,
+<kbd>?</kbd> keyboard help. The composer behaves like the CLI: Enter sends,
+Shift+Enter newlines, pastes never submit (big ones become chips), images can
+be pasted or dropped, `/` opens the command menu, `@` fuzzy-completes project
+files, <kbd>↑</kbd> recalls prompts, <kbd>esc</kbd> interrupts. A browser
+notification and a soft sound fire when a session blocks on you or finishes.
+
+**Multi-monitor:** open the app in several windows and press <kbd>p</kbd>
+(or the pin icon) on panes to pin them to that window; a window with pins
+shows only those sessions. `?pin=name1,name2&view=wall` in the URL does the
+same for bookmarks.
+
+### Worktrees, merge, PR, discard
+
+Sessions started from the web app in a git repo get their own git worktree
+and `kcoder/<name>` branch (uncheck "worktree" to work in place; the CLI
+opts in with `--worktree`), so parallel agents never edit the same files.
+A focused pane offers **merge** (commits the worktree, merges `--no-ff` into
+the main checkout, aborts cleanly on conflict), **open PR** (pushes the branch
+and runs `gh pr create`), and **discard** (deletes the worktree and branch).
+
+### Trust levels, queues, caps, compaction
+
+- Trust per session: `auto` (never ask), `write` (shell is gated), `read`
+  (writes and shell are gated - the default), `none` (everything is gated).
+- Follow-up task queue: sessions keep working through queued tasks after each
+  turn (`/queue`, the "+ task" button, or the new-session dialog).
+- Daily spend cap (`⌘K → set daily spend cap`, or `daily_cap_usd` in the
+  config): sessions pause when today's spend reaches it.
+- Context compaction: when the last prompt reached `compact_at` tokens
+  (default 150k) the history is summarised before the next turn, with a
+  visible marker in the chat. `/compact` does it on demand.
+- Rate limits and overloads retry with backoff, shown in the pane status.
+- If the daemon restarts mid-turn, the session comes back marked
+  interrupted with a one-click resume; a tool call is never re-run silently.
+
 ## Safety
 
 By default, kcoder prints every `write_file`, `edit_file`, and `run_bash`
@@ -253,7 +319,9 @@ at your own discretion.
 `kcoderd` can run shell commands, so it only ever binds to `127.0.0.1` and
 every client must present the token stored in `~/.local/share/kcoder/token`
 (mode `600`) as its first message. Browser clients are additionally limited
-to same-origin connections.
+to same-origin connections. API keys are read from the environment or the
+credentials file and are never written to logs or chat history; chat history
+lives outside the repo and is gitignored anyway.
 
 ## Architecture
 
@@ -278,7 +346,10 @@ to same-origin connections.
 | `kcoder/daemon.py` | `kcoderd`: owns sessions, runs them concurrently, persists them, streams events over WebSocket. |
 | `kcoder/client.py` | Small synchronous client used by the CLI (auto-starts the daemon). |
 | `kcoder/cli.py` | The terminal UI: a thin client that renders events and answers approvals. |
-| `kcoder/tools.py` | Tool definitions and executors, scoped to each session's working directory. |
+| `kcoder/tools.py` | Tool definitions and executors, scoped to each session's working directory; `run_bash` streams output and is killable. |
+| `kcoder/projects.py`, `kcoder/chatlog.py` | Projects, KCODER.md, file listing; history helpers (forks, export, search). |
+| `kcoder/worktree.py`, `kcoder/shell.py` | Git worktrees + merge/PR/discard; pty shells for the browser. |
+| `kcoder/web/` | The browser app (vanilla JS; marked, highlight.js, xterm.js vendored). |
 
 Daemon data lives in `~/.local/share/kcoder/` (override with `KCODER_DATA_DIR`);
 the port defaults to `47321` (`KCODER_PORT`). Every model call is appended to

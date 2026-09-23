@@ -755,6 +755,14 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t == "projects":
         return {"projects": manager.project_list()}
 
+    if t == "providers":
+        default = auth.load_config().get("default_provider")
+        return {"providers": [
+            {"id": p.id, "label": p.label, "models": p.models, "default_model": p.default_model,
+             "configured": auth.has_credentials(p.id), "default": p.id == default}
+            for p in PROVIDERS.values()
+        ]}
+
     if t == "history":
         return {"chats": manager.history(req.get("project"), not req.get("active_only"), int(req.get("limit") or 200)),
                 "projects": manager.project_list()}

@@ -1,5 +1,91 @@
 <!doctype html>
-<meta charset="utf-8"><title>kcoder</title>
-<style>body{background:#0b0f14;color:#87CEFA;font-family:ui-monospace,Menlo,monospace;
-display:flex;align-items:center;justify-content:center;height:100vh;margin:0}</style>
-<div><pre>KCODER</pre><p style="color:#8899aa">web app under construction (phase 3)</p></div>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kcoder</title>
+<link rel="stylesheet" href="vendor/github-dark.min.css">
+<link rel="stylesheet" href="vendor/xterm.min.css">
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f14'/%3E%3Ctext x='16' y='22' font-family='monospace' font-weight='bold' font-size='18' text-anchor='middle' fill='%2387CEFA'%3Ek%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+<header id="header">
+  <div class="brand">
+    <pre id="banner" class="banner" aria-label="KCODER"></pre>
+    <div class="credit">
+      <span>developed by Kyle Niedzwiecki</span>
+      <span>© 2026 Kyer's Reserve LLC</span>
+      <span id="tagline" class="tagline"></span>
+    </div>
+  </div>
+  <div id="stats" class="stats"></div>
+  <nav class="views" role="tablist">
+    <button data-view="wall" title="Wall  (alt+1)">wall</button>
+    <button data-view="chat" title="Chat  (alt+2)">chat</button>
+    <button data-view="terminal" title="Terminal  (alt+3)">terminal</button>
+  </nav>
+  <div class="tools">
+    <button id="btn-inbox" title="Approval inbox  (a)">inbox <span id="inbox-count" class="count" hidden></span></button>
+    <button id="btn-new" title="New session  (n)">+ new</button>
+    <button id="btn-palette" title="Command palette  (⌘K)">⌘K</button>
+    <button id="btn-sound" title="Sound on/off">🔔</button>
+    <span id="conn" class="conn" title="daemon connection"></span>
+  </div>
+</header>
+
+<main id="main">
+  <section id="view-wall" class="view" hidden>
+    <div id="wall" class="wall"></div>
+    <div id="wall-empty" class="empty" hidden>
+      <p>No running sessions.</p>
+      <p><button class="primary" data-action="new">Start one</button> or press <kbd>n</kbd>.</p>
+    </div>
+  </section>
+
+  <section id="view-chat" class="view chatview" hidden>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-top">
+        <input id="search" type="search" placeholder="search chats…" autocomplete="off">
+        <button id="btn-new-chat" title="New chat in this project">+</button>
+      </div>
+      <div id="projects" class="projects"></div>
+    </aside>
+    <div id="chat-main" class="chat-main">
+      <div id="chat-title" class="chat-titlebar"></div>
+      <div id="chat-log" class="chat-log"></div>
+      <div id="chat-composer" class="composer-slot"></div>
+    </div>
+  </section>
+
+  <section id="view-terminal" class="view termview" hidden>
+    <div id="term-titlebar" class="chat-titlebar"></div>
+    <div id="term-log" class="term-log"></div>
+    <div id="term-composer" class="composer-slot term-composer"></div>
+  </section>
+</main>
+
+<div id="overlay" class="overlay" hidden></div>
+<div id="toasts" class="toasts"></div>
+
+<template id="tpl-composer">
+  <form class="composer" autocomplete="off">
+    <div class="attachments" hidden></div>
+    <div class="chips" hidden></div>
+    <div class="composer-row">
+      <span class="prompt-label">you&gt;</span>
+      <textarea rows="1" placeholder="Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)"></textarea>
+      <button type="submit" class="send" title="Send (Enter)">➤</button>
+      <button type="button" class="stop" title="Interrupt (Esc)" hidden>■</button>
+    </div>
+    <div class="menu" hidden></div>
+  </form>
+</template>
+
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
+<script src="vendor/xterm.min.js"></script>
+<script src="vendor/addon-fit.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
