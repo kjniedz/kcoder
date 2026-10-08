@@ -44,6 +44,7 @@ DEFAULTS = {
     "worktrees": True,         # web-created sessions in git repos get their own worktree
     "default_trust": "auto",   # auto | write | read | none - what new sessions run without asking
     "projects_dir": "~/kcoder-projects",   # where GitHub repos are cloned
+    "auto_publish": True,      # new sessions on local folders with no GitHub remote get a private repo created + pushed
 }
 
 _cache: dict | None = None

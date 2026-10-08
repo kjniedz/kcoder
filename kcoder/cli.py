@@ -9,8 +9,10 @@
     kcoder attach <id>    attach to / resume a chat (id prefix or name)
     kcoder export <id>    print a chat as markdown
     kcoder rm <id>        delete a chat
-    kcoder ui             open the web app
-    kcoder daemon ...     start | stop | status | run
+    kcoder ui             open the web app in the browser
+    kcoder app            open the web app in its own window
+    kcoder app --install  macOS: install kcoder.app in ~/Applications
+    kcoder daemon ...     start | stop | restart | status | run | install | uninstall
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__, auth, banner, config, paths, projects, ui
+from . import __version__, app as appmod, auth, banner, config, paths, projects, ui
 from .client import ClientError, DaemonClient, DaemonUnavailable, daemon_url
 from .daemon import already_running
 from .engine import TRUST_LEVELS
@@ -1016,7 +1018,48 @@ def cmd_rm(args) -> int:
     return 0
 
 
+def _stop_daemon(client) -> None:
+    client.request("shutdown")
+    for _ in range(100):
+        if not already_running():
+            return
+        time.sleep(0.1)
+
+
+def _refresh_stale_daemon() -> None:
+    """After `git pull` / reinstall the running kcoderd is still the old code.
+    Restart it when nothing is working, so the app always runs what is
+    installed; otherwise say how to do it later."""
+    running = already_running()
+    if not running or running.get("version") == __version__:
+        return
+    with DaemonClient.connect(autostart=False) as client:
+        sessions = client.request("list")["sessions"]
+        busy = [s["name"] for s in sessions if s.get("status") in ("working", "waiting")]
+        if busy:
+            console.print(
+                f"[yellow]kcoderd {running.get('version')} is running but kcoder {__version__} is installed; "
+                f"restart it with `kcoder daemon restart` once {', '.join(busy[:3])} finish(es).[/yellow]",
+                highlight=False,
+            )
+            return
+        console.print(f"[dim]restarting kcoderd {running.get('version')} → {__version__}[/dim]")
+        if appmod.agent_loaded():
+            client.ws.close()
+            appmod.agent_stop()
+            for _ in range(100):
+                if not already_running():
+                    break
+                time.sleep(0.1)
+            appmod.agent_start()
+        else:
+            _stop_daemon(client)
+    from .client import ensure_daemon
+    ensure_daemon()
+
+
 def cmd_ui(args) -> int:
+    _refresh_stale_daemon()
     with DaemonClient.connect() as client:
         url = daemon_url()
         token = open(paths.TOKEN_PATH).read().strip()
@@ -1024,6 +1067,42 @@ def cmd_ui(args) -> int:
     console.print(f"[dim]web app:[/dim] {url}")
     if not args.no_open:
         webbrowser.open(full)
+    return 0
+
+
+def cmd_app(args) -> int:
+    """`kcoder app`: the web app in its own window, not a browser tab."""
+    if args.install:
+        try:
+            path = appmod.install_mac_app()
+        except RuntimeError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+            return 1
+        console.print(f"[green]✓[/green] installed {escape(path)}", highlight=False)
+        console.print("[dim]Open it from Spotlight or Launchpad (search: kcoder), or drag it to the Dock. "
+                      "It starts kcoderd if needed and opens the app window.[/dim]")
+        if not appmod.agent_installed():
+            console.print("[dim]Tip: `kcoder daemon install` keeps kcoderd running from login so the app opens instantly.[/dim]")
+        return 0
+    if args.uninstall:
+        if appmod.uninstall_mac_app():
+            console.print("[dim]removed ~/Applications/kcoder.app[/dim]")
+        else:
+            console.print("[dim]kcoder.app was not installed[/dim]")
+        return 0
+
+    _refresh_stale_daemon()
+    from .client import ensure_daemon
+    info = ensure_daemon()
+    url = appmod.app_url(info)
+    mode = "browser" if args.browser else ("native" if args.native else "auto")
+    try:
+        used = appmod.open_window(url, mode)
+    except RuntimeError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+        return 1
+    label = {"native": "native window", "chromium": "app window", "browser": "browser"}[used]
+    console.print(f"[dim]kcoder app ({label}):[/dim] http://{info['host']}:{info['port']}/", highlight=False)
     return 0
 
 
@@ -1042,18 +1121,76 @@ def cmd_daemon(args) -> int:
         info = ensure_daemon()
         console.print(f"[green]✓[/green] kcoderd started (pid {info['pid']}, port {info['port']})")
         return 0
-    if action == "stop":
+    if action in ("stop", "restart"):
         running = already_running()
-        if not running:
+        if running:
+            with DaemonClient.connect(autostart=False) as client:
+                sessions = client.request("list")["sessions"]
+                busy = [s["name"] for s in sessions if s.get("status") in ("working", "waiting")]
+                if busy and not args.force:
+                    console.print(f"[yellow]{len(busy)} session(s) still working ({', '.join(busy[:3])}); "
+                                  f"use --force to {action} anyway[/yellow]", highlight=False)
+                    return 1
+                if appmod.agent_loaded():
+                    client.ws.close()
+                    appmod.agent_stop()
+                    for _ in range(100):
+                        if not already_running():
+                            break
+                        time.sleep(0.1)
+                else:
+                    _stop_daemon(client)
+            console.print("[dim]kcoderd stopped[/dim]")
+        elif action == "stop":
             console.print("[dim]kcoderd is not running[/dim]")
             return 0
-        with DaemonClient.connect(autostart=False) as client:
-            client.request("shutdown")
-        for _ in range(50):
-            if not already_running():
+        if action == "stop":
+            return 0
+        if appmod.agent_installed():
+            appmod.agent_start()
+            for _ in range(100):
+                if already_running():
+                    break
+                time.sleep(0.1)
+        from .client import ensure_daemon
+        info = ensure_daemon()
+        console.print(f"[green]✓[/green] kcoderd {__version__} started (pid {info['pid']}, port {info['port']})")
+        return 0
+    if action == "install":
+        try:
+            running = already_running()
+            if running:
+                with DaemonClient.connect(autostart=False) as client:
+                    sessions = client.request("list")["sessions"]
+                    busy = [s["name"] for s in sessions if s.get("status") in ("working", "waiting")]
+                    if busy and not args.force:
+                        console.print(f"[yellow]{len(busy)} session(s) still working ({', '.join(busy[:3])}); "
+                                      f"installing restarts kcoderd - use --force, or wait[/yellow]", highlight=False)
+                        return 1
+                    if appmod.agent_loaded():
+                        client.ws.close()
+                    else:
+                        _stop_daemon(client)
+            plist = appmod.install_launch_agent()
+        except RuntimeError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+            return 1
+        for _ in range(100):
+            if already_running():
                 break
             time.sleep(0.1)
-        console.print("[dim]kcoderd stopped[/dim]")
+        info = already_running()
+        if info:
+            console.print(f"[green]✓[/green] kcoderd runs from login now (pid {info['pid']}, port {info['port']})")
+        else:
+            console.print(f"[yellow]login item installed but kcoderd has not answered yet - see {paths.DAEMON_LOG_PATH}[/yellow]")
+        console.print(f"[dim]{escape(plist)}[/dim]", highlight=False)
+        return 0
+    if action == "uninstall":
+        if appmod.uninstall_launch_agent():
+            console.print("[dim]login item removed; kcoderd now starts on demand again[/dim]")
+        else:
+            console.print("[dim]no login item installed[/dim]")
         return 0
     if action == "status":
         running = already_running()
@@ -1062,9 +1199,11 @@ def cmd_daemon(args) -> int:
             return 1
         with DaemonClient.connect(autostart=False) as client:
             n = len(client.request("list")["sessions"])
+        how = "login item" if appmod.agent_loaded() else "on demand"
+        stale = "" if running.get("version") == __version__ else f" [yellow](kcoder {__version__} is installed - `kcoder daemon restart`)[/yellow]"
         console.print(
             f"kcoderd {running.get('version', '')} running: pid {running['pid']}, "
-            f"ws://{running['host']}:{running['port']}/ws, {n} session(s)\n"
+            f"ws://{running['host']}:{running['port']}/ws, {n} session(s), {how}{stale}\n"
             f"[dim]log: {paths.DAEMON_LOG_PATH}[/dim]"
         )
         return 0
@@ -1213,7 +1352,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
 # entry point
 # ----------------------------------------------------------------------
 
-SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "daemon", "help", "history", "search", "export"}
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1268,8 +1407,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-open", action="store_true", help="print the URL instead of opening it")
     p.set_defaults(func=cmd_ui)
 
+    p = sub.add_parser("app", help="open the web app in its own window")
+    p.add_argument("--install", action="store_true", help="macOS: install ~/Applications/kcoder.app")
+    p.add_argument("--uninstall", action="store_true", help="macOS: remove ~/Applications/kcoder.app")
+    p.add_argument("--browser", action="store_true", help="open in the default browser instead of an app window")
+    p.add_argument("--native", action="store_true", help="require the native window (pywebview)")
+    p.set_defaults(func=cmd_app)
+
     p = sub.add_parser("daemon", help="manage kcoderd")
-    p.add_argument("action", choices=["start", "stop", "status", "run"], nargs="?", default="status")
+    p.add_argument("action", choices=["start", "stop", "restart", "status", "run", "install", "uninstall"],
+                   nargs="?", default="status")
+    p.add_argument("--force", action="store_true", help="stop/restart even while sessions are working")
     p.set_defaults(func=cmd_daemon)
     return parser
 

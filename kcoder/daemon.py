@@ -58,6 +58,7 @@ PERSISTED_EVENTS = {       # streamed text deltas are rebuilt from assistant_end
     "compaction", "history_reset", "queue", "git",
 }
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 def _today() -> str:
@@ -765,6 +766,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if req.get("default_trust") in TRUST_LEVELS:
             manager.cfg["default_trust"] = req["default_trust"]
             config.save({"default_trust": req["default_trust"]})
+        if "auto_publish" in req:
+            manager.cfg["auto_publish"] = bool(req["auto_publish"])
+            config.save({"auto_publish": bool(req["auto_publish"])})
         return {"config": {k: v for k, v in manager.cfg.items() if k != "pricing"}, "stats": manager.stats()}
 
     if t == "projects":
@@ -809,11 +813,25 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         trust = req.get("trust") or ("auto" if req.get("auto_approve") else default_trust)
         cwd = req.get("cwd") or os.getcwd()
         spec = repos.parse_spec(cwd)
-        if spec:  # a GitHub repo: clone (or reuse) it first
+        pulled = None
+        if spec:  # a GitHub repo: clone it, or reuse the existing clone and pull it
             try:
                 cwd = await asyncio.get_running_loop().run_in_executor(None, repos.clone, spec, None)
             except Exception as exc:  # noqa: BLE001
                 raise RequestError(f"clone failed: {exc}")
+            if req.get("pull", True):
+                pulled = await asyncio.get_running_loop().run_in_executor(None, repos.update, cwd)
+        # a local folder with no GitHub remote: make it a repo now (so worktrees
+        # work) and create + push the GitHub repo in the background
+        publish_root = None
+        if not spec and manager.cfg.get("auto_publish", True) and shutil.which("gh"):
+            root = projects.project_root(cwd)
+            if not repos.github_spec(root):
+                try:
+                    await asyncio.get_running_loop().run_in_executor(None, repos.init_repo, root)
+                    publish_root = root
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("auto-publish: not initialising %s: %s", root, exc)
         try:
             session = manager.create(
                 cwd=cwd,
@@ -829,6 +847,10 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         except Exception as exc:  # noqa: BLE001 (git failures etc.)
             raise RequestError(f"{type(exc).__name__}: {exc}")
         client.subs.add(session.id)
+        if pulled:
+            manager._record(session, {"t": "git", "ts": time.time(), "text": f"{spec}: {pulled}"})
+        if publish_root:
+            asyncio.get_running_loop().create_task(_auto_publish(manager, session, publish_root))
         task = (req.get("task") or "").strip()
         if task:
             manager.record_user(session, task, [])
@@ -1100,7 +1122,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         manager._record(session, {"t": "history_reset", "ts": time.time(), "turn": 0, "text": "conversation cleared"})
         return {}
 
-    if t in ("git", "merge", "pr", "discard", "commit"):
+    if t in ("git", "pull", "merge", "pr", "discard", "commit"):
         from . import worktree as wt
         return wt.handle_request(manager, session, t, req)
 
@@ -1149,6 +1171,21 @@ def _session(manager: Manager, sid) -> Session:
 # ----------------------------------------------------------------------
 # server
 # ----------------------------------------------------------------------
+
+async def _auto_publish(manager, session, root: str) -> None:
+    """Create a private GitHub repo for `root` and push it; report in the session log."""
+    try:
+        spec = await asyncio.get_running_loop().run_in_executor(None, repos.publish, root)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("auto-publish failed for %s: %s", root, exc)
+        manager._record(session, {"t": "system", "ts": time.time(), "text": f"GitHub publish skipped: {exc}"})
+        return
+    session.meta["project"] = projects.project_info(root)
+    session.meta["github"] = spec
+    session.save_meta()
+    manager._record(session, {"t": "system", "ts": time.time(), "text": f"published to https://github.com/{spec} (private)"})
+    manager.broadcast_sessions()
+
 
 def _serve_static(request):
     path = request.path.split("?", 1)[0]

@@ -27,6 +27,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 
 import anthropic
@@ -370,10 +371,51 @@ class OpenAIBackend:
 # ----------------------------------------------------------------------
 
 CLAUDE_BIN = "claude"
+_CLAUDE_FALLBACKS = [
+    "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "~/.claude/local/claude",
+    "~/.local/bin/claude", "~/.bun/bin/claude", "~/.npm-global/bin/claude",
+]
+
+
+def claude_path() -> str | None:
+    """Absolute path of the `claude` CLI: PATH first, then the usual install spots."""
+    found = shutil.which(CLAUDE_BIN)
+    if found:
+        return found
+    for cand in _CLAUDE_FALLBACKS:
+        cand = os.path.expanduser(cand)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
 
 
 def claude_available() -> bool:
-    return shutil.which(CLAUDE_BIN) is not None
+    return claude_path() is not None
+
+
+def _spawn_claude(args: list, cwd: str, attempts: int = 4):
+    """Popen the claude CLI, retrying briefly when the binary is missing.
+
+    Claude Code updates itself by replacing its binary in place, so for a
+    second or two `claude` does not exist on disk; without the retry a turn
+    that lands in that window dies with FileNotFoundError.
+    """
+    last: Exception | None = None
+    for attempt in range(attempts):
+        args[0] = claude_path() or CLAUDE_BIN
+        try:
+            return subprocess.Popen(
+                args, cwd=cwd, env=_claude_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, start_new_session=True,
+            )
+        except FileNotFoundError as exc:
+            last = exc
+            if attempt < attempts - 1:
+                time.sleep(1.5)
+    raise RuntimeError(
+        "the `claude` CLI could not be started (not on PATH, or Claude Code was mid-update). "
+        f"Try again in a moment. ({last})"
+    )
 
 
 def _claude_env() -> dict:
@@ -412,7 +454,7 @@ class ClaudeCodeBackend:
     def validate(self) -> None:
         if not claude_available():
             raise RuntimeError("the `claude` CLI is not installed")
-        subprocess.run([CLAUDE_BIN, "--version"], capture_output=True, timeout=20)
+        subprocess.run([claude_path() or CLAUDE_BIN, "--version"], capture_output=True, timeout=20)
 
     def run_turn(self, messages: list, model: str, system: str, hooks) -> None:
         from .engine import Interrupted
@@ -434,10 +476,7 @@ class ClaudeCodeBackend:
         if system:
             args += ["--append-system-prompt", system]
         cwd = getattr(hooks, "cwd", None) or os.getcwd()
-        proc = subprocess.Popen(
-            args, cwd=cwd, env=_claude_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, start_new_session=True,
-        )
+        proc = _spawn_claude(args, cwd)
         if hasattr(hooks, "proc"):
             hooks.proc = proc
         try:

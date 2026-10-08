@@ -135,3 +135,95 @@ def clone(spec: str, dest_dir: str | None = None) -> str:
     if out.returncode != 0:
         raise RuntimeError((out.stderr or out.stdout).strip()[-800:] or "clone failed")
     return path
+
+
+def update(path: str) -> str | None:
+    """Best-effort `git pull --ff-only` of an existing clone. Returns a short
+    message, or None when nothing was pulled (dirty tree, no upstream,
+    offline). Never raises."""
+    from . import worktree as wt
+    try:
+        msg = wt.pull(path)
+    except Exception as exc:  # noqa: BLE001
+        return f"not pulled: {str(exc).splitlines()[0][:200]}" if str(exc) else None
+    return None if msg.startswith("already up to date") else msg
+
+
+# ----------------------------------------------------------------------
+# publishing local folders to GitHub
+# ----------------------------------------------------------------------
+
+DEFAULT_GITIGNORE = ".env\n.env.*\n!.env.example\nnode_modules/\n__pycache__/\n*.pyc\n.DS_Store\n.venv/\ndist/\nbuild/\n"
+_NO_PUBLISH = {"", "/", os.path.expanduser("~")} | {
+    os.path.expanduser(f"~/{d}") for d in ("Desktop", "Documents", "Downloads", "Library", "Applications")
+}
+
+
+def github_spec(path: str) -> str | None:
+    """'owner/name' of the origin remote when it points at GitHub, else None."""
+    return _normalise(_remote(path)) or None
+
+
+def _git(path: str, *args: str, timeout: int = 60):
+    return subprocess.run(["git", "-C", path, *args], capture_output=True, text=True, timeout=timeout)
+
+
+def init_repo(path: str) -> None:
+    """Make `path` a git repo with at least one commit. No-op when it already is."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if path in _NO_PUBLISH:
+        raise RuntimeError(f"refusing to publish {path}: pick a project folder, not a top-level one")
+    top = _git(path, "rev-parse", "--show-toplevel")
+    if top.returncode == 0:
+        if os.path.realpath(top.stdout.strip()) != os.path.realpath(path):
+            raise RuntimeError(f"{path} is inside the git repo {top.stdout.strip()}")
+    else:
+        r = _git(path, "init", "-b", "main")
+        if r.returncode != 0:
+            r = _git(path, "init")
+        if r.returncode != 0:
+            raise RuntimeError((r.stderr or r.stdout).strip()[-400:] or "git init failed")
+    if _git(path, "rev-parse", "--verify", "HEAD").returncode == 0:
+        return
+    gi = os.path.join(path, ".gitignore")
+    if not os.path.exists(gi):
+        with open(gi, "w", encoding="utf-8") as f:
+            f.write(DEFAULT_GITIGNORE)
+    _git(path, "add", "-A")
+    r = _git(path, "commit", "-q", "-m", "Initial commit", timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip()[-400:] or "initial commit failed (empty folder?)")
+
+
+def publish(path: str, private: bool = True) -> str:
+    """Ensure `path` is a git repo with a GitHub origin, creating the repo with
+    `gh` and pushing when there is none. Returns 'owner/name'."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if not shutil.which("gh"):
+        raise RuntimeError("the gh CLI is not installed")
+    init_repo(path)
+    remote = _remote(path)
+    if remote:
+        spec = _normalise(remote)
+        if spec:
+            return spec
+        raise RuntimeError(f"origin is not a GitHub remote: {remote}")
+    base = re.sub(r"[^\w.-]+", "-", os.path.basename(path.rstrip("/"))).strip("-.") or "project"
+    last = ""
+    for attempt in range(4):
+        name = base if attempt == 0 else f"{base}-{attempt + 1}"
+        cmd = ["gh", "repo", "create", name, "--private" if private else "--public",
+               "--source", path, "--remote", "origin", "--push"]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if out.returncode == 0:
+            break
+        last = (out.stderr or out.stdout).strip()[-600:]
+        if "already exists" not in last.lower():
+            raise RuntimeError(last or "gh repo create failed")
+        _git(path, "remote", "remove", "origin")   # gh may have added it before the push failed
+    else:
+        raise RuntimeError(last or "gh repo create failed")
+    spec = github_spec(path)
+    if not spec:
+        raise RuntimeError("repo created but no GitHub origin was configured")
+    return spec

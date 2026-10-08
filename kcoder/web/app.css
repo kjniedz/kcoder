@@ -96,10 +96,15 @@ a { color: var(--accent); }
 .pane.active { outline: 1px solid var(--accent-2); }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 1px var(--yellow) inset, 0 0 6px 0 rgba(251,191,36,.35);} 50% { box-shadow: 0 0 0 2px var(--yellow) inset, 0 0 18px 2px rgba(251,191,36,.7);} }
 @media (prefers-reduced-motion: reduce) { .pane.st-waiting { animation: none; box-shadow: 0 0 0 2px var(--yellow) inset; } }
+.pane.dragging { opacity: .45; }
+.pane.drop-before::before, .pane.drop-after::after { content: ''; position: absolute; top: 0; bottom: 0; width: 3px; background: var(--accent); z-index: 5; pointer-events: none; }
+.pane.drop-before::before { left: 0; }
+.pane.drop-after::after { right: 0; }
 .pane-title {
   display: flex; align-items: center; gap: 8px; padding: 2px 8px; background: var(--bg-3); border-bottom: 1px solid var(--line);
   font-size: 11.5px; white-space: nowrap; overflow: hidden; cursor: pointer; flex: 0 0 auto;
 }
+.pane-title:active { cursor: grabbing; }
 .pane-title .num { color: var(--fg-mute); }
 .pane-title .name { font-weight: 700; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
 .pane-title .repo, .pane-title .model { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; }

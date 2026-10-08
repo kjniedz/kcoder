@@ -80,6 +80,26 @@ def status(cwd: str) -> dict:
     }
 
 
+def pull(cwd: str) -> str:
+    """Fast-forward the checkout from its upstream. Refuses when there are
+    uncommitted changes or no upstream, so nothing is ever lost."""
+    if not _git(cwd, "remote", check=False).strip():
+        raise GitError("no git remote configured")
+    if _git(cwd, "status", "--porcelain", check=False).strip():
+        raise GitError("uncommitted changes; commit or discard them before pulling")
+    before = _git(cwd, "rev-parse", "HEAD", check=False).strip()
+    upstream = _git(cwd, "rev-parse", "--abbrev-ref", "@{upstream}", check=False).strip()
+    if not upstream:
+        branch = _git(cwd, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+        raise GitError(f"branch {branch} has no upstream to pull from")
+    _git(cwd, "pull", "--ff-only", timeout=300)
+    after = _git(cwd, "rev-parse", "HEAD", check=False).strip()
+    if before == after:
+        return f"already up to date with {upstream}"
+    n = _git(cwd, "rev-list", "--count", f"{before}..{after}", check=False).strip() or "?"
+    return f"pulled {n} commit(s) from {upstream} ({after[:7]})"
+
+
 def commit_all(cwd: str, message: str) -> str | None:
     """Stage and commit everything. Returns the short hash or None if clean."""
     if not _git(cwd, "status", "--porcelain", check=False).strip():
@@ -133,6 +153,12 @@ def handle_request(manager, session, t: str, req: dict) -> dict:
             st = status(cwd)
             manager._record(session, {"t": "git", "ts": time.time(), **st, "status": "", "diffstat": ""})
             return {"git": st}
+        if t == "pull":
+            if session.engine.busy:
+                raise RequestError("the session is working; pull when it is idle")
+            msg = pull(cwd)
+            manager._record(session, {"t": "git", "ts": time.time(), "text": msg})
+            return {"ok": True, "message": msg}
         if t == "commit":
             h = commit_all(cwd, req.get("message") or "kcoder: checkpoint")
             manager._record(session, {"t": "git", "ts": time.time(), "text": f"committed {h}" if h else "nothing to commit"})

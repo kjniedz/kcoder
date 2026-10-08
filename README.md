@@ -16,8 +16,9 @@ in your current working directory — not just talk about it.
 Sessions live in a local daemon (`kcoderd`), so you can run many agents at
 once, detach and re-attach from any terminal, and nothing is lost if a
 terminal closes. The terminal client is one view onto the daemon; the
-browser app (`kcoder ui`) is the other: a wall of live session panes, a
-Claude-style chat view with project history, and a terminal view.
+kcoder app (`kcoder app`, or `kcoder ui` for a browser tab) is the other: a
+wall of live session panes, a Claude-style chat view with project history,
+and a terminal view.
 
 ## Features
 
@@ -126,9 +127,53 @@ kcoder --logout             # forget all saved credentials
 kcoder ls                   # list every session in the daemon
 kcoder attach api-work      # attach to a session by name or id prefix
 kcoder rm api-work          # close and delete a session
-kcoder ui                   # open the browser app (phase 2)
-kcoder daemon status        # start | stop | status | run (foreground)
+kcoder app                  # open the app in its own window
+kcoder app --install        # macOS: install kcoder.app (Spotlight, Launchpad, Dock)
+kcoder ui                   # open the app in a browser tab instead
+kcoder daemon status        # start | stop | restart | status | run | install | uninstall
 ```
+
+## The app
+
+`kcoder app` opens the web app in its own window instead of a browser tab.
+It starts `kcoderd` if it isn't running, attaches the daemon token, and picks
+the best window it can:
+
+1. a native window, when `pywebview` is installed (`pip install -e '.[app]'`);
+2. otherwise Chrome, Brave, Edge, Chromium or Vivaldi in app mode: a
+   chromeless window with its own profile, separate from your browsing;
+3. otherwise your default browser (`kcoder app --browser` forces this).
+
+On macOS, `kcoder app --install` writes `~/Applications/kcoder.app` with the
+kcoder icon, so it shows up in Spotlight and Launchpad and can be dragged to
+the Dock. Launching it does exactly what `kcoder app` does. Re-run the install
+after moving the Python install; `kcoder app --uninstall` removes it.
+
+`kcoder daemon install` registers `kcoderd` as a login item (launchd), so the
+daemon is already up when you open the app and comes back after a crash.
+`kcoder daemon stop` / `start` / `restart` keep working either way, and
+`kcoder daemon uninstall` goes back to starting the daemon on demand.
+
+The page is also an installable web app (it ships a manifest and icons), so
+"Install app" in Chrome or "Add to Dock" in Safari works too.
+
+After a `git pull` of kcoder itself, the running daemon is older than the
+installed code; `kcoder app`, `kcoder ui` and `kcoder daemon status` notice
+and restart it when no session is mid-turn (or tell you to run
+`kcoder daemon restart` when one is).
+
+## Working from GitHub
+
+In the app's "new session" dialog the repo field accepts a local path,
+`owner/name`, or a GitHub URL, and lists your local repos plus your GitHub
+repos via the `gh` CLI. A GitHub repo is cloned into `projects_dir`
+(`~/kcoder-projects` by default) the first time; after that the existing
+clone is reused and fast-forwarded from its remote before the session starts
+(skipped, with a note in the session log, if the tree is dirty or offline).
+Every session in a git repo also has a `⇣ pull` button (and a "pull from
+remote" palette entry) for a fast-forward pull while it is idle. Local
+folders with no remote get a private GitHub repo created and pushed when
+`auto_publish` is on.
 
 The first `kcoder` command starts `kcoderd` in the background automatically.
 Leaving a session with `/exit` or Ctrl+D **detaches** — the session keeps

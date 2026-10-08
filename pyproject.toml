@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kcoder"
-version = "0.2.0"
+version = "0.3.0"
 description = "kcoder - a terminal coding agent developed by Kyle Niedzwiecki"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,6 +18,9 @@ dependencies = [
     "prompt_toolkit>=3.0",
 ]
 
+[project.optional-dependencies]
+app = ["pywebview>=5.0"]
+
 [project.scripts]
 kcoder = "kcoder.cli:main"
 kcoderd = "kcoder.daemon:main"
@@ -26,4 +29,4 @@ kcoderd = "kcoder.daemon:main"
 include = ["kcoder*"]
 
 [tool.setuptools.package-data]
-kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/vendor/*"]
+kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.webmanifest", "web/vendor/*"]

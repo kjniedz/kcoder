@@ -41,7 +41,8 @@ const state = {
   sid: localStorage.getItem('kcoder.sid') || null,     // current chat (chat/terminal views)
   focus: null,             // focused pane sid (wall)
   paneView: new Map(),     // sid -> 'chat' | 'term' | 'shell'
-  order: [],               // wall pane order
+  order: JSON.parse(localStorage.getItem('kcoder.order') || '[]'),  // wall pane order (drag to reorder)
+  dragSid: null,           // pane being dragged
   sound: localStorage.getItem('kcoder.sound') !== 'off',
   winName: sessionStorage.getItem('kcoder.win') || null,
   pins: [],
@@ -424,12 +425,10 @@ function renderHeader() {
   const st = state.stats || {};
   const today = st.today || {};
   const tokens = (today.input || 0) + (today.output || 0);
-  const cap = st.daily_cap_usd || 0;
   $('#stats').innerHTML = [
-    `<div class="stat"><b>${st.sessions || 0}</b><span>active</span></div>`,
+    `<div class="stat${st.cap_reached ? ' bad' : ''}"><b>${st.sessions || 0}</b><span>active${st.cap_reached ? ' · paused (daily cap)' : ''}</span></div>`,
     `<div class="stat${st.waiting ? ' warn' : ''}"><b>${st.waiting || 0}</b><span>waiting on you</span></div>`,
     `<div class="stat"><b>${fmtTokens(tokens)}</b><span>tokens today</span></div>`,
-    `<div class="stat${st.cap_reached ? ' bad' : ''}" title="${cap ? 'daily cap ' + fmtUsd(cap) : 'no daily cap (⌘K → set cap)'}"><b>${fmtUsd(today.cost || 0)}${cap ? ' <small style="color:var(--fg-mute)">/ ' + fmtUsd(cap) + '</small>' : ''}</b><span>spend today${st.cap_reached ? ' · paused' : ''}</span></div>`,
   ].join('');
   const n = (st.pending_approvals || []).length;
   const c = $('#inbox-count'); c.hidden = !n; c.textContent = n;
@@ -497,7 +496,7 @@ function paneSkeleton() {
 
 function renderPaneChrome(pane, s, num) {
   const st = paneStatus(s);
-  pane.className = 'pane st-' + st + (pane.classList.contains('focused') ? ' focused' : '') + (state.sid === s.id ? ' active' : '');
+  pane.className = 'pane st-' + st + (pane.classList.contains('focused') ? ' focused' : '') + (pane.classList.contains('dragging') ? ' dragging' : '') + (state.sid === s.id ? ' active' : '');
   $('.num', pane).textContent = num <= 9 ? num : '';
   $('.dot', pane).className = 'dot ' + st;
   $('.name', pane).textContent = s.title && s.title !== s.name ? `${s.name} · ${s.title}` : s.name;
@@ -537,7 +536,7 @@ function renderPaneChrome(pane, s, num) {
       `<button data-act="queue">+ task</button>` +
       `<select data-act="trust" title="trust level"><option value="auto">trust: auto</option><option value="write">trust: write</option><option value="read">trust: read</option><option value="none">trust: none</option></select>` +
       `<select data-act="model" title="model"></select>` +
-      (s.project && s.project.git ? `<button data-act="git">git status</button>` : '') +
+      (s.project && s.project.git ? `<button data-act="git">git status</button><button data-act="pull" title="git pull --ff-only from the remote">⇣ pull</button>` : '') +
       (s.worktree ? `<button data-act="merge" title="merge this session's branch into the project">⇤ merge</button><button data-act="pr">open PR</button><button data-act="discard" class="danger">discard</button>` : '') +
       `<button data-act="open-chat">open in chat</button><button data-act="export">export</button><button data-act="archive">archive</button>` +
       (s.resume_text ? `<button data-act="resume" class="primary">resume interrupted turn</button>` : '');
@@ -593,6 +592,43 @@ function wirePane(pane, sid) {
   pane.addEventListener('dblclick', (e) => { if (e.target.closest('.pane-body') && !pane.classList.contains('focused')) focusPane(sid); });
   $('select[data-act]', pane); // wired via change delegation below
   pane.addEventListener('change', (e) => { const s = e.target.closest('select[data-act]'); if (s) handleAction(s, sid); });
+  wireDrag(pane, sid);
+}
+
+function saveOrder() { localStorage.setItem('kcoder.order', JSON.stringify(state.order)); }
+function movePane(from, to, before) {
+  if (from === to) return;
+  const order = state.order.filter((x) => x !== from);
+  const i = order.indexOf(to);
+  if (i < 0) return;
+  order.splice(before ? i : i + 1, 0, from);
+  state.order = order; saveOrder(); renderWall();
+}
+function wireDrag(pane, sid) {
+  const title = $('.pane-title', pane);
+  title.draggable = true;
+  const clearMarks = () => { for (const p of $$('.pane')) p.classList.remove('drop-before', 'drop-after'); };
+  title.addEventListener('dragstart', (e) => {
+    if (state.focus || e.target.closest('.window-pin, .view-toggle')) { e.preventDefault(); return; }
+    state.dragSid = sid; pane.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', sid);
+  });
+  title.addEventListener('dragend', () => { state.dragSid = null; pane.classList.remove('dragging'); clearMarks(); });
+  pane.addEventListener('dragover', (e) => {
+    if (!state.dragSid || state.dragSid === sid) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+    const r = pane.getBoundingClientRect();
+    const before = (e.clientX - r.left) < r.width / 2;
+    pane.classList.toggle('drop-before', before); pane.classList.toggle('drop-after', !before);
+  });
+  pane.addEventListener('dragleave', (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove('drop-before', 'drop-after'); });
+  pane.addEventListener('drop', (e) => {
+    if (!state.dragSid || state.dragSid === sid) return;
+    e.preventDefault();
+    const before = pane.classList.contains('drop-before');
+    const from = state.dragSid; state.dragSid = null; clearMarks();
+    movePane(from, sid, before);
+  });
 }
 
 function focusPane(sid) {
@@ -651,6 +687,7 @@ async function handleAction(el, sid) {
         await request('set', { sid, model: m }); break;
       }
       case 'git': await gitStatus(sid, true); break;
+      case 'pull': { try { const r = await request('pull', { sid }); toast(r.message || 'pulled', 'ok'); gitStatus(sid, false).catch(() => {}); } catch (e) { toast('pull: ' + e.message, 'err'); } break; }
       case 'merge': if (await confirmDialog(`Merge branch ${s.worktree.branch} into ${s.project.name}?`, 'Uncommitted changes in the worktree are committed first.')) { const r = await request('merge', { sid }); toast(r.message || 'merged', r.ok === false ? 'err' : 'ok'); } break;
       case 'pr': { const r = await request('pr', { sid }); if (r.url) { toast('PR opened: ' + r.url, 'ok'); window.open(r.url, '_blank'); } else toast(r.message || 'PR created', 'ok'); break; }
       case 'discard': if (await confirmDialog(`Discard all work in ${s.worktree.branch}?`, 'The worktree and branch are deleted. This cannot be undone.')) { await request('discard', { sid }); toast('discarded', 'warn'); } break;
@@ -1083,7 +1120,7 @@ function infoDialog(title, html) { openDialog(`<h2>${esc(title)}<span class="spa
 
 function helpDialog() {
   const rows = [
-    ['1-9', 'jump to pane'], ['click / enter', 'focus pane'], ['esc', 'back to grid · interrupt agent while typing'], ['w', 'cycle sessions waiting on you'],
+    ['1-9', 'jump to pane'], ['click / enter', 'focus pane'], ['drag title bar', 'reorder panes'], ['esc', 'back to grid · interrupt agent while typing'], ['w', 'cycle sessions waiting on you'],
     ['n', 'new session'], ['a', 'approval inbox'], ['y / n', 'approve / decline (inbox or focused pane)'], ['v', 'cycle pane view: chat → terminal → shell'],
     ['alt+1 / 2 / 3', 'wall · chat · terminal view'], ['⌘K', 'command palette'], ['p', 'pin focused session to this window'], ['?', 'this help'],
     ['enter', 'send'], ['shift+enter', 'newline'], ['↑', 'previous prompt'], ['/', 'slash commands'], ['@', 'reference a project file'], ['paste', 'never submits; big pastes become chips'],
@@ -1161,7 +1198,8 @@ async function openNewSession(pre = {}) {
     const q = cwdIn.value.trim().toLowerCase();
     const local = repos.local.filter((r) => !q || fuzzy((r.name + ' ' + r.path).toLowerCase(), q)).slice(0, 12);
     const gh = repos.github.filter((r) => !local.some((l) => l.path === r.path) && (!q || fuzzy(r.spec.toLowerCase(), q))).slice(0, 12);
-    const items = local.map((r) => ({ v: r.path, label: r.name, meta: shortHome(r.path) })).concat(gh.map((r) => ({ v: r.path || r.spec, label: r.spec, meta: r.path ? 'github · cloned' : 'github · clone' })));
+    const pub = !(state.config && state.config.auto_publish === false);
+    const items = local.map((r) => ({ v: r.path, label: r.name, meta: shortHome(r.path) + (!r.remote && pub ? ' · will publish to GitHub' : '') })).concat(gh.map((r) => ({ v: r.path || r.spec, label: r.spec, meta: r.path ? 'github · cloned' : 'github · clone' })));
     repoMenu.hidden = items.length === 0;
     repoMenu.innerHTML = items.map((it) => `<div class="item" data-v="${esc(it.v)}"><span>${esc(it.label)}</span><span class="meta">${esc(it.meta)}</span></div>`).join('');
   };
@@ -1191,6 +1229,7 @@ function paletteItems() {
     ['wall view', () => setView('wall'), 'alt+1'], ['chat view', () => setView('chat'), 'alt+2'], ['terminal view', () => setView('terminal'), 'alt+3'],
     ['toggle sound', toggleSound], ['enable browser notifications', () => Notification.requestPermission().then((p) => toast('notifications: ' + p))],
     ['set default trust for new sessions', async () => { const v = await chooseDialog('Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']]); if (v) { const r = await request('config', { default_trust: v }); state.config = r.config; toast('default trust: ' + v, 'ok'); } }],
+    ['toggle auto-publish of local folders to GitHub', async () => { const on = !(state.config && state.config.auto_publish !== false); const r = await request('config', { auto_publish: on }); state.config = r.config; toast('auto-publish to GitHub: ' + (on ? 'on' : 'off'), 'ok'); }],
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
     ['keyboard help', helpDialog, '?'],
@@ -1202,6 +1241,7 @@ function paletteItems() {
     items.push([`archive: ${s.name}`, () => request('archive', { sid: s.id })]);
     items.push([`export: ${s.name}`, () => exportChat(s.id)]);
     items.push([`shell: ${s.name}`, () => { if (state.view !== 'wall') setView('wall'); setPaneView(s.id, 'shell'); focusPane(s.id); }]);
+    if (s.project && s.project.git) items.push([`pull from remote: ${s.name}`, () => handleAction({ dataset: { act: 'pull' } }, s.id)]);
     if (s.worktree) { items.push([`merge: ${s.name}`, () => handleAction({ dataset: { act: 'merge' } }, s.id)]); items.push([`open PR: ${s.name}`, () => handleAction({ dataset: { act: 'pr' } }, s.id)]); }
   }
   for (const c of state.chats.filter((c) => c.archived).slice(0, 50)) items.push([`resume: ${c.title || c.name}`, () => openChat(c.id)]);
