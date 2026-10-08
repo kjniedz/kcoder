@@ -30,8 +30,10 @@
     <button data-view="wall" title="Wall  (alt+1)">wall</button>
     <button data-view="chat" title="Chat  (alt+2)">chat</button>
     <button data-view="terminal" title="Terminal  (alt+3)">terminal</button>
+    <button data-view="stats" title="Stats  (alt+4)">stats</button>
   </nav>
   <div class="tools">
+    <button id="btn-broadcast" title="Broadcast: send one prompt to every open pane">⇶</button>
     <button id="btn-inbox" title="Approval inbox  (a)">inbox <span id="inbox-count" class="count" hidden></span></button>
     <button id="btn-new" title="New session  (n)">+ new</button>
     <button id="btn-palette" title="Command palette  (⌘K)">⌘K</button>
@@ -52,16 +54,17 @@
   <section id="view-chat" class="view chatview" hidden>
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-top">
-        <input id="search" type="search" placeholder="search chats…" autocomplete="off">
+        <input id="search" type="search" placeholder="search chats…  (⌘⇧F)" autocomplete="off">
         <button id="btn-new-chat" title="New chat in this project">+</button>
       </div>
       <div id="projects" class="projects"></div>
+      <div class="sidebar-foot"><button id="btn-split" title="Add a pane (⌘\\)">⫿ split</button><span class="help">drag a chat onto a pane</span></div>
     </aside>
-    <div id="chat-main" class="chat-main">
-      <div id="chat-title" class="chat-titlebar"></div>
-      <div id="chat-log" class="chat-log"></div>
-      <div id="chat-composer" class="composer-slot"></div>
-    </div>
+    <div id="split" class="split" data-n="1"></div>
+  </section>
+
+  <section id="view-stats" class="view statsview" hidden>
+    <div id="stats-body" class="stats-body"></div>
   </section>
 
   <section id="view-terminal" class="view termview" hidden>
@@ -73,6 +76,29 @@
 
 <div id="overlay" class="overlay" hidden></div>
 <div id="toasts" class="toasts"></div>
+
+<template id="tpl-cpane">
+  <div class="cpane">
+    <div class="cpane-bar">
+      <span class="dot"></span>
+      <button class="picker" title="Pick a session for this pane">pick a session ▾</button>
+      <span class="meta"></span>
+      <span class="spacer"></span>
+      <span class="ctx sec"></span>
+      <select data-act="trust" class="sec" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option></select>
+      <select data-act="model" class="sec" title="model"></select>
+      <button data-act="interrupt" class="sec" title="Interrupt (Esc)">■</button>
+      <button data-pane="find" class="sec" title="Find in session (⌘F)">⌕</button>
+      <button data-pane="zoom" title="Pop out / back to grid (⌘⇧↩)">⤢</button>
+      <button data-pane="close" title="Close pane (⌘⇧W)">✕</button>
+      <button data-pane="menu" title="More">⋯</button>
+    </div>
+    <div class="cpane-find" hidden><input placeholder="find in this session…" autocomplete="off"><span class="count"></span><button data-find="prev" title="previous (⇧↩)">↑</button><button data-find="next" title="next (↩)">↓</button><button data-find="close" title="close (esc)">✕</button></div>
+    <div class="chat-log"></div>
+    <button class="jump" hidden>↓ jump to latest</button>
+    <div class="composer-slot"></div>
+  </div>
+</template>
 
 <template id="tpl-composer">
   <form class="composer" autocomplete="off">

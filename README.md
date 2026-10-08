@@ -349,6 +349,33 @@ kcoder ui        # opens http://127.0.0.1:47321/ with the daemon token attached
 Three views of the same sessions, switchable with the header buttons or
 <kbd>alt+1/2/3</kbd>:
 
+- **Chat** can show **1, 2 or 3 sessions side by side** in equal panes: `⌘\`
+  adds a pane, `⌘1/2/3` focuses one, `⌘⇧W` closes it, `⌘⇧↩` pops the focused
+  pane out to fill the window and back, and `⌃⌘F` is native full screen. Put a
+  session in a pane by dragging it from the sidebar or clicking the pane's
+  name. Every pane has its own input, model, trust, toolbar (which collapses
+  into the `⋯` menu when the pane is narrow) and streaming. The layout is
+  remembered across restarts. Broadcast (`⇶` in the header) sends one prompt
+  to every open pane, handy for comparing models.
+- **Transcripts are real text**: drag-select across messages, `⌘A` selects
+  the focused pane's transcript, `⌘C` copies clean text (whole messages copy
+  as their markdown source, code fences included), and every message has a
+  hover copy button. Selections survive streaming; if you scroll up while the
+  agent is writing, a "jump to latest" button appears instead of yanking you
+  down. `⌘F` finds inside a session, `⌘⇧F` searches across sessions, and you
+  can drop files onto a pane to attach them to the prompt.
+- **Stats** (header numbers, or `alt+4`): today / 7-day / 30-day / all-time
+  tokens, commits, sessions and active agent time; a sortable daily table
+  with CSV export; a daily token chart over 7 / 30 / 90 days; breakdowns by
+  model, provider (subscription vs API key, with estimated cost for API use)
+  and project; top sessions by tokens; and every commit made from a kcoder
+  session with its repo, session, lines changed, pushed-or-local state and a
+  GitHub link. Commits are detected from local git at turn boundaries, so it
+  works offline and for private repos. History lives in
+  `~/.local/share/kcoder/usage.jsonl` and `commits.jsonl`, survives daemon
+  restarts and updates, is backfilled from session logs, and rolls over at
+  local midnight. Sessions that are not in the focused pane raise a macOS
+  notification when they finish or need you.
 - **Wall** - a dense tiled grid of live panes, one per session, auto-reflowing
   as sessions come and go. Each pane has a title bar (name, repo @ branch,
   model, status dot), a live feed, and a status line (context used, tokens,

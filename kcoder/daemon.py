@@ -36,7 +36,9 @@ import secrets
 import shutil
 import signal
 import socket
+import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -44,7 +46,7 @@ from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, chatlog, config, paths, pricing, projects, repos, setup
+from . import __version__, auth, chatlog, config, paths, pricing, projects, repos, setup, stats
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
@@ -249,6 +251,16 @@ class Manager:
             except Exception as exc:  # noqa: BLE001 - one bad session must not stop the daemon
                 log.exception("failed to load session %s: %s", sid, exc)
 
+    def start_backfill(self) -> None:
+        """Fill usage/commit history from session logs so stats never start at zero."""
+        def run():
+            try:
+                stats.backfill_all()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("stats backfill failed: %s", exc)
+            self._hdr_at = 0
+        threading.Thread(target=run, name="stats-backfill", daemon=True).start()
+
     def _load_today(self) -> None:
         """Sum today's calls from usage.jsonl so fleet stats survive restarts."""
         today = _today()
@@ -281,6 +293,17 @@ class Manager:
             self._load_today()
         return cap > 0 and self.today["cost"] >= cap
 
+    def _header_stats(self) -> dict:
+        now = time.time()
+        if now - getattr(self, "_hdr_at", 0) > 5:
+            try:
+                self._hdr = stats.header_stats()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("header stats failed: %s", exc)
+                self._hdr = {}
+            self._hdr_at = now
+        return getattr(self, "_hdr", {})
+
     def stats(self) -> dict:
         if self.today["date"] != _today():
             self._load_today()
@@ -298,6 +321,7 @@ class Manager:
             "error": by_status.get("error", 0),
             "pending_approvals": pending,
             "today": dict(self.today),
+            **self._header_stats(),
             "daily_cap_usd": self.daily_cap(),
             "cap_reached": self.cap_reached(),
         }
@@ -602,6 +626,8 @@ class Manager:
             session.meta.pop("interrupted", None)
             session.meta.pop("resume_text", None)
             session.save_messages()      # so a crash mid-turn keeps the user's message
+            if (session.meta.get("project") or {}).get("git") or session.meta.get("worktree"):
+                session.head_at_turn_start = stats.head(session.engine.cwd)
         elif t == "turn_end":
             session.meta.setdefault("usage", {}).setdefault("turns", 0)
             session.meta["usage"]["turns"] += 1
@@ -616,6 +642,8 @@ class Manager:
             self.broadcast_sessions()
         if t == "turn_end":
             self.broadcast_chats()
+            if (session.meta.get("project") or {}).get("git") or session.meta.get("worktree"):
+                self.loop.run_in_executor(None, self._track_commits, session)
             if event.get("result") == "ok":
                 self.loop.call_later(0.2, self._advance_queue, sid)
             if self.cap_reached():
@@ -664,6 +692,24 @@ class Manager:
             "images": [os.path.basename(p) for p in images],
         })
 
+    def _track_commits(self, session: Session) -> None:
+        """Runs in a worker thread after a turn (and after explicit git actions)."""
+        try:
+            rows = stats.record_new_commits(session.id, session.engine.cwd,
+                                            getattr(session, "head_at_turn_start", None), session.meta)
+            session.head_at_turn_start = stats.head(session.engine.cwd)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("commit tracking failed for %s: %s", session.id, exc)
+            return
+        if rows:
+            def announce():
+                for r in rows:
+                    self._record(session, {"t": "git", "ts": time.time(), "commit": r["sha"][:7],
+                                           "text": f"commit {r['sha'][:7]}: {r['subject']}"})
+                self._hdr_at = 0
+                self.broadcast_sessions()
+            self.loop.call_soon_threadsafe(announce)
+
     def _log_usage(self, session: Session, event: dict) -> None:
         try:
             if self._usage_file is None:
@@ -679,8 +725,11 @@ class Manager:
                 "cache_read": event.get("cache_read", 0),
                 "cache_write": event.get("cache_write", 0),
                 "cost": event.get("cost", 0.0),
+                "api_equivalent": event.get("api_equivalent", 0.0),
+                "plan": bool(event.get("plan")),
             }) + "\n")
             self._usage_file.flush()
+            self._hdr_at = 0
         except OSError as exc:
             log.warning("usage log write failed: %s", exc)
 
@@ -812,6 +861,22 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         except ValueError as exc:
             raise RequestError(str(exc))
         return {"message": msg, "providers": await loop.run_in_executor(None, setup.providers_info)}
+
+    if t == "stats_full":
+        return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") or 30))
+
+    if t == "notify":
+        # a desktop notification on behalf of a client that has no Notification
+        # API of its own (the native window); macOS only, best effort
+        title = str(req.get("title") or "kcoder")[:120]
+        body = str(req.get("body") or "")[:240]
+        if sys.platform == "darwin":
+            script = 'display notification "%s" with title "%s"' % (
+                body.replace("\\", "\\\\").replace('"', '\\"'), title.replace("\\", "\\\\").replace('"', '\\"'))
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10))
+            return {"sent": True}
+        return {"sent": False}
 
     if t == "history":
         return {"chats": manager.history(req.get("project"), not req.get("active_only"), int(req.get("limit") or 200)),
@@ -1141,7 +1206,11 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
 
     if t in ("git", "pull", "merge", "pr", "discard", "commit"):
         from . import worktree as wt
-        return wt.handle_request(manager, session, t, req)
+        result = wt.handle_request(manager, session, t, req)
+        if t in ("git", "merge", "commit", "pr"):
+            asyncio.get_running_loop().run_in_executor(None, manager._track_commits, session)
+        return result
+
 
     if t in ("shell_open", "shell_input", "shell_resize", "shell_close", "shell_kill_tool"):
         from . import shell
@@ -1346,6 +1415,7 @@ async def _serve(host: str, port: int) -> None:
     token = _load_or_create_token()
     manager = Manager(loop)
     manager.load_from_disk()
+    manager.start_backfill()
 
     stop = manager.stop
     for sig in (signal.SIGINT, signal.SIGTERM):

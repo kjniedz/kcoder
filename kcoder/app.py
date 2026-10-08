@@ -119,8 +119,47 @@ def run_native_window(url: str) -> None:
             pass
     storage = os.path.join(paths.DATA_DIR, "webview")
     os.makedirs(storage, exist_ok=True)
-    webview.create_window(APP_NAME, url, width=1440, height=900, min_size=(900, 600))
+    api = WindowApi()
+    api.window = webview.create_window(APP_NAME, url, width=1440, height=900, min_size=(900, 600), js_api=api)
     webview.start(private_mode=False, storage_path=storage)
+
+
+class WindowApi:
+    """Exposed to the page as window.pywebview.api.* in the native window."""
+
+    window = None
+
+    def is_native(self) -> bool:
+        return True
+
+    def toggle_fullscreen(self) -> bool:
+        """Native macOS full screen (the green-button kind)."""
+        try:
+            self.window.toggle_fullscreen()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def notify(self, title: str, body: str = "") -> bool:
+        """A macOS notification from the kcoder.app process (so it carries
+        the kcoder name and icon); falls back to osascript elsewhere."""
+        title, body = str(title or "kcoder")[:120], str(body or "")[:240]
+        if sys.platform == "darwin":
+            try:
+                import Foundation  # type: ignore
+                n = Foundation.NSUserNotification.alloc().init()
+                n.setTitle_(title)
+                if body:
+                    n.setInformativeText_(body)
+                Foundation.NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(n)
+                return True
+            except Exception:  # noqa: BLE001
+                pass
+            script = 'display notification "%s" with title "%s"' % (
+                body.replace("\\", "\\\\").replace('"', '\\"'), title.replace("\\", "\\\\").replace('"', '\\"'))
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+            return True
+        return False
 
 
 def _open_bundle() -> bool:

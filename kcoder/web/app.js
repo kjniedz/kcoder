@@ -54,6 +54,12 @@ const state = {
   searchResults: null,
   gitInfo: new Map(),
   fileCache: new Map(),
+  layout: JSON.parse(localStorage.getItem('kcoder.layout') || 'null') || { panes: [localStorage.getItem('kcoder.sid') || null], focus: 0, zoom: null },
+  broadcast: localStorage.getItem('kcoder.broadcast') === 'on',
+  dragChat: null,          // chat being dragged from the sidebar onto a pane
+  statsDays: Number(localStorage.getItem('kcoder.statsDays') || 30),
+  statsMetric: null,
+  statsSort: { key: 'date', dir: -1 },
 };
 
 if (!state.winName) { state.winName = 'w' + Math.random().toString(36).slice(2, 7); sessionStorage.setItem('kcoder.win', state.winName); }
@@ -125,7 +131,9 @@ async function onConnected() {
   try { state.config = (await request('config')).config; } catch {}
   applyUrlParams();
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
+  for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1);
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
+  syncSid();
   renderAll();
   if ((state.providers || []).length && !state.providers.some((p) => p.configured) && !state._setupShown) { state._setupShown = true; setupDialog(); }
   const open = new URLSearchParams(location.search).get('open');
@@ -140,6 +148,7 @@ function applyUrlParams() {
   const ref = q.get('sid');
   if (ref) { const s = Array.from(state.sessions.values()).find((x) => x.id === ref || x.name === ref) || state.chats.find((x) => x.id === ref || x.name === ref); if (s) { state.sid = s.id; localStorage.setItem('kcoder.sid', s.id); } }
   if (q.get('focus') && state.sid) state.focus = state.sid;
+  if (q.get('panes')) { const find = (r) => { const s = Array.from(state.sessions.values()).find((x) => x.id === r || x.name === r) || state.chats.find((x) => x.id === r || x.name === r); return s ? s.id : null; }; state.layout.panes = q.get('panes').split(',').slice(0, 3).map(find); state.layout.focus = 0; state.layout.zoom = null; saveLayout(); }
   if (q.get('pin')) { state.pins = q.get('pin').split(',').map((r) => { const s = Array.from(state.sessions.values()).find((x) => x.id === r || x.name === r); return s ? s.id : r; }); savePins(); }
   renderViews();
 }
@@ -183,7 +192,7 @@ function onSessions(list, stats) {
   for (const sid of Array.from(state.sessions.keys())) if (!seen.has(sid)) { state.sessions.delete(sid); state.order = state.order.filter((x) => x !== sid); if (state.focus === sid) state.focus = null; }
   state.stats = stats || state.stats;
   for (const s of list) if (!state.events.has(s.id)) loadEvents(s.id, 80);
-  renderHeader(); renderWall(); renderTitlebars();
+  renderHeader(); renderWall(); renderTitlebars(); renderSplitBars(); renderSidebar();
 }
 
 function statusChanged(s, prev) {
@@ -227,13 +236,11 @@ function queueRender(sid) {
 function renderSession(sid) {
   const pane = $(`.pane[data-sid="${sid}"]`);
   if (pane) renderPaneBody(pane, sid);
-  if (state.sid === sid) {
-    if (state.view === 'chat') renderChatLog();
-    if (state.view === 'terminal') renderTermLog();
-  }
+  if (state.view === 'chat') for (const cp of $$(`.cpane[data-sid="${sid}"]`)) renderCpaneLog(cp);
+  if (state.sid === sid && state.view === 'terminal') renderTermLog();
 }
 
-function renderAll() { renderHeader(); renderViews(); renderWall(); renderSidebar(); renderTitlebars(); renderChatLog(); renderTermLog(); }
+function renderAll() { renderHeader(); renderViews(); renderWall(); renderSidebar(); renderTitlebars(); renderSplit(); renderTermLog(); if (state.view === 'stats') renderStatsView(); }
 
 // ----------------------------------------------------------------------
 // markdown, diffs, sanitising
@@ -310,7 +317,7 @@ function toolBodyHtml(call, result) {
 }
 
 function buildChatHtml(store, sid, opts = {}) {
-  const list = opts.tail ? store.list.slice(-opts.tail) : store.list;
+  const list = opts.tail ? store.list.slice(-opts.tail) : (opts.from != null ? store.list.slice(opts.from, opts.to == null ? undefined : opts.to) : store.list);
   const calls = new Map();
   const approvals = new Map();
   const out = [];
@@ -320,17 +327,20 @@ function buildChatHtml(store, sid, opts = {}) {
   for (const e of store.list) if (e.t === 'approval_result') approvals.set(e.id, e.approved);
   const results = new Map();
   for (const e of store.list) if (e.t === 'tool_result') results.set(e.id, e);
-  for (const e of list) {
+  const base = opts.tail ? store.list.length - list.length : (opts.from || 0);
+  if (opts.from) for (const e of store.list.slice(0, opts.from)) if (e.t === 'user') userTurn++;
+  for (let k = 0; k < list.length; k++) {
+    const e = list[k]; const idx = base + k;
     switch (e.t) {
       case 'user': {
         userTurn++;
         const imgs = (e.images || []).map((i) => `<span>🖼 ${esc(i)}</span>`).join('');
-        out.push(`<div class="msg msg-user" data-turn="${userTurn}"><span class="who">you&gt;</span><div class="bubble">${esc(e.text)}${imgs ? `<div class="images">${imgs}</div>` : ''}</div>` +
-          (opts.compact ? '' : `<div class="actions"><button data-act="edit" title="Edit and resend">✎</button><button data-act="fork" title="Fork from here">⑂</button><button data-act="copy" title="Copy">⧉</button></div>`) + `</div>`);
+        out.push(`<div class="msg msg-user" data-turn="${userTurn}" data-i="${idx}"><span class="who">you&gt;</span><div class="bubble">${esc(e.text)}${imgs ? `<div class="images">${imgs}</div>` : ''}</div>` +
+          (opts.compact ? '' : `<div class="actions"><button data-act="edit" title="Edit and resend">✎</button><button data-act="fork" title="Fork from here">⑂</button><button data-act="copy" title="Copy message">⧉</button></div>`) + `</div>`);
         break;
       }
       case 'assistant_end':
-        if (e.text) out.push(`<div class="msg msg-assistant"><div class="who">kcoder&gt;</div><div class="md">${renderMarkdown(e.text)}</div></div>`);
+        if (e.text) out.push(`<div class="msg msg-assistant" data-i="${idx}"><div class="who">kcoder&gt;<button class="copy-msg" data-act="copy" title="Copy as markdown">⧉ copy</button></div><div class="md">${renderMarkdown(e.text)}</div></div>`);
         break;
       case 'tool_call': {
         const res = results.get(e.id);
@@ -341,7 +351,7 @@ function buildChatHtml(store, sid, opts = {}) {
         else if ((e.name === 'run_bash' || e.name === 'Bash') && !(state.sessions.get(sid) || {}).pending_approval) status = `<span class="res pending">running… <button data-act="kill" data-cid="${esc(e.id)}" title="kill this command">■ kill</button></span>`;
         else status = `<span class="res pending">${(state.sessions.get(sid) || {}).pending_approval === e.id ? 'awaiting approval' : '…'}</span>`;
         const live = !res && store.toolLive && store.toolLive[e.id];
-        out.push(`<details class="tool"${(res && res.is_error) || live ? ' open' : ''}><summary><span class="gear">⚙</span><span class="desc">${esc(e.description)}</span>${status}</summary><div class="body">${toolBodyHtml(e, res)}${live ? `<div class="label">live output</div><pre>${esc(stripAnsi(live))}</pre>` : ''}</div></details>`);
+        out.push(`<details class="tool" data-cid="${esc(e.id)}"${(res && res.is_error) || live ? ' open' : ''}><summary><span class="gear">⚙</span><span class="desc">${esc(e.description)}</span>${status}</summary><div class="body">${toolBodyHtml(e, res)}${live ? `<div class="label">live output</div><pre>${esc(stripAnsi(live))}</pre>` : ''}</div></details>`);
         break;
       }
       case 'approval_request': {
@@ -365,10 +375,14 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'git': out.push(`<div class="note">${esc(e.text || '')}</div>`); break;
     }
   }
-  if (store.streaming || store.live) out.push(`<div class="msg msg-assistant streaming"><div class="who">kcoder&gt;</div><div class="md">${store.live ? renderMarkdown(store.live) : ''}</div></div>`);
-  const sess = state.sessions.get(sid);
-  if (sess && sess.status === 'working' && !store.live && !store.streaming) out.push(`<div class="note"><span class="t-spinner">◐</span> working…</div>`);
+  if (!opts.noTail) out.push(trailerHtml(store, sid));
   return out.join('');
+}
+function trailerHtml(store, sid) {
+  if (store.streaming || store.live) return `<div class="msg msg-assistant streaming"><div class="who">kcoder&gt;</div><div class="md">${store.live ? renderMarkdown(store.live) : ''}</div></div>`;
+  const sess = state.sessions.get(sid);
+  if (sess && sess.status === 'working') return `<div class="note working"><span class="t-spinner">◐</span> working…</div>`;
+  return '';
 }
 
 // ----------------------------------------------------------------------
@@ -426,11 +440,16 @@ function renderHeader() {
   const st = state.stats || {};
   const today = st.today || {};
   const tokens = (today.input || 0) + (today.output || 0);
+  const wk = st.week_tokens || []; const mx = Math.max(1, ...wk);
+  const spark = `<svg class="spark" viewBox="0 0 ${Math.max(1, wk.length) * 7} 18" width="${Math.max(1, wk.length) * 7}" height="18" aria-label="tokens, last 7 days">${wk.map((v, i) => { const h = Math.max(1, Math.round(v / mx * 16)); return `<rect x="${i * 7}" y="${18 - h}" width="5" height="${h}" rx="1"><title>${esc((st.week_dates || [])[i] || '')}: ${fmtInt(v)} tokens</title></rect>`; }).join('')}</svg>`;
   $('#stats').innerHTML = [
-    `<div class="stat${st.cap_reached ? ' bad' : ''}"><b>${st.sessions || 0}</b><span>active${st.cap_reached ? ' · paused (daily cap)' : ''}</span></div>`,
-    `<div class="stat${st.waiting ? ' warn' : ''}"><b>${st.waiting || 0}</b><span>waiting on you</span></div>`,
-    `<div class="stat"><b>${fmtTokens(tokens)}</b><span>tokens today</span></div>`,
+    `<button class="stat${st.cap_reached ? ' bad' : ''}" data-metric="sessions" title="open stats"><b>${st.sessions || 0}</b><span>active${st.cap_reached ? ' · paused (daily cap)' : ''}</span></button>`,
+    `<button class="stat${st.waiting ? ' warn' : ''}" data-metric="sessions" title="open stats"><b>${st.waiting || 0}</b><span>waiting on you</span></button>`,
+    `<button class="stat" data-metric="tokens" title="open stats"><b>${fmtTokens(tokens)}</b><span>tokens today</span></button>`,
+    `<button class="stat" data-metric="commits" title="open stats"><b>${st.commits_today || 0}</b><span>commits today</span></button>`,
+    `<button class="stat" data-metric="tokens" title="tokens, last 7 days"><b>${spark}</b><span>7 days</span></button>`,
   ].join('');
+  $('#btn-broadcast').classList.toggle('active', !!state.broadcast);
   const n = (st.pending_approvals || []).length;
   const c = $('#inbox-count'); c.hidden = !n; c.textContent = n;
   $('#btn-sound').textContent = state.sound ? '🔔' : '🔕';
@@ -442,7 +461,9 @@ function renderHeader() {
 function setView(v) {
   state.view = v; localStorage.setItem('kcoder.view', v);
   renderViews();
-  if (v !== 'wall') { if (!state.sid) state.sid = state.order[0] || null; if (state.sid) loadEvents(state.sid, -1); }
+  if (v === 'chat') { if (!focusedSid() && state.order[0]) { state.layout.panes[state.layout.focus] = state.order[0]; saveLayout(); } for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1); syncSid(); }
+  else if (v === 'terminal') { if (!state.sid) state.sid = focusedSid() || state.order[0] || null; if (state.sid) loadEvents(state.sid, -1); }
+  else if (v === 'stats') statsData = null;
   renderAll();
   if (v === 'chat' || v === 'terminal') focusComposer();
 }
@@ -573,9 +594,81 @@ function renderPaneBody(pane, sid) {
     body.innerHTML = buildTermHtml(store, sid, { tail: focused ? 0 : 40 });
   } else {
     body.className = 'pane-body';
-    body.innerHTML = `<div class="chat-log">${buildChatHtml(store, sid, { tail: focused ? 0 : 30, compact: !focused })}</div>`;
+    if (!$('.chat-log', body)) body.innerHTML = '<div class="chat-log"></div>';
+    renderLogInto(pane, $('.chat-log', body), sid, store, { tail: focused ? 0 : 30, compact: !focused }, body);
+    return;
   }
   body.scrollTop = body.scrollHeight;
+}
+
+// Render a session's events into a .chat-log. After the first full render the
+// log is only ever appended to or patched in place (new events, the streaming
+// bubble, tool status changes), so text selections survive streaming.
+function renderLogInto(holder, log, sid, store, opts, scroller) {
+  scroller = scroller || log;
+  const r = holder._rendered;
+  const toolSig = store.toolLive ? Object.keys(store.toolLive).map((k) => k + ':' + store.toolLive[k].length).join(',') : '';
+  const sess = state.sessions.get(sid);
+  const status = sess ? sess.status + ':' + (sess.pending_approval || '') : '';
+  const optsKey = `${opts.tail || 0}|${opts.compact ? 1 : 0}`;
+  const streaming = !!(store.streaming || store.live);
+  const stick = !r || nearBottom(scroller);
+  const incremental = r && r.sid === sid && r.store === store && r.optsKey === optsKey && !opts.tail && r.count <= store.list.length;
+  let changed = true;
+  if (!incremental) {
+    log.innerHTML = buildChatHtml(store, sid, opts);
+  } else {
+    changed = false;
+    if (store.list.length > r.count) {
+      changed = true;
+      for (const el of $$(':scope > .msg.streaming, :scope > .note.working', log)) el.remove();
+      log.insertAdjacentHTML('beforeend', buildChatHtml(store, sid, { from: r.count }));
+      for (const e of store.list.slice(r.count)) {
+        if (e.t === 'tool_result' || e.t === 'approval_result') {
+          const k = store.list.findIndex((x) => x.t === 'tool_call' && x.id === e.id);
+          if (k >= 0 && k < r.count) patchTool(log, store, sid, k, e.id);
+          if (e.t === 'approval_result') { const a = log.querySelector(`.approval[data-rid="${CSS.escape(e.id)}"]`); if (a) a.remove(); }
+        }
+      }
+    } else if (r.live !== store.live || r.streaming !== streaming || r.status !== status) {
+      changed = true;
+      let live = $(':scope > .msg.streaming', log);
+      if (streaming) {
+        if (!live) { const w = $(':scope > .note.working', log); if (w) w.remove(); log.insertAdjacentHTML('beforeend', trailerHtml(store, sid)); }
+        else if (r.live !== store.live) $('.md', live).innerHTML = renderMarkdown(store.live);
+      } else {
+        if (live) live.remove();
+        const w = $(':scope > .note.working', log); const want = trailerHtml(store, sid);
+        if (w && !want) w.remove(); else if (!w && want) log.insertAdjacentHTML('beforeend', want);
+      }
+    }
+    if (r.toolSig !== toolSig) {
+      changed = true;
+      const ids = new Set(Object.keys(store.toolLive || {}).concat(r.toolIds || []));
+      for (const cid of ids) { const k = store.list.findIndex((x) => x.t === 'tool_call' && x.id === cid); if (k >= 0) patchTool(log, store, sid, k, cid); }
+    }
+    if (r.status !== status) {
+      changed = true;
+      for (const el of $$('details.tool', log)) if ($('.res.pending', el)) { const cid = el.dataset.cid; const k = store.list.findIndex((x) => x.t === 'tool_call' && x.id === cid); if (k >= 0) patchTool(log, store, sid, k, cid); }
+      for (const a of $$('.approval', log)) if (!sess || sess.pending_approval !== a.dataset.rid) a.remove();
+      if (sess && sess.pending_approval && !log.querySelector(`.approval[data-rid="${CSS.escape(sess.pending_approval)}"]`)) {
+        const k = store.list.findIndex((x) => x.t === 'approval_request' && x.id === sess.pending_approval);
+        if (k >= 0) { const w = $(':scope > .msg.streaming, :scope > .note.working', log); const html = buildChatHtml(store, sid, { from: k, to: k + 1, noTail: true }); if (w) w.insertAdjacentHTML('beforebegin', html); else log.insertAdjacentHTML('beforeend', html); }
+      }
+    }
+  }
+  holder._rendered = { sig: 1, sid, store, optsKey, count: store.list.length, live: store.live, streaming, status, toolSig, toolIds: Object.keys(store.toolLive || {}) };
+  const jump = holder.querySelector ? holder.querySelector('.jump') : null;
+  if (stick) { scroller.scrollTop = scroller.scrollHeight; if (jump) jump.hidden = true; }
+  else if (jump && changed) jump.hidden = false;
+}
+function patchTool(log, store, sid, k, cid) {
+  const el = log.querySelector(`details.tool[data-cid="${CSS.escape(cid)}"]`); if (!el) return;
+  const wasOpen = el.open;
+  const tmp = document.createElement('div'); tmp.innerHTML = buildChatHtml(store, sid, { from: k, to: k + 1, noTail: true });
+  const nel = tmp.firstElementChild; if (!nel) return;
+  if (wasOpen) nel.open = true;
+  el.replaceWith(nel);
 }
 
 function wirePane(pane, sid) {
@@ -692,7 +785,7 @@ async function handleAction(el, sid) {
       case 'merge': if (await confirmDialog(`Merge branch ${s.worktree.branch} into ${s.project.name}?`, 'Uncommitted changes in the worktree are committed first.')) { const r = await request('merge', { sid }); toast(r.message || 'merged', r.ok === false ? 'err' : 'ok'); } break;
       case 'pr': { const r = await request('pr', { sid }); if (r.url) { toast('PR opened: ' + r.url, 'ok'); window.open(r.url, '_blank'); } else toast(r.message || 'PR created', 'ok'); break; }
       case 'discard': if (await confirmDialog(`Discard all work in ${s.worktree.branch}?`, 'The worktree and branch are deleted. This cannot be undone.')) { await request('discard', { sid }); toast('discarded', 'warn'); } break;
-      case 'open-chat': state.sid = sid; localStorage.setItem('kcoder.sid', sid); setView('chat'); break;
+      case 'open-chat': assignPane(state.layout.focus, sid); setView('chat'); break;
       case 'export': await exportChat(sid); break;
       case 'archive': await request('archive', { sid }); if (state.focus === sid) focusPane(null); break;
       case 'new': openNewSession(); break;
@@ -704,7 +797,7 @@ async function handleAction(el, sid) {
         break;
       }
       case 'fork': { const msg = el.closest('.msg-user'); const r = await request('fork', { sid, turn: Number(msg.dataset.turn) }); toast('forked → ' + r.session.name, 'ok'); state.sid = r.session.id; loadEvents(r.session.id, -1); break; }
-      case 'copy': { const msg = el.closest('.msg-user'); navigator.clipboard.writeText($('.bubble', msg).textContent); toast('copied'); break; }
+      case 'copy': { const msg = el.closest('.msg'); copyMessage(sid, msg ? Number(msg.dataset.i) : -1, msg); break; }
     }
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -748,9 +841,15 @@ function renderSidebar() {
   }).join('') || '<div class="hit">no chats yet - press + to start one</div>';
 }
 function chatItemHtml(c) {
-  const st = c.archived ? 'archived' : c.status;
-  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}" data-sid="${c.id}" title="${esc(c.name)} · ${esc(c.model || '')}"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span><span class="age">${age(c.last_activity)}</span></div>`;
+  const live = state.sessions.get(c.id);
+  const st = c.archived ? 'archived' : (live ? live.status : c.status);
+  const label = st === 'working' ? 'running' : st === 'waiting' ? (live && live.pending_approval ? 'needs approval' : 'needs you') : st === 'error' ? 'error' : st === 'idle' && live ? 'idle' : '';
+  const inPane = state.layout.panes.indexOf(c.id);
+  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span></div>`;
 }
+$('#projects').addEventListener('dragstart', (e) => { const item = e.target.closest('.chat-item[data-sid]'); if (!item) return; state.dragChat = item.dataset.sid; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', item.dataset.sid); });
+$('#projects').addEventListener('dragend', () => { state.dragChat = null; for (const p of $$('.cpane')) p.classList.remove('drop'); });
+$('#btn-split').addEventListener('click', () => splitAdd(null));
 
 $('#projects').addEventListener('click', async (e) => {
   const clear = e.target.closest('[data-clear-search]'); if (clear) { state.searchResults = null; $('#search').value = ''; renderSidebar(); return; }
@@ -772,10 +871,12 @@ $('#search').addEventListener('input', () => {
 $('#btn-new-chat').addEventListener('click', () => openNewSession());
 
 async function openChat(sid) {
-  state.sid = sid; localStorage.setItem('kcoder.sid', sid);
   state.events.delete(sid);
-  await loadEvents(sid, -1);      // resumes archived chats too
-  renderSidebar(); renderTitlebars(); renderChatLog(); renderTermLog(); renderWall();
+  const store = await loadEvents(sid, -1);      // resumes archived chats too
+  if (!store) return;
+  if (state.view === 'chat') { assignPane(state.layout.focus, sid); return; }
+  state.sid = sid; localStorage.setItem('kcoder.sid', sid);
+  renderSidebar(); renderTitlebars(); renderTermLog(); renderWall();
   focusComposer();
 }
 
@@ -809,27 +910,17 @@ function renderTitlebars() {
     `<select data-act="model" title="model"></select>` +
     `<button data-act="interrupt" title="Esc" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■</button>` +
     `<button data-act="export" title="export markdown">⤓</button><button data-act="menu" title="more">⋯</button>`;
-  for (const id of ['#chat-title', '#term-titlebar']) {
+  for (const id of ['#term-titlebar']) {
     const el = $(id); el.innerHTML = html;
     if (s) { $('select[data-act="trust"]', el).value = s.trust || 'read'; fillModelSelect($('select[data-act="model"]', el), s); }
   }
 }
-for (const id of ['#chat-title', '#term-titlebar']) {
+for (const id of ['#term-titlebar']) {
   $(id).addEventListener('click', (e) => { const b = e.target.closest('button[data-act]'); if (!b || !state.sid) return; if (b.dataset.act === 'menu') chatMenu(state.sid); else handleAction(b, state.sid); });
   $(id).addEventListener('change', (e) => { const s = e.target.closest('select[data-act]'); if (s && state.sid) handleAction(s, state.sid); });
 }
 
 function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 80; }
-function renderChatLog() {
-  if (state.view !== 'chat') return;
-  const log = $('#chat-log');
-  if (!state.sid) { log.innerHTML = '<div class="empty"><p>No chat selected.</p></div>'; ensureComposer('#chat-composer', null); return; }
-  const store = state.events.get(state.sid) || { list: [], live: '' };
-  const stick = nearBottom(log);
-  log.innerHTML = buildChatHtml(store, state.sid, {});
-  if (stick) log.scrollTop = log.scrollHeight;
-  ensureComposer('#chat-composer', state.sid, false);
-}
 function renderTermLog() {
   if (state.view !== 'terminal') return;
   const log = $('#term-log');
@@ -840,7 +931,7 @@ function renderTermLog() {
   if (stick) log.scrollTop = log.scrollHeight;
   ensureComposer('#term-composer', state.sid, true);
 }
-for (const id of ['#chat-log', '#term-log']) {
+for (const id of ['#term-log']) {
   $(id).addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]'); if (b && state.sid) { handleAction(b, state.sid); return; }
     if (e.target.dataset.copy) copyCode(e.target);
@@ -853,8 +944,9 @@ function ensureComposer(slotSel, sid, termStyle) {
   slot.innerHTML = ''; slot.dataset.sid = sid; mountComposer(slot, sid, termStyle);
 }
 function focusComposer() {
-  const view = $('#view-' + state.view);
-  const ta = view && view.querySelector('.composer textarea:not([hidden])');
+  let ta;
+  if (state.view === 'chat') { const p = $$('#split .cpane')[state.layout.focus]; ta = p && !p.hidden ? $('.composer textarea', p) : null; }
+  else { const view = $('#view-' + state.view); ta = view && view.querySelector('.composer textarea:not([hidden])'); }
   if (ta && !ta.closest('[hidden]')) ta.focus();
 }
 
@@ -871,13 +963,14 @@ function mountComposer(slot, sid, termStyle) {
   const atts = $('.attachments', form);
   const comp = { sid, form, ta, menu, chips, atts, pastes: new Map(), images: [], menuItems: [], menuSel: 0, menuKind: null, histIdx: -1, draft: '' };
   if (termStyle) $('.prompt-label', form).hidden = false; else $('.prompt-label', form).hidden = true;
+  if (slot.closest('.cpane')) ta.placeholder = 'Message kcoder…  (Enter sends)';
   form._comp = comp;
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + 'px'; };
   ta.addEventListener('input', () => { grow(); updateMenu(comp); });
   ta.addEventListener('keydown', (e) => onComposerKey(e, comp));
   ta.addEventListener('paste', (e) => onPaste(e, comp));
-  ta.addEventListener('drop', (e) => { const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/')); if (files.length) { e.preventDefault(); files.forEach((f) => addImage(comp, f)); } });
-  ta.addEventListener('dragover', (e) => e.preventDefault());
+  form.addEventListener('drop', (e) => { if (state.dragChat) return; const files = Array.from(e.dataTransfer.files || []); if (files.length) { e.preventDefault(); e.stopPropagation(); addFiles(comp, files); } });
+  form.addEventListener('dragover', (e) => { if (!state.dragChat) e.preventDefault(); });
   form.addEventListener('submit', (e) => { e.preventDefault(); submitComposer(comp); });
   $('.stop', form).addEventListener('click', () => request('interrupt', { sid }).catch(() => {}));
   menu.addEventListener('mousedown', (e) => { const it = e.target.closest('.item'); if (it) { e.preventDefault(); comp.menuSel = Number(it.dataset.i); applyMenu(comp); } });
@@ -939,24 +1032,38 @@ function onPaste(e, comp) {
   const lines = text.split(/\r\n|\r|\n/).length;
   if (lines >= 3 || text.length >= 400) {
     e.preventDefault();
-    const n = comp.pastes.size + 1;
-    comp.pastes.set(n, { text, lines, expanded: false });
-    insertAtCursor(comp.ta, `[Pasted #${n} · ${lines} lines]`);
-    renderChips(comp);
+    addChip(comp, text, lines, null);
+  }
+}
+let chipSeq = 0;
+function addChip(comp, text, lines, name) {
+  const n = ++chipSeq;
+  const tag = name ? `[File ${name} · ${lines} lines]` : `[Pasted #${n} · ${lines} lines]`;
+  comp.pastes.set(n, { text, lines, expanded: false, tag, name });
+  insertAtCursor(comp.ta, tag);
+  renderChips(comp);
+}
+function addFiles(comp, files) {
+  for (const f of files) {
+    if (f.type.startsWith('image/')) { addImage(comp, f); continue; }
+    if (f.size > 2 * 1024 * 1024) { toast(`${f.name}: too big to attach (2 MB max)`, 'warn'); continue; }
+    const reader = new FileReader();
+    reader.onload = () => { const text = String(reader.result || ''); if (/[\x00-\x08\x0E-\x1F]/.test(text.slice(0, 2000))) { toast(`${f.name}: not a text file`, 'warn'); return; } const body = `--- ${f.name} ---\n${text}`; addChip(comp, body, text.split(/\r\n|\r|\n/).length, f.name); };
+    reader.readAsText(f);
   }
 }
 function insertAtCursor(ta, s) { const a = ta.selectionStart, b = ta.selectionEnd; ta.value = ta.value.slice(0, a) + s + ta.value.slice(b); ta.selectionStart = ta.selectionEnd = a + s.length; ta.dispatchEvent(new Event('input')); }
 function renderChips(comp) {
   comp.chips.hidden = comp.pastes.size === 0;
-  comp.chips.innerHTML = Array.from(comp.pastes.entries()).map(([n, p]) => `<span class="chip${p.expanded ? ' expanded' : ''}" data-n="${n}" title="click to expand into the message">[Pasted #${n} · ${p.lines} lines]<span class="x" title="remove">✕</span></span>`).join('');
+  comp.chips.innerHTML = Array.from(comp.pastes.entries()).map(([n, p]) => `<span class="chip${p.expanded ? ' expanded' : ''}" data-n="${n}" title="click to expand into the message">${esc(p.tag)}<span class="x" title="remove">✕</span></span>`).join('');
 }
 function expandChip(comp, n) {
   const p = comp.pastes.get(n); if (!p) return;
-  const tag = `[Pasted #${n} · ${p.lines} lines]`;
+  const tag = p.tag;
   if (comp.ta.value.includes(tag)) { comp.ta.value = comp.ta.value.replace(tag, p.text); p.expanded = true; comp.pastes.delete(n); comp.ta.dispatchEvent(new Event('input')); renderChips(comp); }
 }
-function removeChip(comp, n) { const p = comp.pastes.get(n); if (!p) return; comp.ta.value = comp.ta.value.replace(`[Pasted #${n} · ${p.lines} lines]`, ''); comp.pastes.delete(n); comp.ta.dispatchEvent(new Event('input')); renderChips(comp); }
-function expandAll(comp, text) { for (const [n, p] of comp.pastes) text = text.split(`[Pasted #${n} · ${p.lines} lines]`).join(p.text); return text; }
+function removeChip(comp, n) { const p = comp.pastes.get(n); if (!p) return; comp.ta.value = comp.ta.value.replace(p.tag, ''); comp.pastes.delete(n); comp.ta.dispatchEvent(new Event('input')); renderChips(comp); }
+function expandAll(comp, text) { for (const [, p] of comp.pastes) text = text.split(p.tag).join(p.text); return text; }
 
 function addImage(comp, file) {
   if (!file) return;
@@ -1020,11 +1127,16 @@ async function submitComposer(comp) {
   // @file references: attach the file contents so the model sees them
   const refs = Array.from(text.matchAll(/(?:^|\s)@([^\s@]+)/g)).map((m) => m[1]);
   if (refs.length) text += '\n\n(referenced files: ' + refs.map((r) => `${(s && s.project && s.project.path) || ''}/${r}`).join(', ') + ' - read them with read_file as needed)';
+  const targets = (state.broadcast && state.view === 'chat' && comp.form.closest('.cpane')) ? Array.from(new Set(state.layout.panes.filter(Boolean))) : [sid];
   try {
-    const busy = s && (s.status === 'working' || s.status === 'waiting');
-    const r = await request('send', { sid, text, images: comp.images, queue_if_busy: busy });
-    historyFor(sid).push(text);
-    if (r.queued) toast(`queued as follow-up #${r.position}`, 'ok');
+    for (const t of targets) {
+      const ts = state.sessions.get(t);
+      const busy = ts && (ts.status === 'working' || ts.status === 'waiting');
+      const r = await request('send', { sid: t, text, images: comp.images, queue_if_busy: busy });
+      historyFor(t).push(text);
+      if (r.queued) toast(`${ts ? ts.name + ': ' : ''}queued as follow-up #${r.position}`, 'ok');
+    }
+    if (targets.length > 1) toast(`sent to ${targets.length} panes`, 'ok');
     resetComposer(comp);
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -1125,6 +1237,8 @@ function helpDialog() {
     ['n', 'new session'], ['a', 'approval inbox'], ['y / n', 'approve / decline (inbox or focused pane)'], ['v', 'cycle pane view: chat → terminal → shell'],
     ['alt+1 / 2 / 3', 'wall · chat · terminal view'], ['⌘K', 'command palette'], ['p', 'pin focused session to this window'], ['?', 'this help'],
     ['enter', 'send'], ['shift+enter', 'newline'], ['↑', 'previous prompt'], ['/', 'slash commands'], ['@', 'reference a project file'], ['paste', 'never submits; big pastes become chips'],
+    ['⌘\\', 'split: add a pane (up to 3)'], ['⌘1 / 2 / 3', 'focus pane'], ['⌘⇧W', 'close pane'], ['⌘⇧↩', 'pop out the pane / back to the grid'], ['⌃⌘F', 'full screen'],
+    ['⌘F', 'find in this session'], ['⌘⇧F', 'search across sessions'], ['⌘A', 'select the whole transcript'], ['⌘C', 'copy selection as clean text'], ['alt+4', 'stats view'],
   ];
   infoDialog('keyboard', `<div class="help-grid">${rows.map(([k, v]) => `<kbd>${esc(k)}</kbd><span>${esc(v)}</span>`).join('')}</div>`);
 }
@@ -1218,7 +1332,7 @@ async function openNewSession(pre = {}) {
     const fields = { cwd: spec, provider: provSel.value, model, trust: $('#ns-trust', d).value, name: $('#ns-name', d).value.trim() || undefined, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked };
     if (/^(https?:\/\/github\.com\/|git@github\.com:)?[\w.-]+\/[\w.-]+\/?$/.test(spec) && !spec.startsWith('/') && !spec.startsWith('~') && !spec.startsWith('.')) status.textContent = 'cloning ' + spec + '…';
     $('[data-x="ok"]', d).disabled = true;
-    try { const r = await request('create', fields); closeDialog(); state.repoCache = null; state.sid = r.session.id; localStorage.setItem('kcoder.sid', r.session.id); loadEvents(r.session.id, -1); if (state.view === 'wall') focusPane(r.session.id); toast('started ' + r.session.name + ' in ' + shortHome(r.session.cwd), 'ok'); }
+    try { const r = await request('create', fields); closeDialog(); state.repoCache = null; state.sid = r.session.id; localStorage.setItem('kcoder.sid', r.session.id); loadEvents(r.session.id, -1); if (state.view === 'wall') focusPane(r.session.id); else if (state.view === 'chat') assignPane(pre.pane != null ? pre.pane : state.layout.focus, r.session.id); toast('started ' + r.session.name + ' in ' + shortHome(r.session.cwd), 'ok'); }
     catch (e) { toast(e.message, 'err'); status.textContent = e.message; $('[data-x="ok"]', d).disabled = false; }
   };
   d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; b.dataset.x === 'ok' ? submit() : closeDialog(); });
@@ -1228,7 +1342,9 @@ async function openNewSession(pre = {}) {
 // command palette
 function paletteItems() {
   const items = [
-    ['new session', () => openNewSession(), 'n'], ['connect your AI (sign in to a provider)', () => setupDialog()], ['approval inbox', openInbox, 'a'], ['cycle waiting sessions', cycleWaiting, 'w'],
+    ['new session', () => openNewSession(), 'n'], ['connect your AI (sign in to a provider)', () => setupDialog()], ['approval inbox', openInbox, 'a'],
+    ['split: add a pane', () => { if (state.view !== 'chat') setView('chat'); splitAdd(null); }, '⌘\\'], ['pop out / restore pane', () => toggleZoom(), '⌘⇧↩'], ['full screen', toggleFullscreen, '⌃⌘F'],
+    ['stats view', () => setView('stats'), 'alt+4'], ['toggle broadcast (send to all panes)', toggleBroadcast], ['cycle waiting sessions', cycleWaiting, 'w'],
     ['wall view', () => setView('wall'), 'alt+1'], ['chat view', () => setView('chat'), 'alt+2'], ['terminal view', () => setView('terminal'), 'alt+3'],
     ['toggle sound', toggleSound], ['enable browser notifications', () => Notification.requestPermission().then((p) => toast('notifications: ' + p))],
     ['set default trust for new sessions', async () => { const v = await chooseDialog('Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']]); if (v) { const r = await request('config', { default_trust: v }); state.config = r.config; toast('default trust: ' + v, 'ok'); } }],
@@ -1335,10 +1451,22 @@ function ping(kind) {
 function notify(title, body, sid, kind) {
   ping(kind);
   toast(title + (body ? ' · ' + body : ''), kind === 'wait' ? 'warn' : kind === 'err' ? 'err' : 'ok');
-  if ('Notification' in window && Notification.permission === 'granted' && (document.hidden || !document.hasFocus())) {
-    try { const n = new Notification(title, { body, tag: sid, silent: true }); n.onclick = () => { window.focus(); if (state.view !== 'wall') setView('wall'); focusPane(sid); n.close(); }; } catch {}
+  const winFocused = document.hasFocus() && !document.hidden;
+  const focusedHere = winFocused && ((state.view === 'chat' && focusedSid() === sid) || (state.view === 'wall' && state.focus === sid));
+  if (!focusedHere) {
+    const api = window.pywebview && window.pywebview.api;
+    if (api && api.notify) { try { api.notify(title, body || ''); } catch {} }
+    else if ('Notification' in window && Notification.permission === 'granted') {
+      try { const n = new Notification(title, { body, tag: sid, silent: true }); n.onclick = () => { window.focus(); if (state.view === 'chat') assignPane(state.layout.focus, sid); else { if (state.view !== 'wall') setView('wall'); focusPane(sid); } n.close(); }; } catch {}
+    } else if (!('Notification' in window)) request('notify', { title, body, sid }).catch(() => {});
   }
   renderHeader();
+}
+function toggleBroadcast() { state.broadcast = !state.broadcast; localStorage.setItem('kcoder.broadcast', state.broadcast ? 'on' : 'off'); renderHeader(); toast(state.broadcast ? 'broadcast on: prompts go to every open pane' : 'broadcast off', state.broadcast ? 'warn' : ''); }
+function toggleFullscreen() {
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api.toggle_fullscreen) { api.toggle_fullscreen(); return; }
+  if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => toast('full screen is not available here', 'warn'));
 }
 function toggleSound() { state.sound = !state.sound; localStorage.setItem('kcoder.sound', state.sound ? 'on' : 'off'); renderHeader(); toast(state.sound ? 'sound on' : 'sound off'); }
 
@@ -1347,13 +1475,26 @@ function toggleSound() { state.sound = !state.sound; localStorage.setItem('kcode
 // ----------------------------------------------------------------------
 document.addEventListener('keydown', (e) => {
   const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName) || (e.target && e.target.isContentEditable);
+  const mod = e.metaKey || e.ctrlKey;
+  const key = (e.key || '').toLowerCase();
   if (state.dialog === 'inbox') { inboxKey(e); return; }
   if (state.dialog && e.key === 'Escape') { closeDialog(); return; }
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); state.dialog ? closeDialog() : openPalette(); return; }
-  if (e.altKey && ['1', '2', '3'].includes(e.key)) { e.preventDefault(); setView(['wall', 'chat', 'terminal'][Number(e.key) - 1]); return; }
+  if (mod && key === 'k') { e.preventDefault(); state.dialog ? closeDialog() : openPalette(); return; }
+  if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); setView(['wall', 'chat', 'terminal', 'stats'][Number(e.key) - 1]); return; }
+  if (e.metaKey && e.ctrlKey && key === 'f') { e.preventDefault(); toggleFullscreen(); return; }
+  if (mod && !state.dialog) {
+    if (!e.shiftKey && !e.altKey && ['1', '2', '3'].includes(e.key) && state.view === 'chat') { e.preventDefault(); splitFocus(Number(e.key) - 1); return; }
+    if (e.key === '\\') { e.preventDefault(); if (state.view !== 'chat') setView('chat'); splitAdd(null); return; }
+    if (e.shiftKey && key === 'w') { e.preventDefault(); if (state.view === 'chat') splitClose(state.layout.focus); return; }
+    if (e.shiftKey && e.key === 'Enter') { e.preventDefault(); if (state.view !== 'chat') setView('chat'); toggleZoom(); return; }
+    if (e.shiftKey && key === 'f') { e.preventDefault(); if (state.view !== 'chat') setView('chat'); const si = $('#search'); si.focus(); si.select(); return; }
+    if (!e.shiftKey && key === 'f' && state.view === 'chat') { e.preventDefault(); const p = $$('#split .cpane')[state.layout.focus]; if (p) openFind(p); return; }
+    if (key === 'a' && !inField) { const log = focusedLog(); if (log) { e.preventDefault(); const r = document.createRange(); r.selectNodeContents(log); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); return; } }
+  }
+  if (e.key === 'Escape' && state.view === 'chat' && !state.dialog) { const p = $$('#split .cpane')[state.layout.focus]; if (p && p._find && !inField) { closeFind(p); return; } }
   if (inField || state.dialog) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const focusedSess = state.focus && state.sessions.get(state.focus);
+  const focusedSess = state.view === 'chat' ? state.sessions.get(focusedSid()) : (state.focus && state.sessions.get(state.focus));
   switch (e.key) {
     case 'Escape': if (state.focus) { focusPane(null); } break;
     case 'n': openNewSession(); break;
@@ -1377,11 +1518,344 @@ $('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
 $('#btn-palette').addEventListener('click', openPalette);
 $('#btn-sound').addEventListener('click', toggleSound);
+$('#btn-broadcast').addEventListener('click', toggleBroadcast);
+$('#stats').addEventListener('click', (e) => { const b = e.target.closest('[data-metric]'); if (b) openStats(b.dataset.metric); });
+if (window.addEventListener) window.addEventListener('pywebviewready', () => document.body.classList.add('native'));
 $('#view-wall').addEventListener('click', (e) => { const b = e.target.closest('[data-action="new"]'); if (b) openNewSession(); });
 $('#tagline').textContent = ['ten agents, one keyboard.', 'ship it before the coffee cools.', 'parallel by default.', 'less typing, more shipping.', 'every session earns its keep.', 'small commits, big days.'][Math.floor(Math.random() * 6)];
 document.addEventListener('click', () => { if ('Notification' in window && Notification.permission === 'default' && !localStorage.getItem('kcoder.askedNotif')) { localStorage.setItem('kcoder.askedNotif', '1'); Notification.requestPermission(); } }, { once: true });
 setInterval(() => { renderHeader(); if (state.view === 'wall') for (const p of $$('.pane')) { const s = state.sessions.get(p.dataset.sid); if (s) renderPaneChrome(p, s, state.order.indexOf(s.id) + 1); } }, 15000);
 window.addEventListener('resize', () => { for (const sid of state.shells.keys()) fitShell(sid); });
+
+// ----------------------------------------------------------------------
+// split view: 1 to 3 session panes side by side, each fully independent
+// ----------------------------------------------------------------------
+function saveLayout() { localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); }
+function paneSid(i) { return state.layout.panes[i] || null; }
+function focusedSid() { return paneSid(state.layout.focus); }
+function syncSid() { const sid = focusedSid(); if (sid) { state.sid = sid; localStorage.setItem('kcoder.sid', sid); } }
+function focusedLog() {
+  if (state.view === 'chat') { const p = $$('#split .cpane')[state.layout.focus]; return p && !p.hidden ? $('.chat-log', p) : null; }
+  if (state.view === 'wall' && state.focus) { const p = $(`.pane[data-sid="${state.focus}"]`); return p ? $('.chat-log', p) || $('.pane-body', p) : null; }
+  if (state.view === 'terminal') return $('#term-log');
+  return null;
+}
+function assignPane(i, sid) {
+  i = Math.max(0, Math.min(i, state.layout.panes.length - 1));
+  state.layout.panes[i] = sid || null; state.layout.focus = i; saveLayout(); syncSid();
+  if (sid) {
+    const st = state.events.get(sid);
+    if (!st || !st.loaded) loadEvents(sid, -1);
+    const s = state.sessions.get(sid); if (s && s.project && s.project.git && !state.gitInfo.has(sid)) gitStatus(sid, false).catch(() => {});
+  }
+  renderSplit(); renderSidebar(); renderTitlebars(); focusComposer();
+}
+function splitAdd(sid) {
+  if (state.layout.panes.length >= 3) { toast('up to 3 panes side by side', 'warn'); return; }
+  state.layout.panes.push(sid || null); state.layout.focus = state.layout.panes.length - 1; state.layout.zoom = null; saveLayout();
+  if (sid) loadEvents(sid, -1);
+  renderSplit(); renderSidebar();
+  if (!sid) pickSession(state.layout.focus);
+}
+function splitClose(i) {
+  if (state.layout.panes.length <= 1) { toast('the last pane stays open', 'warn'); return; }
+  state.layout.panes.splice(i, 1); state.layout.focus = Math.min(state.layout.focus, state.layout.panes.length - 1); state.layout.zoom = null; saveLayout(); syncSid();
+  renderSplit(); renderSidebar(); focusComposer();
+}
+function splitFocus(i) { if (i < 0 || i >= state.layout.panes.length) return; state.layout.focus = i; if (state.layout.zoom != null) state.layout.zoom = i; saveLayout(); syncSid(); renderSplit(); renderSidebar(); renderTitlebars(); focusComposer(); }
+function toggleZoom(i) { const idx = i == null ? state.layout.focus : i; state.layout.zoom = state.layout.zoom === idx ? null : idx; state.layout.focus = idx; saveLayout(); renderSplit(); focusComposer(); }
+async function pickSession(i) {
+  const items = []; const seen = new Set();
+  const mark = (s) => (s.status === 'working' ? '● ' : s.status === 'waiting' ? '◐ ' : '○ ');
+  for (const s of visibleSessions()) { seen.add(s.id); items.push([s.id, `${mark(s)}${s.title || s.name} · ${(s.project || {}).name || shortHome(s.cwd)}`]); }
+  for (const c of state.chats) if (!seen.has(c.id) && !c.archived) { seen.add(c.id); items.push([c.id, `○ ${c.title || c.name} · ${(c.project || {}).name || ''}`]); }
+  items.push(['__new', '+ new session']);
+  if (state.layout.panes[i]) items.push(['__empty', '(empty this pane)']);
+  const v = await chooseDialog(`Session for pane ${i + 1}`, items);
+  if (!v) return;
+  if (v === '__new') { openNewSession({ pane: i }); return; }
+  assignPane(i, v === '__empty' ? null : v);
+}
+
+function renderSplit() {
+  const split = $('#split'); if (!split) return;
+  const L = state.layout;
+  if (!Array.isArray(L.panes) || !L.panes.length) L.panes = [null];
+  L.panes = L.panes.slice(0, 3);
+  L.focus = Math.max(0, Math.min(L.focus || 0, L.panes.length - 1));
+  if (L.zoom != null && L.zoom >= L.panes.length) L.zoom = null;
+  split.dataset.n = L.panes.length;
+  split.classList.toggle('zoomed', L.zoom != null);
+  while (split.children.length > L.panes.length) split.lastElementChild.remove();
+  while (split.children.length < L.panes.length) { const el = $('#tpl-cpane').content.querySelector('.cpane').cloneNode(true); split.appendChild(el); wireCpane(el); }
+  L.panes.forEach((sid, i) => {
+    const pane = split.children[i];
+    pane.dataset.pane = i;
+    if (pane.dataset.sid !== (sid || '')) { pane.dataset.sid = sid || ''; $('.composer-slot', pane).innerHTML = ''; $('.chat-log', pane).innerHTML = ''; pane._rendered = null; if (pane._find) closeFind(pane, true); }
+    pane.classList.toggle('focused', i === L.focus);
+    pane.classList.toggle('zoom', L.zoom === i);
+    pane.hidden = L.zoom != null && L.zoom !== i;
+    renderCpaneBar(pane); renderCpaneLog(pane);
+    const slot = $('.composer-slot', pane);
+    if (sid) { if (!slot.firstChild) mountComposer(slot, sid, false); else updateComposerState(slot, sid); } else slot.innerHTML = '';
+  });
+}
+function renderSplitBars() { if (state.view !== 'chat') return; for (const p of $$('#split .cpane')) { renderCpaneBar(p); const slot = $('.composer-slot', p); if (p.dataset.sid && slot.firstChild) updateComposerState(slot, p.dataset.sid); } }
+
+function renderCpaneBar(pane) {
+  const sid = pane.dataset.sid; const s = sid ? (state.sessions.get(sid) || state.chats.find((c) => c.id === sid)) : null;
+  const bar = $('.cpane-bar', pane);
+  $('.dot', bar).className = 'dot ' + (s ? (s.archived ? 'archived' : s.status) : '');
+  $('.picker', bar).textContent = s ? (s.title && s.title !== s.name ? `${s.name} · ${s.title}` : s.name) : 'pick a session ▾';
+  $('.picker', bar).title = s ? `${s.name}${s.title ? ' · ' + s.title : ''}  (click to switch sessions)` : 'Pick a session for this pane';
+  $('.meta', bar).textContent = s ? `${(s.project || {}).name || shortHome(s.cwd)}${s.worktree ? ' @ ' + s.worktree.branch : ''}` : '';
+  $('.ctx', bar).textContent = s ? `ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? 'plan' : fmtUsd((s.usage || {}).cost || 0)}` : '';
+  for (const el of $$('select[data-act], button[data-act]', bar)) el.disabled = !s;
+  if (s) {
+    const ts = $('select[data-act="trust"]', bar); if (ts.value !== (s.trust || 'read')) ts.value = s.trust || 'read';
+    const ms = $('select[data-act="model"]', bar); if (ms.dataset.for !== sid + ':' + s.model + ':' + s.provider) { fillModelSelect(ms, s); ms.dataset.for = sid + ':' + s.model + ':' + s.provider; }
+    $('button[data-act="interrupt"]', bar).disabled = !(s.status === 'working' || s.status === 'waiting');
+  }
+  $('[data-pane="zoom"]', bar).textContent = state.layout.zoom != null ? '⤡' : '⤢';
+  $('[data-pane="zoom"]', bar).hidden = state.layout.panes.length <= 1 && state.layout.zoom == null;
+  $('[data-pane="close"]', bar).hidden = state.layout.panes.length <= 1;
+}
+
+function renderCpaneLog(pane) {
+  const sid = pane.dataset.sid; const log = $('.chat-log', pane);
+  if (!sid) { log.innerHTML = '<div class="empty"><p>No session in this pane.</p><p><button class="primary" data-pane="pick">Pick a session</button> or drag one from the sidebar.</p></div>'; pane._rendered = null; $('.jump', pane).hidden = true; return; }
+  const store = state.events.get(sid) || { list: [], live: '', streaming: false };
+  renderLogInto(pane, log, sid, store, {}, log);
+  if (pane._find && pane._find.q) runFind(pane, false);
+}
+
+function wireCpane(pane) {
+  const idx = () => Number(pane.dataset.pane);
+  pane.addEventListener('mousedown', () => {
+    if (state.layout.focus === idx()) return;
+    state.layout.focus = idx(); saveLayout(); syncSid();
+    for (const p of $$('#split .cpane')) p.classList.toggle('focused', p === pane);
+    renderSidebar(); renderTitlebars();
+  }, true);
+  const bar = $('.cpane-bar', pane);
+  bar.addEventListener('click', (e) => {
+    const sid = pane.dataset.sid;
+    const pb = e.target.closest('[data-pane]');
+    if (pb) { const a = pb.dataset.pane; if (a === 'zoom') toggleZoom(idx()); else if (a === 'close') splitClose(idx()); else if (a === 'menu') paneMenu(pane); else if (a === 'find') openFind(pane); return; }
+    if (e.target.closest('.picker')) { pickSession(idx()); return; }
+    const b = e.target.closest('button[data-act]'); if (b && sid) handleAction(b, sid);
+  });
+  bar.addEventListener('change', (e) => { const s = e.target.closest('select[data-act]'); if (s && pane.dataset.sid) handleAction(s, pane.dataset.sid); });
+  const log = $('.chat-log', pane);
+  log.addEventListener('click', (e) => {
+    const sid = pane.dataset.sid;
+    if (e.target.closest('[data-pane="pick"]')) { pickSession(idx()); return; }
+    const b = e.target.closest('[data-act]'); if (b && sid) { handleAction(b, sid); return; }
+    if (e.target.dataset.copy) copyCode(e.target);
+  });
+  log.addEventListener('scroll', () => { if (nearBottom(log)) $('.jump', pane).hidden = true; });
+  $('.jump', pane).addEventListener('click', () => { log.scrollTop = log.scrollHeight; $('.jump', pane).hidden = true; });
+  const fb = $('.cpane-find', pane); const fin = $('input', fb);
+  fin.addEventListener('input', () => runFind(pane, true));
+  fin.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); stepFind(pane, e.shiftKey ? -1 : 1); } else if (e.key === 'Escape') { e.preventDefault(); closeFind(pane); } });
+  fb.addEventListener('click', (e) => { const b = e.target.closest('[data-find]'); if (!b) return; if (b.dataset.find === 'close') closeFind(pane); else stepFind(pane, b.dataset.find === 'next' ? 1 : -1); });
+  pane.addEventListener('dragover', (e) => { const files = e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'); if (state.dragChat || files) { e.preventDefault(); e.dataTransfer.dropEffect = state.dragChat ? 'move' : 'copy'; pane.classList.add('drop'); } });
+  pane.addEventListener('dragleave', (e) => { if (!pane.contains(e.relatedTarget)) pane.classList.remove('drop'); });
+  pane.addEventListener('drop', (e) => {
+    pane.classList.remove('drop');
+    if (state.dragChat) { e.preventDefault(); const sid = state.dragChat; state.dragChat = null; assignPane(idx(), sid); return; }
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length) { e.preventDefault(); const form = $('.composer', pane); if (form && form._comp) addFiles(form._comp, files); else toast('pick a session for this pane first', 'warn'); }
+  });
+}
+
+async function paneMenu(pane) {
+  const sid = pane.dataset.sid; const s = sid && state.sessions.get(sid);
+  const i = Number(pane.dataset.pane);
+  const items = [['pick', 'Switch session…'], ['find', 'Find in session  ⌘F'], ['zoom', state.layout.zoom != null ? 'Back to the grid  ⌘⇧↩' : 'Pop out this pane  ⌘⇧↩'], ['split', 'Add a pane  ⌘\\'], ['close', 'Close this pane  ⌘⇧W'], ['fullscreen', 'Full screen  ⌃⌘F']];
+  if (s) {
+    items.push(['model', `Model: ${s.model}`], ['trust', `Trust: ${s.trust}`]);
+    if (s.status === 'working' || s.status === 'waiting') items.push(['interrupt', 'Interrupt  esc']);
+    if (s.project && s.project.git) items.push(['git', 'Git status'], ['pull', 'Pull from remote']);
+    if (s.worktree) items.push(['merge', 'Merge into project'], ['pr', 'Open PR'], ['discard', 'Discard worktree']);
+    items.push(['queue', 'Add a follow-up task'], ['export', 'Export markdown'], ['rename', 'Rename title'], ['archive', 'Archive session']);
+  }
+  const v = await chooseDialog(`Pane ${i + 1}${s ? ' · ' + (s.title || s.name) : ''}`, items); if (!v) return;
+  try {
+    switch (v) {
+      case 'pick': pickSession(i); break;
+      case 'find': openFind(pane); break;
+      case 'zoom': toggleZoom(i); break;
+      case 'split': splitAdd(null); break;
+      case 'close': splitClose(i); break;
+      case 'fullscreen': toggleFullscreen(); break;
+      case 'model': { const prov = (state.providers || []).find((p) => p.id === s.provider); const m = await chooseDialog('Model', (prov ? prov.models : [s.model]).map((x) => [x, x]).concat([['__other', 'other model…']])); if (!m) return; let name = m; if (m === '__other') { name = await promptDialog('Model name', ''); if (!name) return; } await request('set', { sid, model: name }); break; }
+      case 'trust': { const t = await chooseDialog('Trust', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']]); if (t) await request('set', { sid, trust: t }); break; }
+      case 'rename': { const t = await promptDialog('Chat title', '', s.title || ''); if (t) await request('title', { sid, title: t }); break; }
+      default: handleAction({ dataset: { act: v } }, sid);
+    }
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// ----------------------------------------------------------------------
+// copying: clean text (markdown source for whole messages, fences kept)
+// ----------------------------------------------------------------------
+function copyMessage(sid, i, el) {
+  const store = state.events.get(sid);
+  let text = store && store.list[i] && store.list[i].text != null ? store.list[i].text : null;
+  if (text == null && el) text = domToText(el.querySelector('.md') || el.querySelector('.bubble') || el);
+  if (text == null) return;
+  navigator.clipboard.writeText(text).then(() => toast('copied'), () => toast('copy failed', 'err'));
+}
+function domToText(root) {
+  const BLOCK = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TR', 'BLOCKQUOTE', 'DETAILS', 'SUMMARY', 'TABLE', 'UL', 'OL', 'HR']);
+  let out = '';
+  const walk = (n) => {
+    if (n.nodeType === 3) { out += n.nodeValue; return; }
+    if (n.nodeType !== 1) return;
+    const cs = n.ownerDocument.defaultView ? getComputedStyle(n) : null;
+    if (n.matches && n.matches('button, .who, .actions, .copy, .copy-msg, [hidden]')) return;
+    if (cs && cs.userSelect === 'none') return;
+    if (n.tagName === 'BR') { out += '\n'; return; }
+    if (n.tagName === 'PRE') { const code = n.querySelector('code'); const lang = code && (code.className.match(/language-(\S+)/) || [])[1]; const body = (code || n).textContent.replace(/\n$/, ''); out += (out && !out.endsWith('\n') ? '\n' : '') + '```' + (lang || '') + '\n' + body + '\n```\n'; return; }
+    if (n.tagName === 'LI') { const ol = n.parentElement && n.parentElement.tagName === 'OL'; const k = ol ? Array.from(n.parentElement.children).indexOf(n) + 1 + '. ' : '- '; out += k; }
+    if (n.tagName === 'TD' || n.tagName === 'TH') { for (const c of n.childNodes) walk(c); out += '\t'; return; }
+    for (const c of n.childNodes) walk(c);
+    if (BLOCK.has(n.tagName) && !out.endsWith('\n')) out += '\n';
+    if ((n.tagName === 'P' || n.tagName === 'PRE' || /^H[1-6]$/.test(n.tagName)) && !out.endsWith('\n\n')) out += '\n';
+  };
+  walk(root);
+  return out.replace(/\n{3,}/g, '\n\n').trim();
+}
+document.addEventListener('copy', (e) => {
+  const sel = window.getSelection(); if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const anc = range.commonAncestorContainer; const ancEl = anc.nodeType === 1 ? anc : anc.parentElement;
+  if (!ancEl || ancEl.closest('textarea, input')) return;
+  const log = ancEl.closest('.chat-log, .term-log'); if (!log) return;
+  const sid = log.closest('[data-sid]') ? log.closest('[data-sid]').dataset.sid : state.sid;
+  const store = state.events.get(sid);
+  const parts = [];
+  const blocks = $$('.msg, .tool, .note, .approval', log);
+  if (!blocks.length) return;
+  for (const el of blocks) {
+    if (!range.intersectsNode(el)) continue;
+    const i = el.dataset.i;
+    const er = document.createRange(); er.selectNodeContents(el);
+    const whole = range.compareBoundaryPoints(Range.START_TO_START, er) <= 0 && range.compareBoundaryPoints(Range.END_TO_END, er) >= 0;
+    if (el.classList.contains('msg') && whole && store && i != null && store.list[i] && store.list[i].text != null) { parts.push(store.list[i].text); continue; }
+    const r = range.cloneRange();
+    if (r.compareBoundaryPoints(Range.START_TO_START, er) < 0) r.setStart(er.startContainer, er.startOffset);
+    if (r.compareBoundaryPoints(Range.END_TO_END, er) > 0) r.setEnd(er.endContainer, er.endOffset);
+    const frag = r.cloneContents(); const box = document.createElement('div'); box.appendChild(frag);
+    const t = domToText(box); if (t) parts.push(t);
+  }
+  if (!parts.length) return;
+  e.preventDefault(); e.clipboardData.setData('text/plain', parts.join('\n\n'));
+});
+
+// ----------------------------------------------------------------------
+// find in a pane (CSS custom highlights when the engine has them)
+// ----------------------------------------------------------------------
+const HAS_HL = typeof Highlight !== 'undefined' && typeof CSS !== 'undefined' && CSS.highlights;
+function openFind(pane) { const fb = $('.cpane-find', pane); fb.hidden = false; pane._find = pane._find || { q: '', ranges: [], cur: 0 }; const inp = $('input', fb); inp.focus(); inp.select(); if (inp.value) runFind(pane, false); }
+function closeFind(pane, silent) {
+  const fb = $('.cpane-find', pane); fb.hidden = true; pane._find = null; $('.count', fb).textContent = '';
+  if (HAS_HL) { CSS.highlights.delete('kc-find-' + pane.dataset.pane); CSS.highlights.delete('kc-cur-' + pane.dataset.pane); }
+  if (!silent) focusComposer();
+}
+function runFind(pane, reset) {
+  const fb = $('.cpane-find', pane); const q = $('input', fb).value; const f = pane._find || (pane._find = { q: '', ranges: [], cur: 0 });
+  f.q = q; f.ranges = [];
+  if (q) {
+    const log = $('.chat-log', pane); const ql = q.toLowerCase();
+    const walker = document.createTreeWalker(log, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement && n.parentElement.closest('button, .who, .actions') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    let n;
+    while ((n = walker.nextNode())) { const t = n.nodeValue.toLowerCase(); let p = t.indexOf(ql); while (p >= 0) { const r = document.createRange(); r.setStart(n, p); r.setEnd(n, p + q.length); f.ranges.push(r); p = t.indexOf(ql, p + q.length); } }
+  }
+  f.cur = reset ? 0 : Math.min(f.cur, Math.max(0, f.ranges.length - 1));
+  paintFind(pane);
+}
+function stepFind(pane, d) { const f = pane._find; if (!f || !f.ranges.length) return; f.cur = (f.cur + d + f.ranges.length) % f.ranges.length; paintFind(pane); }
+function paintFind(pane) {
+  const f = pane._find; if (!f) return; const fb = $('.cpane-find', pane); const k = pane.dataset.pane;
+  $('.count', fb).textContent = f.q ? (f.ranges.length ? `${f.cur + 1} of ${f.ranges.length}` : 'no matches') : '';
+  if (HAS_HL) { CSS.highlights.set('kc-find-' + k, new Highlight(...f.ranges)); CSS.highlights.set('kc-cur-' + k, new Highlight(...(f.ranges[f.cur] ? [f.ranges[f.cur]] : []))); }
+  const r = f.ranges[f.cur];
+  if (r) { const log = $('.chat-log', pane); const rect = r.getBoundingClientRect(); const lr = log.getBoundingClientRect(); if (rect.top < lr.top + 20 || rect.bottom > lr.bottom - 20) log.scrollTop += rect.top - lr.top - lr.height / 2; }
+}
+
+// ----------------------------------------------------------------------
+// stats view
+// ----------------------------------------------------------------------
+let statsData = null;
+function openStats(metric) { state.statsMetric = metric || null; statsData = null; setView('stats'); }
+const fmtDur = (sec) => { sec = Math.round(sec || 0); if (sec < 60) return sec + 's'; const m = Math.round(sec / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60); return `${h}h ${m % 60}m`; };
+const fmtDate = (d) => { if (!d) return ''; const t = new Date(d + 'T00:00:00'); return isNaN(t) ? d : t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + (t.getFullYear() !== new Date().getFullYear() ? ' ' + t.getFullYear() : ''); };
+async function renderStatsView(force) {
+  if (state.view !== 'stats') return;
+  const box = $('#stats-body');
+  if (force || !statsData || statsData.days !== state.statsDays) {
+    if (!statsData) box.innerHTML = '<div class="empty"><p>loading stats…</p></div>';
+    try { statsData = await request('stats_full', { days: state.statsDays }); } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
+    if (state.view !== 'stats') return;
+  }
+  const d = statsData; const S = d.summary; const m = state.statsMetric;
+  const metricCard = (key, title, pick, fmt) => `<div class="card${m === key ? ' hl' : ''}"><h3>${title}</h3><div class="big">${fmt(pick(S.today))}</div><div class="row"><span>7-day avg</span><b>${fmt(pick(S.avg7))}</b></div><div class="row"><span>30-day avg</span><b>${fmt(pick(S.avg30))}</b></div><div class="row"><span>all time${S.first_date ? ' (since ' + fmtDate(S.first_date) + ')' : ''}</span><b>${fmt(pick(S.all))}</b></div></div>`;
+  const summary = [
+    metricCard('tokens', 'tokens', (r) => r.total, fmtTokens),
+    metricCard('commits', 'commits', (r) => r.commits, (v) => (Number.isInteger(v) ? fmtInt(v) : v.toFixed(1))),
+    metricCard('sessions', 'sessions', (r) => r.sessions, (v) => (Number.isInteger(v) ? fmtInt(v) : v.toFixed(1))),
+    metricCard('active', 'active agent time', (r) => r.active_seconds, fmtDur),
+  ].join('');
+  // chart
+  const ser = d.series; const mx = Math.max(1, ...ser.map((r) => r.total)); const W = 900, H = 150, pad = 4; const bw = Math.max(2, (W - pad * 2) / Math.max(1, ser.length) - 2);
+  const bars = ser.map((r, i) => { const x = pad + i * ((W - pad * 2) / ser.length); const hi = Math.round(r.input / mx * (H - 20)); const ho = Math.round(r.output / mx * (H - 20)); return `<g><title>${r.date}: ${fmtInt(r.total)} tokens (${fmtInt(r.input)} in, ${fmtInt(r.output)} out)${r.commits ? ' · ' + r.commits + ' commits' : ''}</title><rect class="in" x="${x}" y="${H - 16 - hi}" width="${bw}" height="${hi}"></rect><rect class="out" x="${x}" y="${H - 16 - hi - ho}" width="${bw}" height="${ho}"></rect>${(ser.length <= 31 || i % 7 === 0) && (i === 0 || i === ser.length - 1 || i % Math.ceil(ser.length / 10) === 0) ? `<text x="${x}" y="${H - 4}">${fmtDate(r.date)}</text>` : ''}</g>`; }).join('');
+  const chart = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg><div class="legend"><span><i class="in"></i> tokens in</span><span><i class="out"></i> tokens out</span><span class="dim">peak ${fmtTokens(mx)} / day</span></div>`;
+  // breakdowns
+  const bd = (title, rows, keyLabel, extra) => `<div class="card"><h3>${title}</h3><div class="grid-wrap"><table class="grid"><thead><tr><th class="l">${keyLabel}</th>${extra ? extra.map((e) => `<th>${e[0]}</th>`).join('') : ''}<th>tokens</th><th>in</th><th>out</th><th>calls</th><th>sessions</th><th>cost</th></tr></thead><tbody>${rows.length ? rows.map((r) => `<tr><td class="l">${esc(r.key)}</td>${extra ? extra.map((e) => `<td>${e[1](r)}</td>`).join('') : ''}<td>${fmtTokens(r.total)}</td><td>${fmtTokens(r.input)}</td><td>${fmtTokens(r.output)}</td><td>${fmtInt(r.calls)}</td><td>${fmtInt(r.sessions)}</td><td>${r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost) + (r.cost ? ' est.' : '')}</td></tr>`).join('') : '<tr><td class="l" colspan="9">nothing in this range</td></tr>'}</tbody></table></div></div>`;
+  const top = `<div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens (${d.days} days)</h3><div class="grid-wrap"><table class="grid"><thead><tr><th class="l">session</th><th class="l">project</th><th class="l">model</th><th>tokens</th><th>turns</th><th>active</th><th>cost</th></tr></thead><tbody>${d.top_sessions.length ? d.top_sessions.map((r) => `<tr class="click" data-open="${esc(r.key)}" title="open in the focused pane"><td class="l">${esc(r.name || r.key)}${r.title && r.title !== r.name ? ' <span class="dim">· ' + esc(r.title) + '</span>' : ''}${r.archived ? ' <span class="badge archived">archived</span>' : ''}</td><td class="l">${esc(r.project || '')}</td><td class="l">${esc(r.model || '')}</td><td><b>${fmtTokens(r.total)}</b></td><td>${fmtInt(r.turns)}</td><td>${fmtDur(r.active_seconds)}</td><td>${r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost)}</td></tr>`).join('') : '<tr><td class="l" colspan="7">no usage in this range</td></tr>'}</tbody></table></div></div>`;
+  const ct = d.commit_totals;
+  const commits = `<div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions (${d.days} days) · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3><div class="grid-wrap tall"><table class="grid"><thead><tr><th class="l">when</th><th class="l">commit</th><th class="l">subject</th><th class="l">repo</th><th class="l">session</th><th>+</th><th>-</th><th class="l">state</th></tr></thead><tbody>${d.commits.length ? d.commits.map((c) => `<tr><td class="l" title="${new Date(c.ts * 1000).toLocaleString()}">${fmtDate(c.date)} ${new Date(c.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</td><td class="l">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="open on GitHub">${c.sha.slice(0, 7)} ↗</a>` : `<code>${c.sha.slice(0, 7)}</code>`}</td><td class="l wrap">${esc(c.subject)}</td><td class="l">${esc(c.project || '')}${c.branch ? ' <span class="dim">@ ' + esc(c.branch) + '</span>' : ''}</td><td class="l">${esc(c.session || c.sid || '')}</td><td class="ok">+${fmtInt(c.insertions)}</td><td class="warn">-${fmtInt(c.deletions)}</td><td class="l"><span class="badge ${c.pushed ? 'pushed' : 'local'}">${c.pushed ? 'pushed' : 'local only'}</span></td></tr>`).join('') : '<tr><td class="l" colspan="8">no commits from sessions in this range</td></tr>'}</tbody></table></div></div>`;
+  box.innerHTML = `
+    <div class="stats-head"><h2>stats</h2>
+      <div class="seg" id="stats-range">${[7, 30, 90].map((n) => `<button data-days="${n}" class="${state.statsDays === n ? 'active' : ''}">${n} days</button>`).join('')}</div>
+      <span class="help">today is ${fmtDate(d.today)} · days roll over at local midnight</span>
+      <span class="spacer"></span>
+      <button id="stats-csv" title="daily table as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
+    </div>
+    <div class="summary">${summary}</div>
+    <div class="card${m === 'tokens' ? ' hl' : ''}"><h3>daily tokens · last ${d.days} days</h3>${chart}</div>
+    <div class="card"><h3>daily</h3><div class="grid-wrap tall" id="stats-daily"></div></div>
+    <div class="two">${bd('by model', d.by_model, 'model')}${bd('by provider', d.by_provider, 'provider', [['billing', (r) => r.billing || (r.plan ? 'subscription' : 'api key')]])}</div>
+    <div class="two">${bd('by repo / project', d.by_project, 'project')}${top}</div>
+    ${commits}`;
+  renderDailyTable();
+  $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
+  $('#stats-csv').addEventListener('click', exportStatsCsv);
+  $('#stats-refresh').addEventListener('click', () => renderStatsView(true));
+  box.onclick = (e) => { const tr = e.target.closest('tr[data-open]'); if (tr) { assignPane(state.layout.focus, tr.dataset.open); setView('chat'); } };
+}
+const DAILY_COLS = [['date', 'day', (r) => fmtDate(r.date), 'l'], ['input', 'tokens in', (r) => fmtTokens(r.input)], ['output', 'tokens out', (r) => fmtTokens(r.output)], ['total', 'total tokens', (r) => fmtTokens(r.total)], ['sessions', 'sessions', (r) => fmtInt(r.sessions)], ['commits', 'commits', (r) => fmtInt(r.commits)], ['lines', 'lines changed', (r) => (r.lines ? `+${fmtInt(r.insertions)} / -${fmtInt(r.deletions)}` : '0')], ['active_seconds', 'active time', (r) => fmtDur(r.active_seconds)], ['cost', 'cost', (r) => (r.cost ? fmtUsd(r.cost) : r.api_equivalent ? '<span class="dim">plan</span>' : '-')]];
+function renderDailyTable() {
+  const el = $('#stats-daily'); if (!el || !statsData) return;
+  const rows = statsData.daily.slice();
+  const { key, dir } = state.statsSort;
+  rows.sort((a, b) => (a[key] > b[key] ? 1 : a[key] < b[key] ? -1 : 0) * dir);
+  const tot = {}; for (const r of statsData.daily) for (const k of Object.keys(r)) if (typeof r[k] === 'number') tot[k] = (tot[k] || 0) + r[k];
+  tot.date = `total · ${statsData.daily.length} day${statsData.daily.length === 1 ? '' : 's'}`;
+  const metricCol = { tokens: 'total', commits: 'commits', sessions: 'sessions', active: 'active_seconds' }[state.statsMetric];
+  el.innerHTML = `<table class="grid"><thead><tr>${DAILY_COLS.map(([k, label, , cls]) => `<th class="${cls || ''}${key === k ? ' on' : ''}${metricCol === k ? ' hl' : ''}" data-sort="${k}">${label}${key === k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((r) => `<tr${r.date === statsData.today ? ' class="today"' : ''}>${DAILY_COLS.map(([k, , f, cls]) => `<td class="${cls || ''}${metricCol === k ? ' hl' : ''}">${f(r)}</td>`).join('')}</tr>`).join('') : '<tr><td class="l" colspan="9">no history yet</td></tr>'}${rows.length ? `<tr class="total">${DAILY_COLS.map(([k, , f, cls]) => `<td class="${cls || ''}">${k === 'date' ? esc(tot.date) : f(tot)}</td>`).join('')}</tr>` : ''}</tbody></table>`;
+  el.onclick = (e) => { const th = e.target.closest('th[data-sort]'); if (!th) return; const k = th.dataset.sort; state.statsSort = { key: k, dir: state.statsSort.key === k ? -state.statsSort.dir : -1 }; renderDailyTable(); };
+}
+function exportStatsCsv() {
+  if (!statsData) return;
+  const cols = ['date', 'input', 'output', 'total', 'cache_read', 'calls', 'sessions', 'commits', 'insertions', 'deletions', 'lines', 'active_seconds', 'cost', 'api_equivalent', 'pushed', 'unpushed'];
+  const csv = [cols.join(',')].concat(statsData.daily.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => cols.map((c) => r[c] ?? '').join(','))).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `kcoder-stats-${statsData.today}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
 
 renderHeader(); renderViews();
 connect();
