@@ -139,9 +139,11 @@ kcoder daemon status        # start | stop | restart | status | run | install | 
 It starts `kcoderd` if it isn't running, attaches the daemon token, and picks
 the best window it can:
 
-1. a native window, when `pywebview` is installed (`pip install -e '.[app]'`);
+1. a native window with the kcoder icon and name in the Dock and menu bar
+   (`pywebview`, installed by default on macOS; `pip install pywebview`
+   elsewhere). It runs as its own process, so the terminal is free;
 2. otherwise Chrome, Brave, Edge, Chromium or Vivaldi in app mode: a
-   chromeless window with its own profile, separate from your browsing;
+   chromeless window with its own profile (`kcoder app --chrome` forces this);
 3. otherwise your default browser (`kcoder app --browser` forces this).
 
 On macOS, `kcoder app --install` writes `~/Applications/kcoder.app` with the

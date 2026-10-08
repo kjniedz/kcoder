@@ -89,20 +89,59 @@ def app_url(info: dict) -> str:
     return f"http://{info['host']}:{info['port']}/#token={token}"
 
 
-def open_window(url: str, mode: str = "auto") -> str:
+def native_available() -> bool:
+    try:
+        import webview  # type: ignore  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def run_native_window(url: str) -> None:
+    """Run the native window in this process (blocks until it is closed).
+    On macOS the process gets the kcoder icon and name in the Dock and menu
+    bar, so it looks like its own app however it was launched."""
+    import webview  # type: ignore
+
+    if sys.platform == "darwin":
+        try:
+            import AppKit  # type: ignore
+            import Foundation  # type: ignore
+            info = Foundation.NSBundle.mainBundle().infoDictionary()
+            if info is not None:
+                info["CFBundleName"] = APP_NAME
+                info["CFBundleDisplayName"] = APP_NAME
+            app = AppKit.NSApplication.sharedApplication()
+            icon = AppKit.NSImage.alloc().initWithContentsOfFile_(os.path.join(WEB_DIR, "icon-1024.png"))
+            if icon is not None:
+                app.setApplicationIconImage_(icon)
+        except Exception:  # noqa: BLE001 - cosmetics only
+            pass
+    storage = os.path.join(paths.DATA_DIR, "webview")
+    os.makedirs(storage, exist_ok=True)
+    webview.create_window(APP_NAME, url, width=1440, height=900, min_size=(900, 600))
+    webview.start(private_mode=False, storage_path=storage)
+
+
+def open_window(url: str, mode: str = "auto", foreground: bool = False) -> str:
     """Open the UI in its own window.
 
     mode: auto | native | chromium | browser. Returns the mode actually used.
-    'native' blocks until the window is closed; the others return at once.
+    The native window runs in a detached process (so the terminal is free)
+    unless `foreground` is set; the other modes always return at once.
     """
     if mode in ("auto", "native"):
-        try:
-            import webview  # type: ignore
-        except ImportError:
-            webview = None
-        if webview is not None:
-            webview.create_window(APP_NAME, url, width=1440, height=900, min_size=(900, 600))
-            webview.start()
+        if native_available():
+            if foreground:
+                run_native_window(url)
+            else:
+                paths.ensure_data_dir()
+                with open(APP_LOG_PATH, "a", encoding="utf-8") as log:
+                    subprocess.Popen(
+                        [sys.executable, "-P", "-m", "kcoder.app", url],
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                        start_new_session=True, close_fds=True, cwd=os.path.expanduser("~"),
+                    )
             return "native"
         if mode == "native":
             raise RuntimeError("pywebview is not installed (pip install pywebview)")
@@ -291,3 +330,18 @@ def agent_start() -> None:
 
 def agent_stop() -> None:
     subprocess.run(["launchctl", "bootout", f"{_gui_domain()}/{AGENT_LABEL}"], capture_output=True, text=True)
+
+
+def main(argv: list | None = None) -> None:
+    """`python -m kcoder.app <url>`: the native window process."""
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv:
+        from .client import ensure_daemon
+        url = app_url(ensure_daemon())
+    else:
+        url = argv[0]
+    run_native_window(url)
+
+
+if __name__ == "__main__":
+    main()

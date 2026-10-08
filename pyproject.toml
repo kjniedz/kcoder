@@ -16,6 +16,7 @@ dependencies = [
     "pyfiglet>=1.0.0",
     "websockets>=13.0",
     "prompt_toolkit>=3.0",
+    "pywebview>=5.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

@@ -1095,9 +1095,9 @@ def cmd_app(args) -> int:
     from .client import ensure_daemon
     info = ensure_daemon()
     url = appmod.app_url(info)
-    mode = "browser" if args.browser else ("native" if args.native else "auto")
+    mode = "browser" if args.browser else ("chromium" if args.chrome else ("native" if args.native else "auto"))
     try:
-        used = appmod.open_window(url, mode)
+        used = appmod.open_window(url, mode, foreground=args.foreground)
     except RuntimeError as exc:
         console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
         return 1
@@ -1412,6 +1412,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--uninstall", action="store_true", help="macOS: remove ~/Applications/kcoder.app")
     p.add_argument("--browser", action="store_true", help="open in the default browser instead of an app window")
     p.add_argument("--native", action="store_true", help="require the native window (pywebview)")
+    p.add_argument("--chrome", action="store_true", help="use a Chromium-family browser in app mode instead of the native window")
+    p.add_argument("--foreground", action="store_true", help="keep the native window attached to this terminal (for debugging)")
     p.set_defaults(func=cmd_app)
 
     p = sub.add_parser("daemon", help="manage kcoderd")
