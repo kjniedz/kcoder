@@ -43,6 +43,8 @@ DEFAULTS = {
     "compact_at": 150000,      # compact history when the last prompt reached this many tokens
     "worktrees": True,         # every session in a git repo gets its own worktree + branch
     "auto_update": True,       # install verified releases when all sessions are idle
+    "review_required": "push", # push | commit | none - when the changes view must have approved the work
+    "max_concurrent": 3,       # task queue: how many sessions it keeps running at once
     "default_trust": "auto",   # auto | write | read | none - what new sessions run without asking
     "projects_dir": "~/kcoder-projects",   # where GitHub repos are cloned
     "auto_publish": True,      # new sessions on local folders with no GitHub remote get a private repo created + pushed

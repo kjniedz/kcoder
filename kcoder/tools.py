@@ -133,8 +133,19 @@ def read_file(path: str, cwd: str = ".") -> str:
     return content
 
 
-def write_file(path: str, content: str, cwd: str = ".") -> str:
+def _inside(path: str, scope: str | None) -> None:
+    """Refuse writes outside the session's worktree."""
+    if not scope:
+        return
+    real = os.path.realpath(path)
+    root = os.path.realpath(scope)
+    if real != root and not real.startswith(root + os.sep):
+        raise ValueError(f"refusing to write outside this session's worktree ({scope}): {path}")
+
+
+def write_file(path: str, content: str, cwd: str = ".", scope: str | None = None) -> str:
     path = resolve(path, cwd)
+    _inside(path, scope)
     parent = os.path.dirname(path)
     os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -142,8 +153,9 @@ def write_file(path: str, content: str, cwd: str = ".") -> str:
     return f"Wrote {len(content)} bytes to {path}"
 
 
-def edit_file(path: str, old_str: str, new_str: str, cwd: str = ".") -> str:
+def edit_file(path: str, old_str: str, new_str: str, cwd: str = ".", scope: str | None = None) -> str:
     path = resolve(path, cwd)
+    _inside(path, scope)
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     count = content.count(old_str)
@@ -274,7 +286,7 @@ def describe_tool_call(name: str, tool_input: dict) -> str:
 
 
 def execute_tool(name: str, tool_input: dict, cwd: str | None = None,
-                 on_output=None, proc_slot=None) -> str:
+                 on_output=None, proc_slot=None, scope: str | None = None) -> str:
     """Dispatch a tool call against `cwd` (defaults to the process cwd).
 
     Raises on unknown tool; tool errors propagate.
@@ -283,9 +295,9 @@ def execute_tool(name: str, tool_input: dict, cwd: str | None = None,
     if name == "read_file":
         return read_file(tool_input["path"], cwd)
     if name == "write_file":
-        return write_file(tool_input["path"], tool_input["content"], cwd)
+        return write_file(tool_input["path"], tool_input["content"], cwd, scope)
     if name == "edit_file":
-        return edit_file(tool_input["path"], tool_input["old_str"], tool_input["new_str"], cwd)
+        return edit_file(tool_input["path"], tool_input["old_str"], tool_input["new_str"], cwd, scope)
     if name == "list_dir":
         return list_dir(tool_input.get("path", "."), cwd)
     if name == "run_bash":

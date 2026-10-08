@@ -9,6 +9,7 @@ import os
 import subprocess
 
 INSTRUCTIONS_FILES = ("KCODER.md", "kcoder.md", ".kcoder.md")
+AGENT_FILES = ("AGENTS.md", "CLAUDE.md")     # read as well, so existing repos just work
 IGNORED_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache",
                 ".pytest_cache", "dist", "build", ".next", ".idea", ".vscode", "target",
                 ".tox", ".eggs", "coverage", ".cache"}
@@ -45,7 +46,7 @@ def project_info(root: str) -> dict:
         "path": root,
         "name": os.path.basename(root.rstrip("/")) or root,
         "git": git_toplevel(root) == root,
-        "has_instructions": instructions_path(root) is not None,
+        "has_instructions": bool(instruction_files(root)),
     }
 
 
@@ -57,15 +58,32 @@ def instructions_path(root: str) -> str | None:
     return None
 
 
-def load_instructions(root: str, cwd: str | None = None, limit: int = 40_000) -> str:
-    """KCODER.md content for a project (and, if different, for the cwd)."""
+def instruction_files(root: str) -> list:
+    """Every instruction file this project has: the KCODER.md variant plus
+    AGENTS.md / CLAUDE.md when present."""
+    out = []
+    p = instructions_path(root)
+    if p:
+        out.append(p)
+    for name in AGENT_FILES:
+        q = os.path.join(root, name)
+        if os.path.isfile(q):
+            out.append(q)
+    return out
+
+
+def load_instructions(root: str, cwd: str | None = None, limit: int = 40_000, skip: tuple = ()) -> str:
+    """Instruction file contents for a project (and, if different, for the
+    cwd). `skip` names files the provider already reads itself (Claude Code
+    loads CLAUDE.md on its own)."""
     parts = []
     seen = set()
     for base in (root, cwd):
         if not base:
             continue
-        p = instructions_path(base)
-        if p and p not in seen:
+        for p in instruction_files(base):
+            if p in seen or os.path.basename(p) in skip:
+                continue
             seen.add(p)
             try:
                 with open(p, "r", encoding="utf-8", errors="replace") as f:

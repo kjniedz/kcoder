@@ -455,3 +455,51 @@ table.grid .warn, .card .warn { color: var(--yellow); }
 .dialog .label-h { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; border-top: 1px solid var(--line); padding-top: 10px; }
 .dialog .setup .row.wrap { flex-direction: column; gap: 4px; }
 .dialog .setup code { color: var(--accent); }
+
+/* ---- phase 2: chips, changes view, task queue ---- */
+.chips { display: inline-flex; gap: 4px; align-items: center; margin-left: 4px; }
+.chip { font-size: 10px; padding: 0 6px; border-radius: 9px; background: var(--bg); border: 1px solid var(--line-2); color: var(--fg-dim); cursor: pointer; text-decoration: none; white-space: nowrap; }
+.chip:hover { border-color: var(--accent); color: var(--fg); }
+.chip.warn { border-color: var(--yellow); color: var(--yellow); }
+.chip.pr.success { border-color: var(--green); color: var(--green); }
+.chip.pr.failure { border-color: var(--red); color: var(--red); }
+.chip.pr.pending { border-color: var(--yellow); color: var(--yellow); }
+.cpane-bar .meta .chips { margin-left: 6px; }
+.dialog.wide { width: min(1240px, 96vw); max-height: 90vh; }
+.dialog .body.changes { display: grid; grid-template-columns: 240px 1fr; gap: 10px; padding: 0; max-height: calc(90vh - 100px); }
+.ch-files { border-right: 1px solid var(--line); overflow: auto; font-size: 11.5px; }
+.ch-files .item { display: flex; gap: 6px; align-items: center; padding: 4px 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.ch-files .item:hover { background: var(--bg-3); }
+.ch-files .item code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-files .st { font-size: 10px; width: 14px; text-align: center; color: var(--fg-mute); }
+.ch-files .st.A { color: var(--green); } .ch-files .st.D { color: var(--red); } .ch-files .st.M { color: var(--yellow); }
+.ch-files .meta { color: var(--fg-mute); font-size: 10px; }
+.ch-diff { overflow: auto; padding: 6px 10px 20px; }
+.hunk { border: 1px solid var(--line); border-radius: 5px; margin-bottom: 10px; overflow: hidden; }
+.hunk.accepted { border-color: var(--green); opacity: .75; }
+.hunk-head { display: flex; gap: 8px; align-items: center; padding: 3px 8px; background: var(--bg-3); border-bottom: 1px solid var(--line); font-size: 11px; white-space: nowrap; overflow: hidden; }
+.hunk-head code { color: var(--fg); } .hunk-head .hdr { color: var(--fg-mute); overflow: hidden; text-overflow: ellipsis; } .hunk-head .spacer { flex: 1; }
+.hunk-head button { padding: 0 7px; font-size: 10.5px; }
+.hunk-body { margin: 0; padding: 4px 8px; font-size: 11.5px; line-height: 1.45; overflow-x: auto; white-space: pre; }
+.hunk-body .l { display: block; } .hunk-body .l.add { background: rgba(63,185,80,.14); color: #9fe3b1; } .hunk-body .l.del { background: rgba(248,81,73,.14); color: #ffa198; } .hunk-body .l.meta { color: var(--fg-mute); }
+.empty-row { padding: 14px; color: var(--fg-dim); text-align: center; }
+.tasksview { flex-direction: column; }
+.tasks-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 10px; }
+.tasks-body h3 { margin: 10px 0 2px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; }
+.task-add { display: flex; flex-direction: column; gap: 8px; }
+.task-add label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; flex: 1; min-width: 140px; }
+.task-add input, .task-add select, .task-add textarea { background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; padding: 4px 8px; text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--fg); }
+.task-add textarea { min-height: 54px; resize: vertical; }
+.task-add .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.task-list { display: flex; flex-direction: column; gap: 4px; }
+.task { display: flex; gap: 10px; align-items: center; padding: 6px 10px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 5px; position: relative; }
+.task .grip { width: 14px; color: var(--fg-mute); cursor: grab; }
+.task .st { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; width: 64px; color: var(--fg-mute); }
+.task.running .st { color: var(--accent); } .task.review .st { color: var(--yellow); } .task.failed .st { color: var(--red); } .task.queued .st { color: var(--fg-dim); }
+.task .txt { flex: 1; min-width: 0; } .task .t1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .task .t2 { color: var(--fg-mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .when { color: var(--fg-mute); font-size: 11px; white-space: nowrap; }
+.task button { padding: 1px 7px; font-size: 11px; }
+.task.dragging { opacity: .45; }
+.task.drop-before::before, .task.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; background: var(--accent); }
+.task.drop-before::before { top: -2px; } .task.drop-after::after { bottom: -2px; }
+.msg-user .actions button[data-act="undo"] { color: var(--yellow); }

@@ -216,6 +216,7 @@ function onSessions(list, stats) {
   state.stats = stats || state.stats;
   for (const s of list) if (!state.events.has(s.id)) loadEvents(s.id, 80);
   renderHeader(); renderWall(); renderTitlebars(); renderSplitBars(); renderSidebar();
+  if (state.view === 'tasks') renderTasksView(false);
 }
 
 function statusChanged(s, prev) {
@@ -359,7 +360,7 @@ function buildChatHtml(store, sid, opts = {}) {
         userTurn++;
         const imgs = (e.images || []).map((i) => `<span>🖼 ${esc(i)}</span>`).join('');
         out.push(`<div class="msg msg-user" data-turn="${userTurn}" data-i="${idx}"><span class="who">you&gt;</span><div class="bubble">${esc(e.text)}${imgs ? `<div class="images">${imgs}</div>` : ''}</div>` +
-          (opts.compact ? '' : `<div class="actions"><button data-act="edit" title="Edit and resend">✎</button><button data-act="fork" title="Fork from here">⑂</button><button data-act="copy" title="Copy message">⧉</button></div>`) + `</div>`);
+          (opts.compact ? '' : `<div class="actions"><button data-act="undo" title="Undo to here: restore the worktree and the conversation to just before this message">↶</button><button data-act="edit" title="Edit and resend">✎</button><button data-act="fork" title="Fork from here">⑂</button><button data-act="copy" title="Copy message">⧉</button></div>`) + `</div>`);
         break;
       }
       case 'assistant_end':
@@ -479,6 +480,8 @@ function renderHeader() {
   else if (up.ready || (up.available && up.dev)) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat ${up.failed ? 'bad' : 'warn'}" data-upd="1" title="${up.failed ? 'this version failed its health check and was rolled back: ' + esc(up.failed) + ' (click to force it anyway)' : up.dev ? 'git pull --ff-only in your checkout, then restart' : 'downloaded and verified; installs when every session is idle, or click'}"><b>${esc(up.latest)}</b><span>${up.failed ? 'update failed · click' : 'update ready · click'}</span></div>`);
   const n = (st.pending_approvals || []).length;
   const c = $('#inbox-count'); c.hidden = !n; c.textContent = n;
+  const tk = (st.tasks || {}).counts || {}; const openTasks = (tk.queued || 0) + (tk.running || 0);
+  const tc = $('#tasks-count'); if (tc) { tc.hidden = !openTasks; tc.textContent = openTasks; }
   $('#btn-sound').textContent = state.sound ? '🔔' : '🔕';
   for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === state.view);
   const pinned = state.pins.length;
@@ -487,6 +490,7 @@ function renderHeader() {
 
 function setView(v) {
   state.view = v; localStorage.setItem('kcoder.view', v); syncUiState();
+  if (v === 'tasks') setTimeout(() => renderTasksView(true), 0);
   renderViews();
   if (v === 'chat') { if (!focusedSid() && state.order[0]) { state.layout.panes[state.layout.focus] = state.order[0]; saveLayout(); } for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1); syncSid(); }
   else if (v === 'terminal') { if (!state.sid) state.sid = focusedSid() || state.order[0] || null; if (state.sid) loadEvents(state.sid, -1); }
@@ -555,6 +559,8 @@ function renderPaneChrome(pane, s, num) {
   const branch = s.worktree ? s.worktree.branch : (state.gitInfo.get(s.id) || {}).branch;
   $('.repo', pane).textContent = proj.name ? proj.name + (branch ? ' @ ' + branch : '') : shortHome(s.cwd);
   $('.model', pane).textContent = s.model || '';
+  let chips = $('.chips', pane); if (!chips) { chips = document.createElement('span'); chips.className = 'chips'; $('.model', pane).after(chips); }
+  chips.innerHTML = paneChips(s);
   $('.window-pin', pane).classList.toggle('on', state.pins.includes(s.id));
   const pv = paneViewOf(s.id);
   $('.view-toggle', pane).textContent = pv === 'term' ? '▤' : pv === 'shell' ? '$' : '☰';
@@ -591,6 +597,8 @@ function renderPaneChrome(pane, s, num) {
       `<select data-act="model" title="model"></select>` +
       (s.project && s.project.git ? `<button data-act="git">git status</button><button data-act="pull" title="git pull --ff-only from the remote">⇣ pull</button>` : '') +
       (s.worktree ? `<button data-act="merge" title="merge this session's branch into the project">⇤ merge</button><button data-act="pr">open PR</button><button data-act="discard" class="danger">discard</button>` : '') +
+      (s.worktree ? `<button data-act="changes" title="review this session's changes hunk by hunk">${s.needs_review ? '⚑ ' : ''}changes</button>` : '') +
+      `<button data-act="instructions" title="the repo's instruction file (KCODER.md / AGENTS.md / CLAUDE.md)">instructions</button>` +
       `<button data-act="open-chat">open in chat</button><button data-act="export">export</button><button data-act="archive">archive</button>` +
       (s.resume_text ? `<button data-act="resume" class="primary">resume interrupted turn</button>` : '');
     $('select[data-act="trust"]', acts).value = s.trust || 'read';
@@ -706,6 +714,8 @@ function wirePane(pane, sid) {
   $('.pane-title', pane).addEventListener('click', (e) => {
     if (e.target.classList.contains('window-pin')) { togglePin(sid); return; }
     if (e.target.classList.contains('view-toggle')) { cyclePaneView(sid); return; }
+    if (e.target.closest('a')) return;
+    const chip = e.target.closest('[data-act]'); if (chip) { handleAction(chip, sid); return; }
     focusPane(state.focus === sid ? null : sid);
   });
   pane.addEventListener('click', (e) => {
@@ -805,6 +815,16 @@ async function handleAction(el, sid) {
       case 'kill': await request('shell_kill_tool', { sid }); toast('killed', 'warn'); break;
       case 'resume': await request('resume_turn', { sid }); break;
       case 'dismiss': await request('resume_turn', { sid, discard: true }); break;
+      case 'changes': changesDialog(sid); break;
+      case 'instructions': instructionsDialog(sid); break;
+      case 'undo': {
+        const msg = el.closest('.msg-user'); const turn = Number(msg.dataset.turn);
+        if (!s.worktree) { toast('undo needs a worktree session', 'warn'); break; }
+        if (await confirmDialog('Undo to here?', `Files in the worktree go back to how they were just before message ${turn + 1}, and that message and everything after it are removed from the conversation. Commits the agent made since are undone too (the branch moves back).`)) {
+          await request('undo', { sid, turn }); toast('restored files and conversation', 'ok'); loadEventsFresh(sid);
+        }
+        break;
+      }
       case 'queue': { const t = await promptDialog('Add a follow-up task', 'It runs when the current turn finishes.'); if (t) await request('queue', { sid, action: 'add', text: t }); break; }
       case 'trust': await request('set', { sid, trust: el.value }); break;
       case 'model': {
@@ -815,7 +835,7 @@ async function handleAction(el, sid) {
       case 'git': await gitStatus(sid, true); break;
       case 'pull': { try { const r = await request('pull', { sid }); toast(r.message || 'pulled', 'ok'); gitStatus(sid, false).catch(() => {}); } catch (e) { toast('pull: ' + e.message, 'err'); } break; }
       case 'merge': if (await confirmDialog(`Merge branch ${s.worktree.branch} into ${s.project.name}?`, 'Uncommitted changes in the worktree are committed first.')) { const r = await request('merge', { sid }); toast(r.message || 'merged', r.ok === false ? 'err' : 'ok'); } break;
-      case 'pr': { const r = await request('pr', { sid }); if (r.url) { toast('PR opened: ' + r.url, 'ok'); window.open(r.url, '_blank'); } else toast(r.message || 'PR created', 'ok'); break; }
+      case 'pr': { toast('opening a draft PR… (commit, review check, push, description)'); const r = await request('pr', { sid }); if (r.url) { toast((r.pr && r.pr.draft ? 'draft PR opened: ' : 'PR opened: ') + r.url, 'ok'); window.open(r.url, '_blank'); } else toast(r.message || 'PR created', 'ok'); break; }
       case 'discard': if (await confirmDialog(`Discard all work in ${s.worktree.branch}?`, 'The worktree and branch are deleted. This cannot be undone.')) { await request('discard', { sid }); toast('discarded', 'warn'); } break;
       case 'open-chat': assignPane(state.layout.focus, sid); setView('chat'); break;
       case 'export': await exportChat(sid); break;
@@ -1383,6 +1403,8 @@ function paletteItems() {
     ['toggle auto-publish of local folders to GitHub', async () => { const on = !(state.config && state.config.auto_publish !== false); const r = await request('config', { auto_publish: on }); state.config = r.config; toast('auto-publish to GitHub: ' + (on ? 'on' : 'off'), 'ok'); }],
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
+    ['task queue', () => setView('tasks'), 'alt+5'],
+    ['set review policy (when the changes view must approve)', async () => { const v = await chooseDialog('Review required before…', [['push', 'push - PRs, pushes and merges need an approved review (default)'], ['commit', 'commit - every commit needs an approved review'], ['none', 'none - review is optional']]); if (v) { const r = await request('config', { review_required: v }); state.config = r.config; toast('review required before: ' + v, 'ok'); } }],
     ['check for updates', checkUpdates], ['update now (install + restart kcoderd)', updateNow], ['restart kcoderd', restartDaemon],
     ['uninstall kcoder…', uninstallDialog],
     ['keyboard help', helpDialog, '?'],
@@ -1395,7 +1417,8 @@ function paletteItems() {
     items.push([`export: ${s.name}`, () => exportChat(s.id)]);
     items.push([`shell: ${s.name}`, () => { if (state.view !== 'wall') setView('wall'); setPaneView(s.id, 'shell'); focusPane(s.id); }]);
     if (s.project && s.project.git) items.push([`pull from remote: ${s.name}`, () => handleAction({ dataset: { act: 'pull' } }, s.id)]);
-    if (s.worktree) { items.push([`merge: ${s.name}`, () => handleAction({ dataset: { act: 'merge' } }, s.id)]); items.push([`open PR: ${s.name}`, () => handleAction({ dataset: { act: 'pr' } }, s.id)]); }
+    if (s.worktree) { items.push([`changes: ${s.name}${s.needs_review ? ' (needs review)' : ''}`, () => changesDialog(s.id)]); items.push([`merge: ${s.name}`, () => handleAction({ dataset: { act: 'merge' } }, s.id)]); items.push([`open PR: ${s.name}`, () => handleAction({ dataset: { act: 'pr' } }, s.id)]); }
+    items.push([`instructions: ${s.name}`, () => instructionsDialog(s.id)]);
   }
   for (const c of state.chats.filter((c) => c.archived).slice(0, 50)) items.push([`resume: ${c.title || c.name}`, () => openChat(c.id)]);
   return items;
@@ -1489,6 +1512,150 @@ async function setupDialog(pid) {
 }
 
 // token gate (first launch without #token=)
+// ---- pane chips: instruction file, PR + CI, review flag ----
+function paneChips(s) {
+  let h = '';
+  const ins = s.instructions || [];
+  h += `<span class="chip" data-act="instructions" title="${ins.length ? 'instruction file(s) loaded for every turn: ' + esc(ins.join(', ')) + ' (click to edit)' : 'no instruction file in this repo (click to create KCODER.md)'}">${ins.length ? '📄 ' + esc(ins[0]) + (ins.length > 1 ? ' +' + (ins.length - 1) : '') : '📄 none'}</span>`;
+  if (s.pr && s.pr.url) {
+    const ck = s.pr.checks || 'none'; const icon = ck === 'success' ? '✓' : ck === 'failure' ? '✗' : ck === 'pending' ? '◐' : '';
+    h += `<a class="chip pr ${esc(ck)}" href="${esc(s.pr.url)}" target="_blank" rel="noopener" title="${esc(s.pr.title || '')} · ${esc((s.pr.state || '').toLowerCase())}${s.pr.draft ? ' · draft' : ''} · checks: ${esc(ck)}">PR #${esc(s.pr.number)}${s.pr.draft ? ' draft' : ''} ${icon}</a>`;
+  }
+  if (s.needs_review) h += `<span class="chip warn" data-act="changes" title="a task finished; its changes wait for your review">⚑ review</span>`;
+  return h;
+}
+
+// ---- changes view: file list + diff, accept / reject / edit per hunk, approve ----
+function hunkNewSide(h) { return h.text.split('\n').slice(1).filter((l) => l && (l[0] === '+' || l[0] === ' ')).map((l) => l.slice(1)).join('\n'); }
+function hunkHtml(h, i, accepted) {
+  const body = h.text.split('\n').slice(1).map((l) => `<span class="l ${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : l.startsWith('\\') ? 'meta' : ''}">${esc(l)}</span>`).join('\n');
+  return `<div class="hunk${accepted ? ' accepted' : ''}" data-h="${i}" id="hunk-${i}"><div class="hunk-head"><code>${esc(h.path)}</code><span class="hdr">${esc(h.header)}</span><span class="spacer"></span>` +
+    (h.binary ? '<span class="help">binary</span>' : `<button data-h-act="accept" title="keep this change">${accepted ? 'accepted' : 'accept'}</button><button data-h-act="edit" title="edit the resulting lines">edit</button><button data-h-act="reject" class="danger" title="undo this change in the worktree">reject</button>`) +
+    `</div><pre class="hunk-body">${body}</pre></div>`;
+}
+async function changesDialog(sid) {
+  const s = state.sessions.get(sid) || {};
+  const d = openDialog(`<h2>changes · ${esc(s.name || sid)}<span class="help" id="ch-status"></span><span class="spacer"></span><button data-x="allow" title="add a secret-scan allowlist entry for a false positive">allowlist…</button><button data-x="refresh">refresh</button><button data-x="close">✕</button></h2>
+    <div class="body changes"><div class="ch-files"></div><div class="ch-diff"><div class="empty-row">loading…</div></div></div>
+    <div class="foot"><span class="help" id="ch-policy"></span><span class="spacer" style="flex:1"></span>${s.worktree ? '<button data-x="pr">open draft PR</button><button data-x="merge">merge</button>' : ''}<button class="primary" data-x="approve">approve</button></div>`, 'changes');
+  d.classList.add('wide');
+  const accepted = new Set(); let data = null;
+  const key = (h) => h.path + '|' + h.header;
+  const render = () => {
+    const files = $('.ch-files', d), diff = $('.ch-diff', d);
+    if (!data) return;
+    const n = data.hunks.length, acc = data.hunks.filter((h) => accepted.has(key(h))).length;
+    $('#ch-status', d).textContent = `${data.files.length} file(s) · ${n} hunk(s) · ${acc} accepted · ${data.approved ? 'approved ✓' : 'not approved'}`;
+    $('#ch-policy', d).textContent = `review required before: ${data.policy}` + (data.approved ? ' · the current tree is approved; commits/pushes go through' : ' · approve records the current tree so the git hooks let it through');
+    files.innerHTML = data.files.length ? data.files.map((f) => `<div class="item" data-f="${esc(f.path)}"><span class="st ${esc(f.status)}">${esc(f.status)}</span><code>${esc(f.path)}</code><span class="meta">+${f.additions}/-${f.deletions}</span></div>`).join('') : '<div class="empty-row">no changes relative to the base branch</div>';
+    diff.innerHTML = n ? data.hunks.map((h, i) => hunkHtml(h, i, accepted.has(key(h)))).join('') : '<div class="empty-row">nothing to review</div>';
+  };
+  const load = async () => { try { data = await request('changes', { sid }); render(); } catch (e) { $('.ch-diff', d).innerHTML = `<div class="empty-row">${esc(e.message)}</div>`; } };
+  d.addEventListener('click', async (e) => {
+    const x = e.target.closest('[data-x]');
+    if (x) {
+      const a = x.dataset.x;
+      if (a === 'close') closeDialog();
+      else if (a === 'refresh') load();
+      else if (a === 'approve') { try { data = await request('review', { sid, action: 'approve', base: data && data.base }); toast('changes approved', 'ok'); render(); } catch (err) { toast(err.message, 'err'); } }
+      else if (a === 'allow') { const v = await promptDialog('Secret-scan allowlist entry', 'From the block message: secret:<fingerprint>, path:<glob> or kind:<kind>. Saved to .kcoder/allowlist in the worktree.'); if (v) { try { await request('secrets_allow', { sid, entry: v.trim() }); toast('allowlisted ' + v.trim(), 'ok'); } catch (err) { toast(err.message, 'err'); } } }
+      else if (a === 'pr') { await handleAction({ dataset: { act: 'pr' } }, sid); load(); }
+      else if (a === 'merge') { await handleAction({ dataset: { act: 'merge' } }, sid); load(); }
+      return;
+    }
+    const f = e.target.closest('[data-f]'); if (f) { const i = data.hunks.findIndex((h) => h.path === f.dataset.f); const el = $('#hunk-' + i, d); if (el) el.scrollIntoView({ block: 'start' }); return; }
+    const b = e.target.closest('[data-h-act]'); if (!b) return;
+    const hunkEl = b.closest('.hunk'); const h = data.hunks[Number(hunkEl.dataset.h)]; const act = b.dataset.hAct;
+    if (act === 'accept') { accepted.has(key(h)) ? accepted.delete(key(h)) : accepted.add(key(h)); render(); return; }
+    if (act === 'reject') { if (!(await confirmDialog(`Reject this hunk in ${h.path}?`, 'The change is undone in the worktree.'))) return; try { data = await request('review', { sid, action: 'reject', hunk: h }); toast('hunk rejected', 'warn'); render(); } catch (err) { toast(err.message, 'err'); } return; }
+    if (act === 'edit') {
+      const nt = await promptDialog(`Edit ${h.path} ${h.header}`, 'These are the resulting lines of this hunk. Save to replace them in the worktree.', hunkNewSide(h), true);
+      if (nt == null) return;
+      try { data = await request('review', { sid, action: 'edit', hunk: h, text: nt }); toast('hunk edited', 'ok'); render(); } catch (err) { toast(err.message, 'err'); }
+    }
+  });
+  load();
+}
+
+// ---- per-repo instructions ----
+async function instructionsDialog(sid) {
+  const s = state.sessions.get(sid) || state.chats.find((c) => c.id === sid) || {};
+  let info; try { info = await request('instructions', { sid }); } catch (e) { toast(e.message, 'err'); return; }
+  const names = info.files.length ? info.files.map((f) => f.name) : ['KCODER.md'];
+  let cur = names[0];
+  const d = openDialog(`<h2>instructions · ${esc((s.project || {}).name || s.name || '')}<span class="spacer"></span><button data-x="close">✕</button></h2>
+    <div class="body"><div class="seg" id="ins-tabs"></div><p class="help plain" id="ins-help"></p><textarea id="ins-text" style="min-height:46vh;font-family:ui-monospace,monospace"></textarea></div>
+    <div class="foot"><span class="help" id="ins-path"></span><span class="spacer" style="flex:1"></span><button data-x="cancel">cancel</button><button class="primary" data-x="save">save</button></div>`, 'instructions');
+  const tabs = $('#ins-tabs', d), ta = $('#ins-text', d);
+  const show = () => {
+    tabs.innerHTML = names.map((n) => `<button data-n="${esc(n)}" class="${n === cur ? 'active' : ''}">${esc(n)}</button>`).join('') + (names.includes('KCODER.md') ? '' : '<button data-n="KCODER.md">+ KCODER.md</button>');
+    const f = info.files.find((x) => x.name === cur);
+    ta.value = f ? f.text : '';
+    $('#ins-path', d).textContent = f ? f.path : `${info.root}/${cur} (new)`;
+    $('#ins-help', d).textContent = cur === 'CLAUDE.md' && s.provider === 'claude' ? 'Claude Code reads CLAUDE.md itself, so kcoder does not append it a second time.' : 'Loaded into the system prompt of every turn in this repo. Saving writes the project root and, for this session, its worktree.';
+  };
+  tabs.addEventListener('click', (e) => { const b = e.target.closest('[data-n]'); if (b) { cur = b.dataset.n; show(); } });
+  d.addEventListener('click', async (e) => { const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x !== 'save') { closeDialog(); return; }
+    try { await request('instructions', { sid, name: cur, text: ta.value }); toast('saved ' + cur, 'ok'); closeDialog(); } catch (err) { toast(err.message, 'err'); } });
+  show();
+}
+
+// ---- task queue view ----
+let tasksData = null, tasksTimer = null;
+async function renderTasksView(force) {
+  if (state.view !== 'tasks') return;
+  if (!force && tasksTimer) return;
+  tasksTimer = setTimeout(() => (tasksTimer = null), 1500);
+  try { tasksData = await request('tasks', { action: 'list' }); } catch (e) { $('#tasks-body').innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
+  const body = $('#tasks-body'); const t = tasksData; const provs = state.providers || [];
+  const def = provs.find((p) => p.default && p.configured) || provs.find((p) => p.configured) || provs[0] || {};
+  const row = (x, drag) => { const s = state.sessions.get(x.sid) || state.chats.find((c) => c.id === x.sid); return `<div class="task ${esc(x.status)}" data-id="${esc(x.id)}" ${drag ? 'draggable="true"' : ''}>
+      ${drag ? '<span class="grip" title="drag to reorder">⋮⋮</span>' : '<span class="grip"></span>'}
+      <span class="st">${esc(x.status)}</span>
+      <div class="txt"><div class="t1">${esc(x.text.length > 140 ? x.text.slice(0, 140) + '…' : x.text)}</div><div class="t2">${esc(shortHome(x.repo))} · ${esc(x.model || (x.provider || def.id || '') + ' default')} · trust ${esc(x.trust || state.config && state.config.default_trust || 'auto')}${s ? ' · session ' + esc(s.name) : ''}${x.error ? ' · ' + esc(x.error) : ''}</div></div>
+      <span class="when">${age(x.finished || x.started || x.created)} ago</span>
+      ${x.sid ? `<button data-t="open" title="open the session">open</button>` : ''}${x.status === 'review' && x.sid ? `<button data-t="review" class="primary" title="review the changes">⚑ review</button>` : ''}
+      ${x.status === 'queued' || x.status === 'running' ? `<button data-t="cancel" class="danger">cancel</button>` : `<button data-t="remove" title="remove from the list">✕</button>`}
+    </div>`; };
+  const by = (st) => t.tasks.filter((x) => x.status === st);
+  body.innerHTML = `
+    <div class="stats-head"><h2>task queue</h2><span class="help">${t.paused ? 'paused' : 'running'} · ${by('running').length} running · ${by('queued').length} queued · up to <input id="tq-max" type="number" min="1" max="20" value="${esc(t.max_concurrent || 3)}" style="width:48px"> at once</span><span class="spacer"></span>
+      <button data-tq="${t.paused ? 'resume' : 'pause'}">${t.paused ? '▶ resume queue' : '❚❚ pause queue'}</button><button data-tq="clear">clear finished</button></div>
+    <form class="task-add card" id="tq-form">
+      <div class="row"><label>repo / folder<input name="repo" list="tq-repos" placeholder="/path/to/project or owner/name" required autocomplete="off"><datalist id="tq-repos">${(state.projects || []).map((p) => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join('')}</datalist></label>
+        <label>provider<select name="provider">${provs.map((p) => `<option value="${esc(p.id)}" ${p.id === def.id ? 'selected' : ''} ${p.configured ? '' : 'disabled'}>${esc(p.label)}</option>`).join('')}</select></label>
+        <label>model<select name="model"><option value="">provider default</option>${(def.models || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+        <label>trust<select name="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option></select></label></div>
+      <label>task<textarea name="text" placeholder="what should it do? It runs in its own worktree as soon as a slot is free, and lands in review when done." required></textarea></label>
+      <div class="row"><span class="help">finished tasks wait in review; nothing is pushed on its own</span><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add to queue</button></div>
+    </form>
+    <h3>running</h3><div class="task-list">${by('running').map((x) => row(x, false)).join('') || '<div class="empty-row">nothing running</div>'}</div>
+    <h3>queued</h3><div class="task-list" id="tq-queued">${by('queued').map((x) => row(x, true)).join('') || '<div class="empty-row">queue is empty</div>'}</div>
+    <h3>finished</h3><div class="task-list">${t.tasks.filter((x) => !['running', 'queued'].includes(x.status)).reverse().map((x) => row(x, false)).join('') || '<div class="empty-row">none yet</div>'}</div>`;
+  const form = $('#tq-form', body);
+  form.querySelector('[name=provider]').addEventListener('change', (e) => { const p = provs.find((x) => x.id === e.target.value) || {}; form.querySelector('[name=model]').innerHTML = '<option value="">provider default</option>' + (p.models || []).map((m) => `<option>${esc(m)}</option>`).join(''); });
+  form.querySelector('[name=trust]').value = (state.config && state.config.default_trust) || 'auto';
+  form.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(form); try { await request('tasks', { action: 'add', text: fd.get('text'), repo: fd.get('repo'), provider: fd.get('provider'), model: fd.get('model') || null, trust: fd.get('trust') }); toast('task queued', 'ok'); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
+  $('#tq-max', body).addEventListener('change', async (e) => { try { const r = await request('config', { max_concurrent: Number(e.target.value) }); state.config = r.config; toast('up to ' + r.config.max_concurrent + ' at once', 'ok'); } catch (err) { toast(err.message, 'err'); } });
+  body.onclick = async (e) => {
+    const q = e.target.closest('[data-tq]'); if (q) { try { await request('tasks', { action: q.dataset.tq }); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } return; }
+    const b = e.target.closest('[data-t]'); if (!b) return; const id = b.closest('.task').dataset.id; const task = t.tasks.find((x) => x.id === id) || {};
+    try {
+      if (b.dataset.t === 'cancel') { if (await confirmDialog('Cancel this task?', task.status === 'running' ? 'Its session is interrupted; the worktree stays for review.' : '')) await request('tasks', { action: 'cancel', id }); }
+      else if (b.dataset.t === 'remove') await request('tasks', { action: 'remove', id });
+      else if (b.dataset.t === 'open') { if (task.sid) { assignPane(state.layout.focus, task.sid); setView('chat'); } return; }
+      else if (b.dataset.t === 'review') { if (task.sid) changesDialog(task.sid); return; }
+      renderTasksView(true);
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  // drag to reorder the queued tasks
+  const list = $('#tq-queued', body); let dragId = null;
+  list.addEventListener('dragstart', (e) => { const r = e.target.closest('.task'); if (!r) return; dragId = r.dataset.id; r.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+  list.addEventListener('dragend', () => { dragId = null; for (const r of $$('.task', list)) r.classList.remove('dragging', 'drop-before', 'drop-after'); });
+  list.addEventListener('dragover', (e) => { const r = e.target.closest('.task'); if (!r || !dragId || r.dataset.id === dragId) return; e.preventDefault(); const rect = r.getBoundingClientRect(); const before = (e.clientY - rect.top) < rect.height / 2; r.classList.toggle('drop-before', before); r.classList.toggle('drop-after', !before); });
+  list.addEventListener('drop', async (e) => { const r = e.target.closest('.task'); if (!r || !dragId) return; e.preventDefault(); const before = r.classList.contains('drop-before'); const ids = $$('.task', list).map((x) => x.dataset.id).filter((x) => x !== dragId); const i = ids.indexOf(r.dataset.id); ids.splice(before ? i : i + 1, 0, dragId); dragId = null; try { await request('tasks', { action: 'reorder', ids }); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
+}
+
 // ---- updates, restart, uninstall ----
 async function checkUpdates() {
   toast('checking for updates…');
@@ -1586,7 +1753,7 @@ document.addEventListener('keydown', (e) => {
   if (state.dialog === 'inbox') { inboxKey(e); return; }
   if (state.dialog && e.key === 'Escape') { closeDialog(); return; }
   if (mod && key === 'k') { e.preventDefault(); state.dialog ? closeDialog() : openPalette(); return; }
-  if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); setView(['wall', 'chat', 'terminal', 'stats'][Number(e.key) - 1]); return; }
+  if (e.altKey && ['1', '2', '3', '4', '5'].includes(e.key)) { e.preventDefault(); setView(['wall', 'chat', 'terminal', 'stats', 'tasks'][Number(e.key) - 1]); return; }
   if (e.metaKey && e.ctrlKey && key === 'f') { e.preventDefault(); toggleFullscreen(); return; }
   if (mod && !state.dialog) {
     if (!e.shiftKey && !e.altKey && ['1', '2', '3'].includes(e.key) && state.view === 'chat') { e.preventDefault(); splitFocus(Number(e.key) - 1); return; }
@@ -1714,7 +1881,7 @@ function renderCpaneBar(pane) {
   $('.dot', bar).className = 'dot ' + (s ? (s.archived ? 'archived' : s.status) : '');
   $('.picker', bar).textContent = s ? (s.title && s.title !== s.name ? `${s.name} · ${s.title}` : s.name) : 'pick a session ▾';
   $('.picker', bar).title = s ? `${s.name}${s.title ? ' · ' + s.title : ''}  (click to switch sessions)` : 'Pick a session for this pane';
-  $('.meta', bar).textContent = s ? `${(s.project || {}).name || shortHome(s.cwd)}${s.worktree ? ' @ ' + s.worktree.branch : ''}` : '';
+  $('.meta', bar).innerHTML = s ? `${esc((s.project || {}).name || shortHome(s.cwd))}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} ${paneChips(s)}` : '';
   $('.ctx', bar).textContent = s ? `ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? 'plan' : fmtUsd((s.usage || {}).cost || 0)}` : '';
   for (const el of $$('select[data-act], button[data-act]', bar)) el.disabled = !s;
   if (s) {
@@ -1749,7 +1916,8 @@ function wireCpane(pane) {
     const pb = e.target.closest('[data-pane]');
     if (pb) { const a = pb.dataset.pane; if (a === 'zoom') toggleZoom(idx()); else if (a === 'close') splitClose(idx()); else if (a === 'menu') paneMenu(pane); else if (a === 'find') openFind(pane); return; }
     if (e.target.closest('.picker')) { pickSession(idx()); return; }
-    const b = e.target.closest('button[data-act]'); if (b && sid) handleAction(b, sid);
+    if (e.target.closest('a')) return;
+    const b = e.target.closest('[data-act]'); if (b && sid) handleAction(b, sid);
   });
   bar.addEventListener('change', (e) => { const s = e.target.closest('select[data-act]'); if (s && pane.dataset.sid) handleAction(s, pane.dataset.sid); });
   const log = $('.chat-log', pane);

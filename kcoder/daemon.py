@@ -47,6 +47,10 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 from . import __version__, auth, chatlog, config, identity, paths, pricing, projects, repos, setup, stats, updater
+from . import checkpoints, hooks, review
+from . import pr as prmod
+from . import secrets as secretsmod
+from . import tasks as tasksmod
 from . import uninstall as uninstaller
 from . import worktree as wt
 from .errors import RequestError
@@ -115,6 +119,9 @@ class Session:
         m["plan"] = self.engine.provider.kind == "claude"
         info = self.meta.get("worktree")
         m["worktree_attached"] = bool(info and wt.is_attached(info))
+        root = (self.meta.get("project") or {}).get("path") or self.engine.cwd
+        m["instructions"] = [os.path.basename(p) for p in projects.instruction_files(root)]
+        m["review_policy"] = self.manager.cfg.get("review_required", "push")
         return m
 
     def save_meta(self) -> None:
@@ -206,6 +213,7 @@ class Manager:
         self.today = {"date": _today(), "input": 0, "output": 0, "cost": 0.0, "calls": 0}
         self.cfg = {}
         self.restarting = False
+        self.tasks = tasksmod.TaskQueue()
 
     # -- lifecycle -----------------------------------------------------
 
@@ -253,6 +261,7 @@ class Manager:
                         if not os.path.isdir(meta.get("cwd") or ""):
                             meta["cwd"] = info.get("root") if os.path.isdir(info.get("root") or "") else os.path.expanduser("~")
                 session = self._build_session(meta, messages)
+                self._install_hooks(session.meta)
                 session.events.extend(load_events(sdir, EVENT_TAIL))
                 if was_busy:
                     session.meta["interrupted"] = True
@@ -351,6 +360,8 @@ class Manager:
             "version": __version__,
             "update": self._update_summary(),
             "restarting": self.restarting,
+            "tasks": {"paused": self.tasks.paused, "counts": self.tasks.summary()["counts"],
+                      "max_concurrent": self.cfg.get("max_concurrent", 3)},
         }
 
     def _update_summary(self) -> dict:
@@ -466,6 +477,8 @@ class Manager:
         )
         engine.last_input_tokens = int(meta.get("context_tokens", 0) or 0)
         engine.on_proc = lambda p, sid=sid: self.loop.call_soon_threadsafe(self._note_proc, sid, getattr(p, "pid", None))
+        engine.scope = (meta.get("worktree") or {}).get("path")
+        engine.before_turn = lambda idx, sid=sid: self._checkpoint(sid, idx)
         if hasattr(backend, "session_id"):
             backend.session_id = meta.get("claude_session")
         meta["archived"] = False
@@ -514,6 +527,7 @@ class Manager:
                 info = wt.create_worktree(root, name, start)
                 meta["worktree"] = info
                 meta["cwd"] = info["path"]
+                self._install_hooks({**meta, "id": sid})
             except wt.GitError as exc:
                 wt_note = f"no worktree for this session ({exc}); working directly in {cwd}"
                 log.warning("session %s: %s", name, wt_note)
@@ -576,6 +590,7 @@ class Manager:
                 meta["worktree"] = wt.reattach_worktree(info)
                 meta["cwd"] = cwd = info["path"]
                 note = f"worktree restored from branch {info['branch']}"
+                self._install_hooks(meta)
             except wt.GitError as exc:
                 note = f"worktree could not be restored ({exc})"
         if not os.path.isdir(cwd):
@@ -626,6 +641,10 @@ class Manager:
             meta["deleted"] = True
             if wt_info:
                 try:
+                    checkpoints.remove_all(wt_info.get("path") if os.path.isdir(wt_info.get("path") or "") else wt_info.get("root"), sid)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("checkpoint cleanup failed: %s", exc)
+                try:
                     wt.remove_worktree(wt_info, delete_branch=True)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("worktree cleanup failed: %s", exc)
@@ -636,6 +655,87 @@ class Manager:
             self.chats[sid] = meta
         self.broadcast_sessions()
         self.broadcast_chats()
+        self.loop.create_task(self.schedule_tasks())
+
+    def _install_hooks(self, meta: dict) -> None:
+        info = meta.get("worktree")
+        if not info or not wt.is_attached(info):
+            return
+        try:
+            hooks.install(info["path"], info["root"], meta["id"], paths.DATA_DIR)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("hooks not installed for %s: %s", meta.get("name"), exc)
+
+    def _checkpoint(self, sid: str, turn_start: int) -> None:
+        """Runs on the turn thread right before the model sees the new turn."""
+        session = self.sessions.get(sid)
+        if session is None:
+            return
+        info = session.meta.get("worktree")
+        if not info or not wt.is_attached(info):
+            return
+        msgs = session.engine.messages
+        turn = len(chatlog.user_turn_indices(msgs[:turn_start]))
+        checkpoints.snapshot(info["path"], sid, session.dir, turn=turn, messages=turn_start, seq=session.seq)
+
+    # -- task queue ------------------------------------------------------
+
+    async def schedule_tasks(self) -> None:
+        """Start queued tasks while there are free slots (config max_concurrent)."""
+        if self.tasks.paused or self.cap_reached():
+            return
+        try:
+            maxc = max(1, int(self.cfg.get("max_concurrent") or 3))
+        except (TypeError, ValueError):
+            maxc = 3
+        loop = asyncio.get_running_loop()
+        while True:
+            running = sum(1 for s in self.sessions.values() if s.engine.busy)
+            if running >= maxc:
+                return
+            task = self.tasks.next_queued()
+            if task is None:
+                return
+            self.tasks.update(task["id"], status="running", started=time.time())   # claim it first
+            try:
+                cwd = task["repo"]
+                spec = repos.parse_spec(cwd)
+                if spec:
+                    cwd = await loop.run_in_executor(None, repos.clone, spec, None)
+                root = projects.project_root(cwd)
+                if not projects.git_toplevel(root) and self.cfg.get("worktrees", True):
+                    await loop.run_in_executor(None, repos.init_repo, root)
+                provider = task.get("provider") or auth.load_config().get("default_provider")
+                if provider not in PROVIDERS:
+                    raise ValueError(f"unknown provider: {provider}")
+                session = self.create(cwd=cwd, provider=provider, model=task.get("model"),
+                                      name=task.get("name") or f"task-{task['id']}",
+                                      trust=task.get("trust") or self.cfg.get("default_trust") or "auto",
+                                      worktree=None, title=task["text"][:80])
+                session.meta["task"] = task["id"]
+                self.record_user(session, task["text"], [])
+                session.engine.send(task["text"], [])
+                session.save_meta()
+                self.tasks.update(task["id"], sid=session.id)
+                self._record(session, {"t": "system", "ts": time.time(), "text": f"task {task['id']} started from the queue"})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("task %s failed to start: %s", task["id"], exc)
+                self.tasks.update(task["id"], status="failed", finished=time.time(), error=f"{type(exc).__name__}: {exc}")
+            self.broadcast_sessions()
+
+    def finish_task(self, session: Session, result: str) -> None:
+        task = self.tasks.by_sid(session.id)
+        if task is None:
+            return
+        if result == "ok":
+            self.tasks.update(task["id"], status="review", finished=time.time())
+            session.meta["needs_review"] = True
+            session.save_meta()
+            self._record(session, {"t": "notice", "ts": time.time(),
+                                   "text": "task finished; its changes are waiting for review (nothing was pushed)"})
+        else:
+            self.tasks.update(task["id"], status="failed", finished=time.time(), error=result)
+        self.loop.create_task(self.schedule_tasks())
 
     def update_chat_meta(self, sid: str, **fields) -> dict:
         session = self.sessions.get(sid)
@@ -769,6 +869,7 @@ class Manager:
             self.broadcast_sessions()
         if t == "turn_end":
             self.broadcast_chats()
+            self.finish_task(session, event.get("result") or "error")
             if (session.meta.get("project") or {}).get("git") or session.meta.get("worktree"):
                 self.loop.run_in_executor(None, self._track_commits, session)
             if event.get("result") == "ok":
@@ -802,7 +903,7 @@ class Manager:
     def _record(self, session: Session, event: dict) -> None:
         """Assign a sequence number, persist, and fan out to subscribers."""
         session.seq += 1
-        event = dict(event)
+        event = secretsmod.mask_event(event) if event.get("t") != "text" else dict(event)
         event["seq"] = session.seq
         session.meta["last_activity"] = event.get("ts", time.time())
         if event["t"] in PERSISTED_EVENTS:
@@ -948,6 +1049,18 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if "ai_trailer" in req:
             manager.cfg["ai_trailer"] = str(req["ai_trailer"] or "").strip()[:200]
             config.save({"ai_trailer": manager.cfg["ai_trailer"]})
+        if req.get("review_required") in ("push", "commit", "none"):
+            manager.cfg["review_required"] = req["review_required"]
+            config.save({"review_required": req["review_required"]})
+            manager.broadcast_sessions()
+        if "max_concurrent" in req:
+            try:
+                n = max(1, min(20, int(req["max_concurrent"])))
+            except (TypeError, ValueError):
+                raise RequestError("max_concurrent must be a number")
+            manager.cfg["max_concurrent"] = n
+            config.save({"max_concurrent": n})
+            asyncio.get_running_loop().create_task(manager.schedule_tasks())
         return {"config": {k: v for k, v in manager.cfg.items() if k != "pricing"}, "stats": manager.stats()}
 
     if t == "projects":
@@ -1171,14 +1284,74 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t == "instructions":
         meta = manager.find_chat(str(req.get("sid")))
         root = (meta.get("project") or {}).get("path") or meta.get("cwd")
-        path = projects.instructions_path(root)
-        return {"path": path, "text": projects.load_instructions(root, meta.get("cwd"))}
+        wt_path = (meta.get("worktree") or {}).get("path")
+        if "text" in req:
+            name = str(req.get("name") or "KCODER.md")
+            if name not in projects.INSTRUCTIONS_FILES + projects.AGENT_FILES:
+                raise RequestError("name must be KCODER.md, AGENTS.md or CLAUDE.md")
+            text = str(req["text"])
+            targets = [os.path.join(root, name)]
+            if wt_path and os.path.isdir(wt_path):
+                targets.append(os.path.join(wt_path, name))   # takes effect in this session now
+            for p in targets:
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(text if text.endswith("\n") or not text else text + "\n")
+            manager.broadcast_sessions()
+        files = [{"path": p, "name": os.path.basename(p), "text": open(p, "r", encoding="utf-8", errors="replace").read(60_000)}
+                 for p in projects.instruction_files(root)]
+        return {"root": root, "files": files, "names": list(projects.INSTRUCTIONS_FILES[:1] + projects.AGENT_FILES),
+                "path": projects.instructions_path(root), "text": projects.load_instructions(root, meta.get("cwd"))}
+
+    if t == "tasks":
+        action = req.get("action") or "list"
+        q = manager.tasks
+        if action == "add":
+            text = (req.get("text") or "").strip()
+            repo = (req.get("repo") or "").strip()
+            if not text or not repo:
+                raise RequestError("a task needs text and a repo (path or owner/name)")
+            if not repos.parse_spec(repo) and not os.path.isdir(os.path.expanduser(repo)):
+                raise RequestError(f"no such folder or GitHub repo: {repo}")
+            trust = req.get("trust") if req.get("trust") in TRUST_LEVELS else None
+            q.add(text, os.path.abspath(os.path.expanduser(repo)) if not repos.parse_spec(repo) else repo,
+                  provider=req.get("provider") or None, model=req.get("model") or None, trust=trust, name=req.get("name") or None)
+            asyncio.get_running_loop().create_task(manager.schedule_tasks())
+        elif action in ("remove", "cancel"):
+            task = q.get(str(req.get("id")))
+            if task is None:
+                raise RequestError("no such task")
+            if task["status"] == "running" and task.get("sid") in manager.sessions:
+                s = manager.sessions[task["sid"]]
+                if s.engine.busy:
+                    s.engine.interrupt()
+                q.update(task["id"], status="cancelled", finished=time.time())
+                manager._record(s, {"t": "system", "ts": time.time(), "text": "task cancelled from the queue"})
+            elif task["status"] == "queued":
+                q.update(task["id"], status="cancelled", finished=time.time()) if action == "cancel" else q.remove(task["id"])
+            else:
+                q.remove(task["id"])
+            asyncio.get_running_loop().create_task(manager.schedule_tasks())
+        elif action == "reorder":
+            q.reorder([str(x) for x in req.get("ids") or []])
+        elif action == "pause":
+            q.paused = True
+            q.save()
+        elif action == "resume":
+            q.paused = False
+            q.save()
+            asyncio.get_running_loop().create_task(manager.schedule_tasks())
+        elif action == "clear":
+            q.clear_finished()
+        elif action != "list":
+            raise RequestError(f"unknown tasks action: {action}")
+        manager.broadcast_sessions()
+        return {**q.summary(), "max_concurrent": manager.cfg.get("max_concurrent", 3)}
 
     if t == "export":
         meta = manager.find_chat(str(req.get("sid")))
         session = manager.sessions.get(meta["id"])
         messages = session.engine.messages if session else load_messages(session_dir(meta["id"]))
-        return {"markdown": chatlog.export_markdown(manager.chat_summary(meta), messages),
+        return {"markdown": secretsmod.mask(chatlog.export_markdown(manager.chat_summary(meta), messages)),
                 "title": meta.get("title") or meta.get("name")}
 
     if t in ("pin", "title", "rename", "archive", "unarchive", "delete", "close"):
@@ -1233,6 +1406,92 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         except EngineBusy:
             raise RequestError("session is busy; wait for the current turn to finish")
         return {}
+
+    if t == "changes":
+        info = session.meta.get("worktree")
+        if not info or not wt.is_attached(info):
+            raise RequestError("this session has no worktree; the changes view needs one")
+        loop = asyncio.get_running_loop()
+        try:
+            ch = await loop.run_in_executor(None, review.changes, engine.cwd, info.get("base"))
+        except review.ReviewError as exc:
+            raise RequestError(str(exc))
+        approved = ch["tree"] in (review.load_state(session.dir).get("approved") or {})
+        return {**ch, "approved": approved, "policy": manager.cfg.get("review_required", "push"),
+                "needs_review": bool(session.meta.get("needs_review"))}
+
+    if t == "review":
+        info = session.meta.get("worktree")
+        if not info or not wt.is_attached(info):
+            raise RequestError("this session has no worktree")
+        if engine.busy:
+            raise RequestError("the session is working; review when it is idle")
+        action = req.get("action")
+        loop = asyncio.get_running_loop()
+        try:
+            if action == "reject":
+                await loop.run_in_executor(None, review.reject_hunk, engine.cwd, req.get("hunk") or {})
+                manager._record(session, {"t": "system", "ts": time.time(), "text": f"review: rejected a hunk in {(req.get('hunk') or {}).get('path')}"})
+            elif action == "edit":
+                await loop.run_in_executor(None, review.edit_hunk, engine.cwd, req.get("hunk") or {}, str(req.get("text") or ""))
+                manager._record(session, {"t": "system", "ts": time.time(), "text": f"review: edited a hunk in {(req.get('hunk') or {}).get('path')}"})
+            elif action == "approve":
+                tree = await loop.run_in_executor(None, review.approve, session.dir, engine.cwd, req.get("base"))
+                session.meta["needs_review"] = False
+                session.save_meta()
+                manager._record(session, {"t": "system", "ts": time.time(), "text": f"review: changes approved (tree {tree[:10]})"})
+                manager.broadcast_sessions()
+            else:
+                raise RequestError("review action must be reject, edit or approve")
+        except review.ReviewError as exc:
+            raise RequestError(str(exc))
+        ch = await loop.run_in_executor(None, review.changes, engine.cwd, info.get("base"))
+        return {**ch, "approved": ch["tree"] in (review.load_state(session.dir).get("approved") or {}),
+                "policy": manager.cfg.get("review_required", "push")}
+
+    if t == "secrets_allow":
+        entry = str(req.get("entry") or "").strip()
+        if not entry or ":" not in entry or entry.split(":", 1)[0] not in ("secret", "path", "kind"):
+            raise RequestError("entry must look like secret:<fingerprint>, path:<glob> or kind:<kind>")
+        p = secretsmod.add_allow(engine.cwd, entry)
+        manager._record(session, {"t": "system", "ts": time.time(), "text": f"secret scan allowlist: added {entry} ({os.path.relpath(p, engine.cwd)})"})
+        return {"path": p}
+
+    if t == "checkpoints":
+        return {"checkpoints": checkpoints.load(session.dir)}
+
+    if t == "undo":
+        info = session.meta.get("worktree")
+        if not info or not wt.is_attached(info):
+            raise RequestError("undo needs a worktree session")
+        if engine.busy:
+            raise RequestError("the session is working; interrupt it first")
+        k = int(req.get("turn", -1))
+        items = [c for c in checkpoints.load(session.dir) if c.get("turn") == k]
+        if not items:
+            raise RequestError("no checkpoint for that turn")
+        item = items[0]
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, checkpoints.restore, engine.cwd, item)
+        except checkpoints.CheckpointError as exc:
+            raise RequestError(f"could not restore files: {exc}")
+        try:
+            engine.truncate(min(item["messages"], len(engine.messages)))
+        except EngineBusy as exc:
+            raise RequestError(str(exc))
+        if hasattr(engine.backend, "session_id"):
+            engine.backend.session_id = None
+            session.meta.pop("claude_session", None)
+        _truncate_events(session, k)
+        checkpoints.drop_after(session.dir, engine.cwd, session.id, item["n"] - 1)
+        session.meta["needs_review"] = False
+        session.save_messages()
+        manager._record(session, {"t": "history_reset", "ts": time.time(), "turn": k,
+                                  "text": f"undone to before message {k + 1}: files in the worktree and the conversation were restored"})
+        session.save_meta()
+        manager.broadcast_sessions()
+        manager.broadcast_chats()
+        return {"restored": item}
 
     if t == "resume_turn":
         if req.get("discard"):
@@ -1413,7 +1672,6 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {}
 
     if t in ("git", "pull", "merge", "pr", "discard", "commit"):
-        from . import worktree as wt
         result = wt.handle_request(manager, session, t, req)
         if t in ("git", "merge", "commit", "pr"):
             asyncio.get_running_loop().run_in_executor(None, manager._track_commits, session)
@@ -1743,9 +2001,11 @@ async def _serve(host: str, port: int) -> None:
         os.chmod(paths.DAEMON_INFO_PATH, 0o600)
         log.info("kcoderd %s listening on ws://%s:%d/ws and %s (pid %d)", __version__, host, port, sock_path, os.getpid())
         updates = asyncio.create_task(_update_loop(manager))
+        prs = asyncio.create_task(_pr_loop(manager))
         await stop.wait()
         log.info("shutting down")
         updates.cancel()
+        prs.cancel()
         manager.shutdown()
         server.close()
         unix_server.close()
@@ -1754,6 +2014,35 @@ async def _serve(host: str, port: int) -> None:
             os.remove(p)
         except FileNotFoundError:
             pass
+
+
+async def _pr_loop(manager: Manager) -> None:
+    """Keep PR state + CI status fresh for the pane headers."""
+    loop = asyncio.get_running_loop()
+    while not manager.stop.is_set():
+        try:
+            await asyncio.wait_for(manager.stop.wait(), timeout=90)
+            return
+        except asyncio.TimeoutError:
+            pass
+        changed = False
+        for session in list(manager.sessions.values()):
+            pr = session.meta.get("pr")
+            if not pr or pr.get("state") not in (None, "OPEN"):
+                continue
+            try:
+                fresh = await loop.run_in_executor(None, prmod.refresh_status, pr, session.engine.cwd)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("pr status failed for %s: %s", session.meta.get("name"), exc)
+                continue
+            if fresh and {k: fresh.get(k) for k in ("state", "draft", "checks")} != {k: pr.get(k) for k in ("state", "draft", "checks")}:
+                session.meta["pr"] = fresh
+                session.save_meta()
+                manager._record(session, {"t": "git", "ts": time.time(),
+                                          "text": f"PR #{fresh.get('number')}: {fresh.get('state', '').lower()}, checks {fresh.get('checks')}"})
+                changed = True
+        if changed:
+            manager.broadcast_sessions()
 
 
 async def _update_loop(manager: Manager) -> None:

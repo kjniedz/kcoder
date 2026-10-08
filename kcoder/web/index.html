@@ -31,6 +31,7 @@
     <button data-view="chat" title="Chat  (alt+2)">chat</button>
     <button data-view="terminal" title="Terminal  (alt+3)">terminal</button>
     <button data-view="stats" title="Stats  (alt+4)">stats</button>
+    <button data-view="tasks" title="Task queue  (alt+5)">tasks <span id="tasks-count" class="count" hidden></span></button>
   </nav>
   <div class="tools">
     <button id="btn-broadcast" title="Broadcast: send one prompt to every open pane">⇶</button>
@@ -65,6 +66,10 @@
 
   <section id="view-stats" class="view statsview" hidden>
     <div id="stats-body" class="stats-body"></div>
+  </section>
+
+  <section id="view-tasks" class="view tasksview" hidden>
+    <div id="tasks-body" class="tasks-body"></div>
   </section>
 
   <section id="view-terminal" class="view termview" hidden>

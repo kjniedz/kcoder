@@ -492,6 +492,51 @@ the worktree and branch. Archiving a session commits any uncommitted work as
 a checkpoint on its branch and removes the worktree directory; resuming the
 session recreates it from the branch. Deleting a session removes both.
 
+### Review, checkpoints, secrets
+
+- **Changes view** (a focused pane's **changes** button, or ⌘K → changes):
+  everything the session changed relative to the branch it started from, as
+  a file list plus diff. Each hunk can be accepted, rejected (undone in the
+  worktree) or edited. **Approve** records the resulting tree. The setting
+  `review_required` (⌘K → set review policy) says when that approval is
+  needed: before `push` (the default, and it also covers merges and PRs,
+  even with trust `auto`), before every `commit`, or `none`. Enforcement is
+  by git hooks in every worktree, so it applies to the agent's own
+  `git push` too.
+- **Checkpoints + undo**: before every turn the worktree is snapshotted (a
+  git tree kept under `refs/kcoder/<session>/`) together with the
+  conversation position. **↶ undo to here** on any of your messages restores
+  both: files go back, the agent's later commits on the branch are undone,
+  and the conversation is cut there. Restores only ever touch the session's
+  worktree; kcoder's built-in write tools also refuse paths outside it.
+- **Secret scanning**: every commit and push in a worktree is scanned for API
+  keys and tokens, private keys, wallet seed phrases and raw private keys,
+  `.env` files and credential files. A hit blocks with a plain message that
+  names the file and line with the secret redacted. False positives go in
+  `.kcoder/allowlist` in the repo (`secret:<fingerprint>`, `path:<glob>` or
+  `kind:<kind>`; the changes view has an **allowlist…** button). Detected
+  secrets are also masked in session transcripts and exports.
+- **One-click PR**: **open PR** commits, checks the review policy, pushes
+  (the hooks run) and opens a **draft** PR as the signed-in GitHub user. The
+  description is written from the session's work and diff (what changed,
+  why, how it was tested; the model drafts it when the session is idle,
+  with a deterministic fallback). The pane header then shows the PR number,
+  draft state and CI status, refreshed every 90 seconds.
+- **Per-repo instructions**: every turn loads the repo's `KCODER.md` plus
+  `AGENTS.md` and `CLAUDE.md` when present (Claude Code reads `CLAUDE.md`
+  itself, so it is not appended twice). The pane header shows which file is
+  active; click it to edit, or to create `KCODER.md`.
+
+### Task queue
+
+The **tasks** tab (alt+5) is a fleet-wide queue: add a task with its repo
+(a folder or `owner/name`), model and trust level and it starts as soon as a
+slot is free, in its own worktree. `max_concurrent` (the "up to N at once"
+field) caps how many sessions the queue keeps running. Drag queued tasks to
+reorder them, pause the queue, cancel tasks. A finished task lands in
+**review** (its pane shows ⚑ review and the changes view opens from the
+tasks tab); nothing is pushed on its own.
+
 ### Trust levels, queues, caps, compaction
 
 - Trust per session: `auto` (never ask - the default, change it with

@@ -213,6 +213,8 @@ class Engine:
         self.on_proc = None            # callback(proc | None), e.g. so the daemon can note the pid
         self.kill_requested = False
         self.current_user_text = None  # text of the turn in flight (for resume after a crash)
+        self.before_turn = None        # callback(turn_start_index) run before the model sees a turn (checkpoints)
+        self.scope = None              # directory the built-in write tools must stay inside (the worktree)
 
     @property
     def proc(self):
@@ -257,9 +259,10 @@ class Engine:
         from . import identity
         base = SYSTEM_PROMPT.format(cwd=self.cwd)
         base += "\n\n# Commits\n\n" + identity.prompt_note()
-        extra = projects.load_instructions(self.project_root, self.cwd)
+        skip = ("CLAUDE.md",) if self.provider.kind == "claude" else ()
+        extra = projects.load_instructions(self.project_root, self.cwd, skip=skip)
         if extra:
-            base += "\n\n# Project instructions (KCODER.md)\n\n" + extra
+            base += "\n\n# Project instructions\n\n" + extra
         return base
 
     def truncate(self, index: int) -> None:
@@ -356,6 +359,11 @@ class Engine:
             self.emit("notice", text=f"Context compaction failed ({type(exc).__name__}: {exc}); continuing without it.")
         turn_start = len(self.messages)
         self.messages.append({"role": "user", "content": content})
+        if self.before_turn is not None:
+            try:
+                self.before_turn(turn_start)
+            except Exception as exc:  # noqa: BLE001 - a failed checkpoint must not block the turn
+                self.emit("notice", text=f"checkpoint skipped: {exc}")
         self.emit("turn_start")
         result = "ok"
         try:
@@ -521,7 +529,7 @@ class Engine:
                 last_emit[0] = now
 
         try:
-            content = execute_tool(name, tool_input, self.cwd, on_output=on_output, proc_slot=self)
+            content = execute_tool(name, tool_input, self.cwd, on_output=on_output, proc_slot=self, scope=self.scope)
             is_error = False
         except Exception as exc:  # noqa: BLE001 - tool errors go back to the model
             content = f"Error: {exc}"

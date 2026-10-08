@@ -66,7 +66,7 @@ def is_attached(info: dict) -> bool:
 
 def checkpoint(path: str, message: str) -> str | None:
     """Commit uncommitted work (as the signed-in account). None when clean."""
-    return commit_all(path, message)
+    return commit_all(path, message, skip_review=True)
 
 
 def detach_worktree(info: dict) -> dict:
@@ -153,16 +153,22 @@ def pull(cwd: str) -> str:
     return f"pulled {n} commit(s) from {upstream} ({after[:7]})"
 
 
-def commit_all(cwd: str, message: str) -> str | None:
-    """Stage and commit everything. Returns the short hash or None if clean."""
+def commit_all(cwd: str, message: str, skip_review: bool = False) -> str | None:
+    """Stage and commit everything. Returns the short hash or None if clean.
+    The worktree's pre-commit hook scans for secrets and, with review policy
+    "commit", requires an approved review; `skip_review` is for kcoder's own
+    safety checkpoints (archive, fork) and only skips the review part."""
     if not _git(cwd, "status", "--porcelain", check=False).strip():
         return None
     try:
         identity.require()          # commits are signed as the signed-in GitHub account, or not at all
     except identity.IdentityError as exc:
         raise GitError(str(exc))
+    env = identity.git_env()
+    if skip_review:
+        env["KCODER_SKIP_REVIEW"] = "1"
     _git(cwd, "add", "-A")
-    _git(cwd, "commit", "-q", "-m", identity.with_trailer(message), env=identity.git_env())
+    _git(cwd, "commit", "-q", "-m", identity.with_trailer(message), env=env)
     return _git(cwd, "rev-parse", "--short", "HEAD").strip()
 
 
@@ -229,12 +235,17 @@ def handle_request(manager, session, t: str, req: dict) -> dict:
         if not info:
             raise RequestError("this session has no worktree (start it with worktree enabled)")
         if t == "merge":
+            from . import config, review
+            if config.load().get("review_required", "push") in ("push", "commit") and not review.approved_now(session.dir, cwd):
+                raise RequestError("review required before merging: open this session's changes view and approve")
             msg = merge_into_root(info, req.get("message"))
             manager._record(session, {"t": "git", "ts": time.time(), "text": msg})
             return {"ok": True, "message": msg}
         if t == "pr":
-            r = open_pr(info, req.get("title"), req.get("body"))
+            from . import pr as prmod
+            r = prmod.open_pr(manager, session, info, req.get("title"), req.get("body"), draft=bool(req.get("draft", True)))
             manager._record(session, {"t": "git", "ts": time.time(), "text": r.get("url") or r.get("message")})
+            manager.broadcast_sessions()
             return r
         if t == "discard":
             if session.engine.busy:
