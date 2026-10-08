@@ -19,8 +19,9 @@ import time
 
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect as ws_connect
+from websockets.sync.client import unix_connect
 
-from . import paths
+from . import __version__, paths
 from .daemon import already_running, read_daemon_info
 
 
@@ -94,21 +95,33 @@ class DaemonClient:
     # -- connection ------------------------------------------------------
 
     @classmethod
-    def connect(cls, *, autostart: bool = True) -> "DaemonClient":
+    def connect(cls, *, autostart: bool = True, reconcile: bool = True, _retried: bool = False) -> "DaemonClient":
+        """`reconcile`: when the daemon runs a different version than this
+        client, ask it to restart (it refuses while sessions work) and
+        reconnect. Daemon-management commands turn this off."""
         info = ensure_daemon() if autostart else already_running()
         if not info:
             raise DaemonUnavailable("kcoderd is not running")
         token = _read_token()
         if not token:
             raise ClientError(f"daemon token missing at {paths.TOKEN_PATH}")
-        url = f"ws://{info['host']}:{info['port']}/ws"
-        try:
-            ws = ws_connect(url, max_size=64 * 1024 * 1024, open_timeout=5)
-        except OSError as exc:
-            raise DaemonUnavailable(f"couldn't connect to kcoderd at {url}: {exc}")
+        ws = _open(info)
         client = cls(ws, info)
         reply = client.request("auth", token=token)
         client.version = reply.get("version")
+        client.stale = None
+        if reconcile and not _retried and client.version and client.version != __version__:
+            # the daemon runs other code than this CLI: restart it (only when
+            # idle) so the protocol matches, then reconnect
+            try:
+                client.request("restart")
+                client.close()
+                _wait_for_version(__version__, info.get("pid"))
+                return cls.connect(autostart=True, _retried=True)
+            except ClientError as exc:
+                client.stale = f"kcoderd {client.version} is running, kcoder {__version__} is installed: {exc}"
+            except DaemonUnavailable:
+                return cls.connect(autostart=autostart, _retried=True)
         return client
 
     def close(self) -> None:
@@ -208,6 +221,31 @@ class DaemonClient:
             self._events.put(None)
             for ev in list(self._reply_events.values()):
                 ev.set()
+
+
+def _open(info: dict):
+    """Prefer the user-only Unix socket; fall back to loopback TCP."""
+    sock = info.get("socket")
+    if sock and os.path.exists(sock):
+        try:
+            return unix_connect(sock, uri="ws://kcoderd/ws", max_size=64 * 1024 * 1024, open_timeout=5)
+        except OSError:
+            pass
+    url = f"ws://{info['host']}:{info['port']}/ws"
+    try:
+        return ws_connect(url, max_size=64 * 1024 * 1024, open_timeout=5)
+    except OSError as exc:
+        raise DaemonUnavailable(f"couldn't connect to kcoderd at {url}: {exc}")
+
+
+def _wait_for_version(version: str, old_pid, timeout: float = 60.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(0.25)
+        info = already_running()
+        if info and info.get("pid") != old_pid and info.get("version") == version:
+            return info
+    raise DaemonUnavailable(f"kcoderd did not come back as {version} - see {paths.UPDATE_LOG_PATH}")
 
 
 def daemon_url() -> str | None:

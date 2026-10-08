@@ -42,11 +42,13 @@ import threading
 import time
 import uuid
 
-from websockets.asyncio.server import serve
+from websockets.asyncio.server import serve, unix_serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, chatlog, config, identity, paths, pricing, projects, repos, setup, stats
+from . import __version__, auth, chatlog, config, identity, paths, pricing, projects, repos, setup, stats, updater
+from . import uninstall as uninstaller
+from . import worktree as wt
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
@@ -98,7 +100,7 @@ class Session:
     def snapshot(self) -> dict:
         """Public view of the session, sent to clients."""
         m = dict(self.meta)
-        m["status"] = self.engine.status
+        m["status"] = "paused" if (self.meta.get("interrupted") and self.engine.status == "idle") else self.engine.status
         m["model"] = self.engine.model
         m["cwd"] = self.engine.cwd
         m["trust"] = self.engine.trust
@@ -111,6 +113,8 @@ class Session:
         m["queue"] = list(self.meta.get("queue") or [])
         m["shell"] = self.shell is not None
         m["plan"] = self.engine.provider.kind == "claude"
+        info = self.meta.get("worktree")
+        m["worktree_attached"] = bool(info and wt.is_attached(info))
         return m
 
     def save_meta(self) -> None:
@@ -201,6 +205,7 @@ class Manager:
         self._usage_file = None
         self.today = {"date": _today(), "input": 0, "output": 0, "cost": 0.0, "calls": 0}
         self.cfg = {}
+        self.restarting = False
 
     # -- lifecycle -----------------------------------------------------
 
@@ -228,23 +233,37 @@ class Manager:
                     self.chats[sid] = meta
                     continue
                 messages = load_messages(sdir)
-                was_busy = meta.get("status") in ("working", "waiting")
+                was_busy = meta.get("status") in ("working", "waiting", "paused") or bool(meta.get("interrupted"))
                 resume_text = None
                 if messages and chatlog.is_user_turn(messages[-1]):
                     # the daemon died mid-turn: the last user message never got
                     # an answer. Never re-run it silently - offer a resume.
                     resume_text = chatlog.user_text(messages.pop())
                     was_busy = True
+                orphan = meta.pop("turn_pid", None)
+                if orphan:
+                    self._kill_orphan(int(orphan), meta.get("name"))
+                info = meta.get("worktree")
+                if info and not wt.is_attached(info):
+                    try:
+                        meta["worktree"] = wt.reattach_worktree(info)
+                        meta["cwd"] = info["path"]
+                    except wt.GitError as exc:
+                        log.warning("session %s: worktree not reattached: %s", sid, exc)
+                        if not os.path.isdir(meta.get("cwd") or ""):
+                            meta["cwd"] = info.get("root") if os.path.isdir(info.get("root") or "") else os.path.expanduser("~")
                 session = self._build_session(meta, messages)
                 session.events.extend(load_events(sdir, EVENT_TAIL))
                 if was_busy:
                     session.meta["interrupted"] = True
                     session.meta["resume_text"] = resume_text or session.meta.get("resume_text")
-                    self._record(session, {
-                        "t": "system", "ts": time.time(), "kind": "interrupted",
-                        "text": "kcoderd restarted while this session was working; the unfinished "
-                                "turn was not re-run. Resume to send it again.",
-                    })
+                    if not session.meta.get("paused_noted"):
+                        self._record(session, {
+                            "t": "system", "ts": time.time(), "kind": "interrupted",
+                            "text": "kcoderd restarted while this session was working; the unfinished "
+                                    "turn was not re-run. It is paused - resume to send it again.",
+                        })
+                        session.meta["paused_noted"] = True
                     session.save_messages()
                 session.save_meta()
                 log.info("loaded session %s (%s) in %s", sid, meta.get("name"), meta.get("cwd"))
@@ -329,12 +348,83 @@ class Manager:
             **self._header_stats(),
             "daily_cap_usd": self.daily_cap(),
             "cap_reached": self.cap_reached(),
+            "version": __version__,
+            "update": self._update_summary(),
+            "restarting": self.restarting,
         }
 
+    def _update_summary(self) -> dict:
+        now = time.time()
+        if now - getattr(self, "_upd_at", 0) > 5:
+            try:
+                self._upd = updater.status_summary()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("update status failed: %s", exc)
+                self._upd = {}
+            self._upd_at = now
+        return getattr(self, "_upd", {})
+
+    def all_idle(self) -> bool:
+        return not any(s.engine.busy for s in self.sessions.values())
+
+    def clients_idle(self) -> bool:
+        return not any(s.engine.pending_approval() for s in self.sessions.values())
+
+    def busy_names(self) -> list:
+        return [s.meta["name"] for s in self.sessions.values() if s.engine.busy]
+
+    def _kill_orphan(self, pid: int, name: str | None = None) -> None:
+        """A turn's subprocess (the claude CLI or a shell) that outlived the
+        previous daemon. Kill it so it cannot keep editing files unattended."""
+        if not _pid_alive(pid):
+            return
+        try:
+            cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            cmd = ""
+        if not any(k in cmd for k in ("claude", "kcoder", "/bin/sh", "bash", "zsh")):
+            log.warning("pid %d (noted for %s) is now %r; not touching it", pid, name, cmd.strip()[:60])
+            return
+        log.warning("killing orphaned turn process %d of %s: %s", pid, name, cmd.strip()[:80])
+        for sig_ in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pid, sig_)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    os.kill(pid, sig_)
+                except OSError:
+                    return
+            for _ in range(20):
+                if not _pid_alive(pid):
+                    return
+                time.sleep(0.1)
+
+    def _note_proc(self, sid: str, pid: int | None) -> None:
+        session = self.sessions.get(sid)
+        if session is None:
+            return
+        if pid:
+            session.meta["turn_pid"] = pid
+        else:
+            session.meta.pop("turn_pid", None)
+        session.save_meta()
+
     def shutdown(self) -> None:
+        busy = [s for s in self.sessions.values() if s.engine.busy]
+        for session in busy:
+            # come back paused, with the turn's text ready to resend
+            session.meta["interrupted"] = True
+            text = session.engine.current_user_text
+            if text:
+                session.meta["resume_text"] = text
+            session.engine.interrupt()
+        deadline = time.monotonic() + 4.0
+        for session in busy:
+            t = session.engine._thread
+            if t is not None and t.is_alive():
+                t.join(max(0.05, deadline - time.monotonic()))
+            session.meta.pop("turn_pid", None)
         for session in self.sessions.values():
-            if session.engine.busy:
-                session.engine.interrupt()
             if session.shell is not None:
                 try:
                     session.shell.close()
@@ -375,6 +465,7 @@ class Manager:
             compact_at=int(self.cfg.get("compact_at") or DEFAULT_COMPACT_AT),
         )
         engine.last_input_tokens = int(meta.get("context_tokens", 0) or 0)
+        engine.on_proc = lambda p, sid=sid: self.loop.call_soon_threadsafe(self._note_proc, sid, getattr(p, "pid", None))
         if hasattr(backend, "session_id"):
             backend.session_id = meta.get("claude_session")
         meta["archived"] = False
@@ -384,7 +475,11 @@ class Manager:
         return session
 
     def create(self, *, cwd: str, provider: str, model: str | None, name: str | None,
-               trust: str = "read", worktree: bool = False, title: str | None = None) -> Session:
+               trust: str = "read", worktree: bool | None = None, title: str | None = None,
+               start: str | None = None) -> Session:
+        """`worktree` None means the default: a worktree whenever the folder
+        is a git repo (config `worktrees`). `start` is the branch/commit the
+        session branch begins from (forks pass the parent's branch)."""
         cwd = os.path.abspath(os.path.expanduser(cwd))
         if not os.path.isdir(cwd):
             raise ValueError(f"no such directory: {cwd}")
@@ -393,6 +488,11 @@ class Manager:
         name = self._unique_name(base)
         now = time.time()
         root = projects.project_root(cwd)
+        is_git = projects.git_toplevel(root) == root
+        if worktree is None:
+            worktree = bool(self.cfg.get("worktrees", True)) and is_git
+        worktree = bool(worktree) and is_git
+        wt_note = None
         meta = {
             "id": sid,
             "name": name,
@@ -410,14 +510,20 @@ class Manager:
             "queue": [],
         }
         if worktree:
-            from . import worktree as wt
-            info = wt.create_worktree(root, name)
-            meta["worktree"] = info
-            meta["cwd"] = info["path"]
+            try:
+                info = wt.create_worktree(root, name, start)
+                meta["worktree"] = info
+                meta["cwd"] = info["path"]
+            except wt.GitError as exc:
+                wt_note = f"no worktree for this session ({exc}); working directly in {cwd}"
+                log.warning("session %s: %s", name, wt_note)
         session = self._build_session(meta, [])
         session.save_meta()
         session.save_messages()
-        self._record(session, {"t": "system", "ts": now, "text": f"session {name} created in {meta['cwd']}"})
+        where = f"{meta['cwd']} (branch {meta['worktree']['branch']})" if meta.get("worktree") else meta["cwd"]
+        self._record(session, {"t": "system", "ts": now, "text": f"session {name} created in {where}"})
+        if wt_note:
+            self._record(session, {"t": "notice", "ts": now, "text": wt_note})
         self.broadcast_sessions()
         self.broadcast_chats()
         return session
@@ -463,6 +569,15 @@ class Manager:
         meta["archived"] = False
         meta.pop("closed", None)
         cwd = meta.get("cwd") or os.getcwd()
+        info = meta.get("worktree")
+        note = None
+        if info and not wt.is_attached(info):
+            try:
+                meta["worktree"] = wt.reattach_worktree(info)
+                meta["cwd"] = cwd = info["path"]
+                note = f"worktree restored from branch {info['branch']}"
+            except wt.GitError as exc:
+                note = f"worktree could not be restored ({exc})"
         if not os.path.isdir(cwd):
             # worktree or folder gone: fall back to the project root
             root = (meta.get("project") or {}).get("path")
@@ -475,7 +590,7 @@ class Manager:
         else:
             session.events.extend(events)
         session.save_meta()
-        self._record(session, {"t": "system", "ts": time.time(), "text": "chat resumed"})
+        self._record(session, {"t": "system", "ts": time.time(), "text": "chat resumed" + (f"; {note}" if note else "")})
         self.broadcast_sessions()
         self.broadcast_chats()
         return session
@@ -499,11 +614,17 @@ class Manager:
             raise KeyError(f"no session {sid!r}")
         meta["archived"] = True
         meta["status"] = "archived"
+        wt_info = meta.get("worktree")
+        if wt_info and not delete:
+            # free the checkout; the branch (with a checkpoint of any
+            # uncommitted work) stays and comes back on resume
+            try:
+                meta["worktree"] = wt.detach_worktree(wt_info)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("worktree for %s left in place: %s", sid, exc)
         if delete:
             meta["deleted"] = True
-            wt_info = meta.get("worktree")
             if wt_info:
-                from . import worktree as wt
                 try:
                     wt.remove_worktree(wt_info, delete_branch=True)
                 except Exception as exc:  # noqa: BLE001
@@ -634,6 +755,7 @@ class Manager:
             if (session.meta.get("project") or {}).get("git") or session.meta.get("worktree"):
                 session.head_at_turn_start = stats.head(session.engine.cwd)
         elif t == "turn_end":
+            session.meta.pop("turn_pid", None)
             session.meta.setdefault("usage", {}).setdefault("turns", 0)
             session.meta["usage"]["turns"] += 1
             if hasattr(session.engine.backend, "session_id"):
@@ -907,6 +1029,46 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             return {"sent": True}
         return {"sent": False}
 
+    if t == "ui_state":
+        # the app's layout (panes, order, view), so it survives a wiped
+        # browser profile and follows the user to another window
+        if "state" in req:
+            data = req["state"]
+            if not isinstance(data, dict):
+                raise RequestError("state must be an object")
+            text = json.dumps(data)
+            if len(text) > 200_000:
+                raise RequestError("ui state too large")
+            _atomic_write(paths.UI_STATE_PATH, text)
+            return {"saved": True}
+        try:
+            with open(paths.UI_STATE_PATH, "r", encoding="utf-8") as f:
+                return {"state": json.load(f)}
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"state": None}
+
+    if t == "update":
+        action = req.get("action") or "status"
+        if action == "check":
+            await asyncio.get_running_loop().run_in_executor(None, updater.check_and_download)
+            manager._upd_at = 0
+            manager.broadcast_sessions()
+        elif action == "apply":
+            return _begin_restart(manager, apply=True, force=bool(req.get("force")))
+        return {"update": updater.status_summary()}
+
+    if t == "restart":
+        return _begin_restart(manager, force=bool(req.get("force")))
+
+    if t == "uninstall":
+        busy = manager.busy_names()
+        if busy and not req.get("force"):
+            raise RequestError(f"{len(busy)} session(s) are still working ({', '.join(busy[:3])})")
+        uninstaller.run(bool(req.get("delete_history")), bool(req.get("delete_keys")), wait_pid=os.getpid())
+        manager.restarting = True
+        manager.loop.call_later(0.5, manager.stop.set)
+        return {"uninstalling": True, "delete_history": bool(req.get("delete_history")), "delete_keys": bool(req.get("delete_keys"))}
+
     if t == "history":
         return {"chats": manager.history(req.get("project"), not req.get("active_only"), int(req.get("limit") or 200)),
                 "projects": manager.project_list()}
@@ -932,17 +1094,19 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
                 raise RequestError(f"clone failed: {exc}")
             if req.get("pull", True):
                 pulled = await asyncio.get_running_loop().run_in_executor(None, repos.update, cwd)
-        # a local folder with no GitHub remote: make it a repo now (so worktrees
-        # work) and create + push the GitHub repo in the background
+        # a local folder: make it a git repo now (every session works in its
+        # own worktree) and, with gh signed in, create + push the GitHub repo
+        # in the background
         publish_root = None
-        if not spec and manager.cfg.get("auto_publish", True) and shutil.which("gh"):
+        if not spec:
             root = projects.project_root(cwd)
-            if not repos.github_spec(root):
+            if not projects.git_toplevel(root) and manager.cfg.get("worktrees", True):
                 try:
                     await asyncio.get_running_loop().run_in_executor(None, repos.init_repo, root)
-                    publish_root = root
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("auto-publish: not initialising %s: %s", root, exc)
+                    log.warning("not initialising a repo in %s: %s", root, exc)
+            if manager.cfg.get("auto_publish", True) and shutil.which("gh") and projects.git_toplevel(root) and not repos.github_spec(root):
+                publish_root = root
         try:
             session = manager.create(
                 cwd=cwd,
@@ -950,7 +1114,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
                 model=req.get("model"),
                 name=req.get("name"),
                 trust=trust,
-                worktree=bool(req.get("worktree")),
+                worktree=None if req.get("worktree") is None else bool(req.get("worktree")),
                 title=req.get("title"),
             )
         except ValueError as exc:
@@ -1071,6 +1235,14 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {}
 
     if t == "resume_turn":
+        if req.get("discard"):
+            session.meta.pop("interrupted", None)
+            session.meta.pop("resume_text", None)
+            session.meta.pop("paused_noted", None)
+            session.save_meta()
+            manager._record(session, {"t": "system", "ts": time.time(), "text": "interrupted turn discarded"})
+            manager.broadcast_sessions()
+            return {}
         text = session.meta.get("resume_text") or (req.get("text") or "")
         if not text.strip():
             raise RequestError("nothing to resume")
@@ -1141,10 +1313,17 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         k = max(0, min(k, len(turns) - 1))
         end = turns[k + 1] if k + 1 < len(turns) else len(engine.messages)
         messages = json.loads(json.dumps(engine.messages[:end]))
+        parent_wt = session.meta.get("worktree")
+        if parent_wt and not engine.busy:
+            try:
+                wt.checkpoint(parent_wt["path"], f"kcoder: checkpoint before forking {parent_wt['branch']}")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("fork: parent checkpoint skipped: %s", exc)
         new = manager.create(
-            cwd=engine.cwd, provider=session.meta["provider"], model=engine.model,
+            cwd=parent_wt["root"] if parent_wt else engine.cwd, provider=session.meta["provider"], model=engine.model,
             name=f"{session.meta['name']}-fork", trust=engine.trust,
             title=f"{session.meta.get('title') or session.meta['name']} (fork)",
+            start=parent_wt["branch"] if parent_wt else None,
         )
         new.engine.messages[:] = messages
         new.engine.last_input_tokens = engine.last_input_tokens
@@ -1302,35 +1481,112 @@ async def _auto_publish(manager, session, root: str) -> None:
     manager.broadcast_sessions()
 
 
+def _begin_restart(manager: Manager, *, apply: bool = False, force: bool = False) -> dict:
+    """Hand off to the detached updater helper and stop. The helper waits for
+    this process to exit, installs (apply) and starts a fresh daemon, then
+    health-checks it and rolls back if that fails."""
+    busy = manager.busy_names()
+    if busy and not force:
+        raise RequestError(f"{len(busy)} session(s) are working ({', '.join(busy[:3])}); "
+                           "they would be interrupted - wait, or choose update now")
+    st = updater.status_summary()
+    if apply and st.get("failed") and not force:
+        raise RequestError(f"{st.get('latest')} failed its health check earlier ({st['failed']}); use update now / --force to retry it")
+    try:
+        if apply:
+            if st.get("dev"):
+                updater.spawn_helper("apply", previous=__version__)          # git pull --ff-only
+                target = st.get("latest") or "latest"
+            else:
+                if not st.get("ready"):
+                    raise RequestError("no verified update has been downloaded yet")
+                updater.spawn_helper("apply", tarball=updater.load_state().get("ready"), expect=st["latest"], previous=__version__)
+                target = st["latest"]
+        else:
+            updater.spawn_helper("restart")
+            target = st.get("installed")
+    except updater.UpdateError as exc:
+        raise RequestError(str(exc))
+    manager.restarting = True
+    log.info("restarting kcoderd (%s -> %s)", "apply" if apply else "restart", target)
+    manager.broadcast_sessions()
+    manager.loop.call_later(0.5, manager.stop.set)
+    return {"restarting": True, "version": target, "apply": apply}
+
+
+# every static response: never framed, never sniffed, never shared cross-origin
+_SECURITY_HEADERS = [
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", "frame-ancestors 'none'"),
+    ("Cross-Origin-Resource-Policy", "same-origin"),
+    ("Cross-Origin-Opener-Policy", "same-origin"),
+    ("Referrer-Policy", "no-referrer"),
+    ("Cache-Control", "no-cache"),
+]
+
+
+def _response(status: int, reason: str, body: bytes, ctype: str = "text/plain; charset=utf-8") -> Response:
+    return Response(status, reason, Headers([("Content-Type", ctype), ("Content-Length", str(len(body)))] + _SECURITY_HEADERS), body)
+
+
 def _serve_static(request):
     path = request.path.split("?", 1)[0]
     if path in ("/", ""):
         path = "/index.html"
     if path == "/health":
-        body = b"ok\n"
-        return Response(200, "OK", Headers([("Content-Type", "text/plain"), ("Content-Length", str(len(body)))]), body)
+        return _response(200, "OK", b"ok\n")
     rel = os.path.normpath(path.lstrip("/"))
     if rel.startswith("..") or os.path.isabs(rel):
-        return Response(404, "Not Found", Headers([("Content-Length", "0")]), b"")
+        return _response(404, "Not Found", b"not found\n")
     full = os.path.join(WEB_DIR, rel)
     if not os.path.isfile(full):
-        return Response(404, "Not Found", Headers([("Content-Type", "text/plain"), ("Content-Length", "10")]), b"not found\n")
+        return _response(404, "Not Found", b"not found\n")
     ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
     if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):
         ctype += "; charset=utf-8"
     with open(full, "rb") as f:
         body = f.read()
-    return Response(200, "OK", Headers([
-        ("Content-Type", ctype), ("Content-Length", str(len(body))), ("Cache-Control", "no-cache"),
-    ]), body)
+    return _response(200, "OK", body, ctype)
 
 
-def _make_process_request():
+def allowed_hosts(port: int) -> set:
+    return {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+
+
+def allowed_origins(port: int) -> set:
+    return {f"http://{h}" for h in allowed_hosts(port)}
+
+
+def _make_process_request(port: int):
+    """The loopback listener. Anything on this machine can open a TCP
+    connection to it, so every request must look like it came from our own
+    page: a loopback Host (no DNS rebinding) and, for browsers, our own
+    Origin. Non-browser clients send no Origin and prove themselves with the
+    token in their first frame."""
+    hosts = allowed_hosts(port)
+    origins = allowed_origins(port)
+
     def process_request(connection, request):
+        host = request.headers.get("Host", "")
+        if host not in hosts:
+            log.warning("refused request with Host %r", host[:80])
+            return _response(403, "Forbidden", b"forbidden\n")
         if request.headers.get("Upgrade", "").lower() != "websocket":
             return _serve_static(request)
+        origin = request.headers.get("Origin")
+        if origin is not None and origin not in origins:
+            log.warning("refused websocket from Origin %r", origin[:80])
+            return _response(403, "Forbidden", b"forbidden\n")
         return None
     return process_request
+
+
+def _unix_process_request(connection, request):
+    # the socket file is user-only; still, only websocket upgrades are served here
+    if request.headers.get("Upgrade", "").lower() != "websocket":
+        return _response(404, "Not Found", b"websocket only\n")
+    return None
 
 
 async def _client_sender(client: Client) -> None:
@@ -1344,6 +1600,7 @@ async def _handle(ws, manager: Manager, token: str) -> None:
         raw = await asyncio.wait_for(ws.recv(), timeout=10)
         hello = json.loads(raw)
         if hello.get("type") != "auth" or not secrets.compare_digest(str(hello.get("token", "")), token):
+            await asyncio.sleep(0.5)   # no fast guessing
             await ws.send(json.dumps({"type": "reply", "id": hello.get("id"), "ok": False, "error": "unauthorized"}))
             await ws.close(4401, "unauthorized")
             return
@@ -1354,7 +1611,8 @@ async def _handle(ws, manager: Manager, token: str) -> None:
     client = Client(ws)
     manager.clients.add(client)
     sender = asyncio.create_task(_client_sender(client))
-    await ws.send(json.dumps({"type": "reply", "id": hello.get("id"), "ok": True, "version": __version__}))
+    await ws.send(json.dumps({"type": "reply", "id": hello.get("id"), "ok": True, "version": __version__,
+                              "installed": updater.installed_version(), "dev": updater.is_dev_install()}))
     client.queue.put_nowait(manager.sessions_frame())
     client.queue.put_nowait(manager.chats_frame())
     try:
@@ -1424,7 +1682,7 @@ def _port_open(host: str, port: int) -> bool:
     """True if kcoderd answers /health on host:port."""
     try:
         with socket.create_connection((host, port), timeout=0.5) as s:
-            s.sendall(f"GET /health HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+            s.sendall(f"GET /health HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode())
             s.settimeout(1.0)
             data = s.recv(256)
         return data.startswith(b"HTTP/1.1 200")
@@ -1453,27 +1711,77 @@ async def _serve(host: str, port: int) -> None:
         except (RuntimeError, NotImplementedError):
             pass  # not the main thread (embedded/tests) or Windows
 
-    origins = [None, f"http://{host}:{port}", f"http://localhost:{port}"]
+    origins = [None] + sorted(allowed_origins(port))
+    sock_path = paths.SOCKET_PATH
+    try:
+        os.remove(sock_path)
+    except FileNotFoundError:
+        pass
+    old_umask = os.umask(0o177)   # the socket is created user-only
+    try:
+        unix_server = await unix_serve(
+            lambda ws: _handle(ws, manager, token), path=sock_path,
+            process_request=_unix_process_request, max_size=64 * 1024 * 1024, server_header=None,
+        ).__aenter__()
+    finally:
+        os.umask(old_umask)
+    try:
+        os.chmod(sock_path, 0o600)
+    except OSError:
+        pass
     async with serve(
         lambda ws: _handle(ws, manager, token),
         host, port,
         origins=origins,
-        process_request=_make_process_request(),
+        process_request=_make_process_request(port),
         max_size=64 * 1024 * 1024,
         server_header=None,
     ) as server:
-        info = {"host": host, "port": port, "pid": os.getpid(), "started": time.time(), "version": __version__}
+        info = {"host": host, "port": port, "pid": os.getpid(), "started": time.time(), "version": __version__,
+                "socket": sock_path}
         _atomic_write(paths.DAEMON_INFO_PATH, json.dumps(info))
         os.chmod(paths.DAEMON_INFO_PATH, 0o600)
-        log.info("kcoderd %s listening on ws://%s:%d/ws (pid %d)", __version__, host, port, os.getpid())
+        log.info("kcoderd %s listening on ws://%s:%d/ws and %s (pid %d)", __version__, host, port, sock_path, os.getpid())
+        updates = asyncio.create_task(_update_loop(manager))
         await stop.wait()
         log.info("shutting down")
+        updates.cancel()
         manager.shutdown()
         server.close()
-    try:
-        os.remove(paths.DAEMON_INFO_PATH)
-    except FileNotFoundError:
-        pass
+        unix_server.close()
+    for p in (paths.DAEMON_INFO_PATH, sock_path):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+
+
+async def _update_loop(manager: Manager) -> None:
+    """Check for releases on start and daily; download + verify in the
+    background; install when everything is idle (config auto_update)."""
+    loop = asyncio.get_running_loop()
+    await asyncio.sleep(float(os.environ.get("KCODER_UPDATE_DELAY", "20")))
+    while not manager.stop.is_set():
+        delay = updater.CHECK_INTERVAL
+        try:
+            before = updater.status_summary()
+            summary = await loop.run_in_executor(None, updater.check_and_download)
+            if summary != before:
+                manager._upd_at = 0
+                manager.broadcast_sessions()
+            if summary.get("ready") and not summary.get("dev") and not summary.get("failed"):
+                if manager.cfg.get("auto_update", True) and manager.all_idle() and manager.clients_idle():
+                    log.info("update %s is verified and everything is idle: installing", summary.get("latest"))
+                    _begin_restart(manager, apply=True)
+                    return
+                delay = 600   # waiting for an idle moment
+        except Exception as exc:  # noqa: BLE001
+            log.warning("update check failed: %s", exc)
+        try:
+            await asyncio.wait_for(manager.stop.wait(), timeout=delay)
+            return
+        except asyncio.TimeoutError:
+            pass
 
 
 def main(argv: list | None = None) -> None:

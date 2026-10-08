@@ -33,7 +33,10 @@ def _slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "session"
 
 
-def create_worktree(root: str, name: str) -> dict:
+def create_worktree(root: str, name: str, start: str | None = None) -> dict:
+    """A new worktree + branch kcoder/<name> for a session. `start` is the
+    commit or branch to branch from (default: the repo's HEAD); forks pass
+    the parent session's branch so they begin with the same files."""
     root = os.path.abspath(root)
     slug = _slug(name)
     branch = f"kcoder/{slug}"
@@ -41,13 +44,63 @@ def create_worktree(root: str, name: str) -> dict:
     path = os.path.join(WORKTREES_DIR, repo_key, slug)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if os.path.exists(path):
-        raise GitError(f"worktree path already exists: {path}")
+        if os.path.exists(os.path.join(path, ".git")):
+            raise GitError(f"worktree path already exists: {path}")
+        shutil.rmtree(path, ignore_errors=True)    # a stale, unregistered leftover
+        _git(root, "worktree", "prune", check=False)
+    if not _git(root, "rev-parse", "--verify", "--quiet", "HEAD", check=False).strip():
+        raise GitError("the repository has no commits yet; make one first")
     base = _git(root, "rev-parse", "--abbrev-ref", "HEAD").strip() or "HEAD"
     if _git(root, "rev-parse", "--verify", "--quiet", branch, check=False).strip():
         _git(root, "worktree", "add", path, branch)
     else:
-        _git(root, "worktree", "add", "-b", branch, path, "HEAD")
+        _git(root, "worktree", "add", "-b", branch, path, start or "HEAD")
     return {"path": path, "branch": branch, "root": root, "base": base, "created": time.time()}
+
+
+def is_attached(info: dict) -> bool:
+    """True if the worktree directory exists and is registered with git."""
+    path = info.get("path")
+    return bool(path and os.path.exists(os.path.join(path, ".git")))
+
+
+def checkpoint(path: str, message: str) -> str | None:
+    """Commit uncommitted work (as the signed-in account). None when clean."""
+    return commit_all(path, message)
+
+
+def detach_worktree(info: dict) -> dict:
+    """Archive-time cleanup: keep the branch (with any uncommitted work
+    committed as a checkpoint), remove the directory. Raises GitError when
+    work could not be committed, in which case the worktree is left alone."""
+    path, root = info.get("path"), info.get("root")
+    if not is_attached(info):
+        return {**info, "detached": True}
+    committed = checkpoint(path, f"kcoder: checkpoint before archiving {info.get('branch')}")
+    out = subprocess.run(["git", "-C", root, "worktree", "remove", "--force", path], capture_output=True, text=True)
+    if out.returncode != 0 and os.path.isdir(path):
+        raise GitError("could not remove worktree: " + (out.stderr or out.stdout).strip()[-300:])
+    _git(root, "worktree", "prune", check=False)
+    return {**info, "detached": True, "checkpoint": committed}
+
+
+def reattach_worktree(info: dict) -> dict:
+    """Resume-time: recreate the worktree directory from the session branch."""
+    if is_attached(info):
+        return {**info, "detached": False}
+    root, path, branch = info["root"], info["path"], info["branch"]
+    if not os.path.isdir(root):
+        raise GitError(f"project {root} no longer exists")
+    if not _git(root, "rev-parse", "--verify", "--quiet", branch, check=False).strip():
+        raise GitError(f"branch {branch} no longer exists")
+    if os.path.exists(path):
+        shutil.rmtree(path, ignore_errors=True)
+    _git(root, "worktree", "prune", check=False)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _git(root, "worktree", "add", path, branch)
+    out = dict(info)
+    out.pop("detached", None)
+    return out
 
 
 def remove_worktree(info: dict, delete_branch: bool = False) -> None:

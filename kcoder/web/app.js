@@ -101,9 +101,27 @@ function request(type, fields = {}) {
   return new Promise((resolve, reject) => {
     if (!state.ws || state.ws.readyState !== 1) return reject(new Error('not connected'));
     const id = state.reqId++;
-    state.pending.set(id, { resolve, reject });
+    state.pending.set(id, { resolve, reject: (e) => { if (/unknown request type/.test(e.message)) restartForMismatch('the running kcoderd does not know ' + type); reject(e); } });
     state.ws.send(JSON.stringify({ type, id, ...fields }));
   });
+}
+// app and daemon exchange versions on connect; when they differ (a new
+// version was installed under a running daemon) the app restarts the daemon
+// itself instead of surfacing protocol errors
+function handleVersion(msg) {
+  state.version = { running: msg.version, installed: msg.installed, dev: !!msg.dev };
+  if (msg.installed && msg.version && msg.installed !== msg.version) restartForMismatch(`kcoder ${msg.installed} is installed but kcoderd ${msg.version} is running`);
+}
+function restartForMismatch(why) {
+  if (state._mismatchAt && Date.now() - state._mismatchAt < 60000) return;
+  state._mismatchAt = Date.now();
+  toast(why + ' - restarting kcoderd', 'warn');
+  request('restart').then(() => toast('kcoderd is restarting…', 'warn')).catch((e) => toast('restart later: ' + e.message, 'warn'));
+}
+let uiSyncTimer = null;
+function syncUiState() {
+  clearTimeout(uiSyncTimer);
+  uiSyncTimer = setTimeout(() => { if (state.connected) request('ui_state', { state: { layout: state.layout, order: state.order, view: state.view, saved: Date.now() } }).catch(() => {}); }, 800);
 }
 function send(type, fields = {}) { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type, ...fields })); }
 
@@ -112,6 +130,7 @@ async function onFrame(msg) {
     if (msg.id === 0) {
       if (!msg.ok) { localStorage.removeItem('kcoder.token'); tokenGate('Unauthorized.'); return; }
       state.connected = true; setConn('on');
+      handleVersion(msg);
       await onConnected();
       return;
     }
@@ -129,6 +148,10 @@ async function onConnected() {
   await request('attach', { sid: '*' });
   await refreshProviders();
   try { state.config = (await request('config')).config; } catch {}
+  if (!localStorage.getItem('kcoder.layout') && !localStorage.getItem('kcoder.order')) {
+    // a fresh browser profile: pick up the layout the daemon kept for us
+    try { const r = await request('ui_state'); if (r.state) { if (r.state.layout) { state.layout = r.state.layout; localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); } if (Array.isArray(r.state.order)) { state.order = r.state.order; localStorage.setItem('kcoder.order', JSON.stringify(state.order)); } } } catch {}
+  }
   applyUrlParams();
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
   for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1);
@@ -382,6 +405,7 @@ function trailerHtml(store, sid) {
   if (store.streaming || store.live) return `<div class="msg msg-assistant streaming"><div class="who">kcoder&gt;</div><div class="md">${store.live ? renderMarkdown(store.live) : ''}</div></div>`;
   const sess = state.sessions.get(sid);
   if (sess && sess.status === 'working') return `<div class="note working"><span class="t-spinner">◐</span> working…</div>`;
+  if (sess && sess.status === 'paused') return `<div class="note paused"><b>paused</b> - kcoderd restarted during this turn; nothing was re-run. <button class="primary" data-act="resume">resume</button> <button data-act="dismiss">dismiss</button></div>`;
   return '';
 }
 
@@ -450,6 +474,9 @@ function renderHeader() {
     `<button class="stat" data-metric="tokens" title="tokens, last 7 days"><b>${spark}</b><span>7 days</span></button>`,
   ].join('');
   $('#btn-broadcast').classList.toggle('active', !!state.broadcast);
+  const up = st.update || {};
+  if (st.restarting) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn"><b>restarting</b><span>kcoderd</span></div>`);
+  else if (up.ready || (up.available && up.dev)) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat ${up.failed ? 'bad' : 'warn'}" data-upd="1" title="${up.failed ? 'this version failed its health check and was rolled back: ' + esc(up.failed) + ' (click to force it anyway)' : up.dev ? 'git pull --ff-only in your checkout, then restart' : 'downloaded and verified; installs when every session is idle, or click'}"><b>${esc(up.latest)}</b><span>${up.failed ? 'update failed · click' : 'update ready · click'}</span></div>`);
   const n = (st.pending_approvals || []).length;
   const c = $('#inbox-count'); c.hidden = !n; c.textContent = n;
   $('#btn-sound').textContent = state.sound ? '🔔' : '🔕';
@@ -459,7 +486,7 @@ function renderHeader() {
 }
 
 function setView(v) {
-  state.view = v; localStorage.setItem('kcoder.view', v);
+  state.view = v; localStorage.setItem('kcoder.view', v); syncUiState();
   renderViews();
   if (v === 'chat') { if (!focusedSid() && state.order[0]) { state.layout.panes[state.layout.focus] = state.order[0]; saveLayout(); } for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1); syncSid(); }
   else if (v === 'terminal') { if (!state.sid) state.sid = focusedSid() || state.order[0] || null; if (state.sid) loadEvents(state.sid, -1); }
@@ -476,7 +503,8 @@ function renderViews() {
 // wall
 // ----------------------------------------------------------------------
 function paneStatus(s) {
-  if (state.stats.cap_reached && s.status === 'idle') return 'paused';
+  if (s.status === 'paused') return 'paused';
+  if (state.stats.cap_reached && s.status === 'idle') return 'capped';
   if (s.status === 'idle') return (s.usage && s.usage.turns) ? 'done' : 'idle';
   return s.status;
 }
@@ -538,7 +566,7 @@ function renderPaneChrome(pane, s, num) {
     (s.queue && s.queue.length ? `<span title="queued tasks">▶ ${s.queue.length} queued</span>` : '') +
     (git ? `<span class="git-line" title="git">${esc(git.branch || '')}${git.dirty ? ` <span class="dirty">±${git.dirty}</span>` : ''}${git.ahead ? ` ↑${git.ahead}` : ''}</span>` : '') +
     `<span class="spacer"></span>` +
-    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span>paused (cap)</span>` : '') +
+    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span class="waiting">PAUSED</span><button data-act="resume" class="primary">resume</button><button data-act="dismiss">dismiss</button>` : st === 'capped' ? `<span>paused (cap)</span>` : '') +
     `<span>${age(s.last_activity)} ago</span>`;
   // approval bar
   const bar = $('.approval-bar', pane);
@@ -547,6 +575,9 @@ function renderPaneChrome(pane, s, num) {
     const req = store && store.list.slice().reverse().find((e) => e.t === 'approval_request' && e.id === s.pending_approval);
     bar.hidden = false;
     bar.innerHTML = `<span>allow</span><code title="${esc(req ? req.description : '')}">${esc(req ? req.description : 'pending tool call')}</code><button class="primary" data-act="approve" data-rid="${esc(s.pending_approval)}">yes</button><button class="danger" data-act="decline" data-rid="${esc(s.pending_approval)}">no</button>`;
+  } else if (s.status === 'paused') {
+    bar.hidden = false;
+    bar.innerHTML = `<span>paused</span><code title="${esc(s.resume_text || '')}">${esc(s.resume_text ? 'interrupted by a restart: ' + s.resume_text : 'the last turn was interrupted by a restart')}</code><button class="primary" data-act="resume">resume</button><button data-act="dismiss">dismiss</button>`;
   } else bar.hidden = true;
   // actions (focused only)
   const acts = $('.pane-actions', pane);
@@ -689,7 +720,7 @@ function wirePane(pane, sid) {
   wireDrag(pane, sid);
 }
 
-function saveOrder() { localStorage.setItem('kcoder.order', JSON.stringify(state.order)); }
+function saveOrder() { localStorage.setItem('kcoder.order', JSON.stringify(state.order)); syncUiState(); }
 function movePane(from, to, before) {
   if (from === to) return;
   const order = state.order.filter((x) => x !== from);
@@ -773,6 +804,7 @@ async function handleAction(el, sid) {
       case 'interrupt': await request('interrupt', { sid }); break;
       case 'kill': await request('shell_kill_tool', { sid }); toast('killed', 'warn'); break;
       case 'resume': await request('resume_turn', { sid }); break;
+      case 'dismiss': await request('resume_turn', { sid, discard: true }); break;
       case 'queue': { const t = await promptDialog('Add a follow-up task', 'It runs when the current turn finishes.'); if (t) await request('queue', { sid, action: 'add', text: t }); break; }
       case 'trust': await request('set', { sid, trust: el.value }); break;
       case 'model': {
@@ -1351,6 +1383,8 @@ function paletteItems() {
     ['toggle auto-publish of local folders to GitHub', async () => { const on = !(state.config && state.config.auto_publish !== false); const r = await request('config', { auto_publish: on }); state.config = r.config; toast('auto-publish to GitHub: ' + (on ? 'on' : 'off'), 'ok'); }],
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
+    ['check for updates', checkUpdates], ['update now (install + restart kcoderd)', updateNow], ['restart kcoderd', restartDaemon],
+    ['uninstall kcoder…', uninstallDialog],
     ['keyboard help', helpDialog, '?'],
   ];
   for (const s of state.sessions.values()) {
@@ -1455,6 +1489,46 @@ async function setupDialog(pid) {
 }
 
 // token gate (first launch without #token=)
+// ---- updates, restart, uninstall ----
+async function checkUpdates() {
+  toast('checking for updates…');
+  try {
+    const up = (await request('update', { action: 'check' })).update || {};
+    if (up.error) toast('update check: ' + up.error, 'warn');
+    else if (up.available) toast(`kcoder ${up.latest} is available` + (up.ready ? ' (downloaded + verified)' : up.dev ? ' (git pull in your checkout)' : ''), 'ok');
+    else toast(`kcoder ${up.running} is up to date`, 'ok');
+    renderHeader();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function updateNow() {
+  const up = (state.stats || {}).update || {};
+  if (!up.available) { toast('no update available', 'warn'); return; }
+  const busy = Array.from(state.sessions.values()).filter((s) => s.status === 'working' || s.status === 'waiting');
+  const ok = await confirmDialog(`Install kcoder ${up.latest} now?`, (up.dev ? 'Your developer checkout is pulled (git pull --ff-only) and kcoderd restarts.' : 'The verified release is installed and kcoderd restarts. If it fails its health check the previous version is restored.') + (busy.length ? ` ${busy.length} working session(s) will be interrupted and come back paused.` : ''));
+  if (!ok) return;
+  try { await request('update', { action: 'apply', force: true }); toast('installing… kcoderd is restarting', 'warn'); } catch (e) { toast(e.message, 'err'); }
+}
+async function restartDaemon() {
+  const busy = Array.from(state.sessions.values()).filter((s) => s.status === 'working' || s.status === 'waiting');
+  if (busy.length && !(await confirmDialog('Restart kcoderd?', `${busy.length} working session(s) will be interrupted and come back paused.`))) return;
+  try { await request('restart', { force: busy.length > 0 }); toast('kcoderd is restarting…', 'warn'); } catch (e) { toast(e.message, 'err'); }
+}
+function uninstallDialog() {
+  const d = openDialog(`<h2>uninstall kcoder</h2><div class="body">
+    <p>This removes the kcoder app, the login item, the daemon, caches and the Python package from this Mac.</p>
+    <label class="check"><input type="checkbox" id="un-hist"> also delete session history, stats and worktrees (default: keep)</label>
+    <label class="check"><input type="checkbox" id="un-keys"> also delete saved provider keys (default: keep)</label>
+    <p class="help">Kept data stays in ~/.local/share/kcoder and ~/.config/kcoder so a reinstall picks up where you left off.</p>
+  </div><div class="foot"><span class="spacer" style="flex:1"></span><button data-x="cancel">cancel</button><button class="danger" data-x="ok">remove kcoder</button></div>`, 'uninstall');
+  d.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-x]'); if (!b) return;
+    if (b.dataset.x !== 'ok') { closeDialog(); return; }
+    const fields = { delete_history: $('#un-hist', d).checked, delete_keys: $('#un-keys', d).checked, force: true };
+    try { await request('uninstall', fields); closeDialog(); infoDialog('removing kcoder', '<p>kcoder is being removed. This window will stop responding; close it.</p>'); }
+    catch (err) { toast(err.message, 'err'); }
+  });
+}
+
 function tokenGate(msg) {
   $('#main').innerHTML = `<div class="token-gate"><p>${esc(msg || 'This page needs the daemon token.')}</p><p>Run <code>kcoder ui</code> in a terminal - it opens this page with the token attached - or paste the contents of <code>~/.local/share/kcoder/token</code>:</p><input id="tok" placeholder="token"><button class="primary" id="tok-go">connect</button></div>`;
   const go = () => { const v = $('#tok').value.trim(); if (v) { localStorage.setItem('kcoder.token', v); location.reload(); } };
@@ -1562,7 +1636,7 @@ window.addEventListener('resize', () => { for (const sid of state.shells.keys())
 // ----------------------------------------------------------------------
 // split view: 1 to 3 session panes side by side, each fully independent
 // ----------------------------------------------------------------------
-function saveLayout() { localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); }
+function saveLayout() { localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); syncUiState(); }
 function paneSid(i) { return state.layout.panes[i] || null; }
 function focusedSid() { return paneSid(state.layout.focus); }
 function syncSid() { const sid = focusedSid(); if (sid) { state.sid = sid; localStorage.setItem('kcoder.sid', sid); } }
@@ -1891,3 +1965,5 @@ function exportStatsCsv() {
 
 renderHeader(); renderViews();
 connect();
+
+$('#stats').addEventListener('click', (e) => { if (e.target.closest('[data-upd]')) updateNow(); });

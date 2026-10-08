@@ -41,7 +41,8 @@ DEFAULTS = {
     "pricing": {},
     "daily_cap_usd": 0,        # 0 = no cap; sessions pause when today's spend reaches it
     "compact_at": 150000,      # compact history when the last prompt reached this many tokens
-    "worktrees": True,         # web-created sessions in git repos get their own worktree
+    "worktrees": True,         # every session in a git repo gets its own worktree + branch
+    "auto_update": True,       # install verified releases when all sessions are idle
     "default_trust": "auto",   # auto | write | read | none - what new sessions run without asking
     "projects_dir": "~/kcoder-projects",   # where GitHub repos are cloned
     "auto_publish": True,      # new sessions on local folders with no GitHub remote get a private repo created + pushed

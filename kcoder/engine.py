@@ -209,8 +209,24 @@ class Engine:
         self._pending: _Approval | None = None
         self._turn_started = 0.0
         self.last_input_tokens = 0
-        self.proc = None               # running run_bash subprocess, if any
+        self._proc = None              # running subprocess (run_bash, or the claude CLI), if any
+        self.on_proc = None            # callback(proc | None), e.g. so the daemon can note the pid
         self.kill_requested = False
+        self.current_user_text = None  # text of the turn in flight (for resume after a crash)
+
+    @property
+    def proc(self):
+        return self._proc
+
+    @proc.setter
+    def proc(self, value) -> None:
+        self._proc = value
+        cb = self.on_proc
+        if cb is not None:
+            try:
+                cb(value)
+            except Exception:  # noqa: BLE001 - bookkeeping must never break a turn
+                pass
 
     # ------------------------------------------------------------------
     # public API (called from any thread)
@@ -258,6 +274,7 @@ class Engine:
             if self.busy:
                 raise EngineBusy("a turn is already running")
             content = build_user_content(text, image_paths or [], self.provider.kind)
+            self.current_user_text = text
             self._interrupt.clear()
             self._set_status(STATUS_WORKING)
             self._thread = threading.Thread(
@@ -376,6 +393,7 @@ class Engine:
             self.emit("error", text=f"{type(exc).__name__}: {exc}")
         finally:
             self._pending = None
+            self.current_user_text = None
             with self._lock:
                 self._set_status(STATUS_ERROR if result == "error" else STATUS_IDLE)
             self.emit("turn_end", result=result, elapsed=round(time.monotonic() - self._turn_started, 2))

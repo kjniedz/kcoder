@@ -232,10 +232,41 @@ daemon is already up when you open the app and comes back after a crash.
 The page is also an installable web app (it ships a manifest and icons), so
 "Install app" in Chrome or "Add to Dock" in Safari works too.
 
-After a `git pull` of kcoder itself, the running daemon is older than the
-installed code; `kcoder app`, `kcoder ui` and `kcoder daemon status` notice
-and restart it when no session is mid-turn (or tell you to run
-`kcoder daemon restart` when one is).
+The app and the daemon exchange versions when they connect. When they differ
+(a new version was installed under a running daemon) the app restarts the
+daemon itself as soon as no session is mid-turn, instead of surfacing
+protocol errors; the CLI does the same. `kcoder daemon status` just reports
+the mismatch.
+
+## Updates
+
+kcoder checks for a new release when the daemon starts and once a day,
+downloads it in the background, and installs it only when every session is
+idle (or when you choose **update now** from ⌘K or the header). A release is
+a tarball plus `SHA256SUMS` plus an OpenSSH signature of that file made with
+the kcoder release key; nothing is installed unless the signature verifies
+against the key built into kcoder and the tarball's hash matches. The install
+runs in a detached helper: it waits for the daemon to exit, installs, starts
+a fresh daemon and checks its health. If the new version does not come up it
+reinstalls the previous one, and that version is never installed
+automatically again.
+
+- `kcoder update` checks and reports; `kcoder update --now` installs.
+- `auto_update: false` in the config turns the automatic install off (checks
+  and the header notice stay).
+- A developer checkout (the package imported from a git repo) is never
+  pip-installed over; "update" means `git pull --ff-only` there.
+- Maintainers cut a release with `python -m kcoder.release`: it tags
+  `v<version>`, builds the tarball from the tag, signs `SHA256SUMS` with
+  `~/.config/kcoder/release_key` and publishes everything with `gh`.
+
+## Uninstall
+
+`kcoder uninstall` (or ⌘K → **uninstall kcoder…**) removes the app, the
+login item, the daemon, caches and the Python package. It asks before
+deleting session history and saved keys and keeps both by default, so a
+reinstall picks up where you left off. `kcoder uninstall --dry-run` prints
+the script it would run.
 
 ## Working from GitHub
 
@@ -445,12 +476,21 @@ same for bookmarks.
 
 ### Worktrees, merge, PR, discard
 
-Sessions started from the web app in a git repo get their own git worktree
-and `kcoder/<name>` branch (uncheck "worktree" to work in place; the CLI
-opts in with `--worktree`), so parallel agents never edit the same files.
-A focused pane offers **merge** (commits the worktree, merges `--no-ff` into
-the main checkout, aborts cleanly on conflict), **open PR** (pushes the branch
-and runs `gh pr create`), and **discard** (deletes the worktree and branch).
+Every session in a git repo works in its own git worktree on its own
+`kcoder/<name>` branch, so parallel sessions on the same repo never touch
+each other's files. This is the default from the app and the CLI alike
+(uncheck "worktree" in the new-session dialog or pass `--no-worktree` to work
+in place; `worktrees: false` in the config changes the default). One-shot
+`kcoder "task"` runs in place, because its session is deleted afterwards.
+A local folder that is not a repo yet gets `git init` and an initial commit
+first. Forks branch from the parent session's branch.
+
+Work gets back to the main branch through **merge** (commits the worktree,
+merges `--no-ff` into the main checkout, aborts cleanly on conflict) or
+**open PR** (pushes the branch and runs `gh pr create`); **discard** deletes
+the worktree and branch. Archiving a session commits any uncommitted work as
+a checkpoint on its branch and removes the worktree directory; resuming the
+session recreates it from the branch. Deleting a session removes both.
 
 ### Trust levels, queues, caps, compaction
 
@@ -465,8 +505,11 @@ and runs `gh pr create`), and **discard** (deletes the worktree and branch).
   (default 150k) the history is summarised before the next turn, with a
   visible marker in the chat. `/compact` does it on demand.
 - Rate limits and overloads retry with backoff, shown in the pane status.
-- If the daemon restarts mid-turn, the session comes back marked
-  interrupted with a one-click resume; a tool call is never re-run silently.
+- Sessions, their queues and the window layout survive app crashes, daemon
+  restarts and reboots. A session that was mid-turn comes back **paused** with
+  the turn's text ready behind a **resume** button (and a **dismiss** button);
+  nothing is ever re-run without you. Any `claude` or shell process the dead
+  daemon left behind is killed on the next start.
 
 ## Safety
 
@@ -475,10 +518,16 @@ action and asks for confirmation before executing it. Read-only tools
 (`read_file`, `list_dir`) run without prompting. Use `--yes` or `/auto`
 at your own discretion.
 
-`kcoderd` can run shell commands, so it only ever binds to `127.0.0.1` and
-every client must present the token stored in `~/.local/share/kcoder/token`
-(mode `600`) as its first message. Browser clients are additionally limited
-to same-origin connections. API keys are read from the environment or the
+`kcoderd` can run shell commands, so it assumes every other app and web page
+on the machine is hostile. The CLI talks to it over a Unix socket
+(`~/.local/share/kcoder/kcoderd.sock`, user-only). The web app needs HTTP, so
+a second listener stays on `127.0.0.1` only, and every request on it must
+carry a loopback `Host` header (a page that rebinds its DNS name to 127.0.0.1
+gets a 403), WebSocket upgrades from browsers must come from the app's own
+origin, pages are served with `frame-ancestors 'none'` and
+`Cross-Origin-Resource-Policy: same-origin`, and every client must present
+the per-install token stored in `~/.local/share/kcoder/token` (mode `600`) as
+its first message. API keys are read from the environment or the
 credentials file and are never written to logs or chat history; chat history
 lives outside the repo and is gitignored anyway.
 
@@ -488,7 +537,8 @@ lives outside the repo and is gitignored anyway.
  terminal(s)            browser (phase 2)
   kcoder attach  ──┐   ┌── kcoder ui
                    ▼   ▼
-             ┌──────────────┐   WebSocket, 127.0.0.1 only, token-authenticated
+             ┌──────────────┐   WebSocket over a user-only Unix socket (CLI) or
+             │              │   127.0.0.1 with Host/Origin checks (app); token-authenticated
              │   kcoderd    │
              │  ┌────────┐  │   one Engine per session, each turn on its own thread
              │  │ Engine │… │   emits structured events, accepts input + approvals
@@ -513,3 +563,7 @@ lives outside the repo and is gitignored anyway.
 Daemon data lives in `~/.local/share/kcoder/` (override with `KCODER_DATA_DIR`);
 the port defaults to `47321` (`KCODER_PORT`). Every model call is appended to
 `usage.jsonl` for per-session and fleet-wide token accounting.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

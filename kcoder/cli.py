@@ -1033,7 +1033,7 @@ def _refresh_stale_daemon() -> None:
     running = already_running()
     if not running or running.get("version") == __version__:
         return
-    with DaemonClient.connect(autostart=False) as client:
+    with DaemonClient.connect(autostart=False, reconcile=False) as client:
         sessions = client.request("list")["sessions"]
         busy = [s["name"] for s in sessions if s.get("status") in ("working", "waiting")]
         if busy:
@@ -1106,6 +1106,82 @@ def cmd_app(args) -> int:
     return 0
 
 
+def cmd_update(args) -> int:
+    from . import updater
+    running = already_running()
+    if running:
+        with DaemonClient.connect(autostart=False, reconcile=False) as client:
+            if args.now:
+                try:
+                    r = client.request("update", action="apply", force=bool(args.force))
+                except ClientError as exc:
+                    console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+                    return 1
+                console.print(f"[green]✓[/green] installing kcoder {r.get('version')}; kcoderd is restarting (log: {paths.UPDATE_LOG_PATH})")
+                return 0
+            st = client.request("update", action="check")["update"]
+    else:
+        st = updater.check_and_download()
+        if args.now and st.get("available") and (st.get("ready") or st.get("dev")):
+            try:
+                if st.get("dev"):
+                    updater.spawn_helper("apply", previous=__version__)
+                else:
+                    updater.spawn_helper("apply", tarball=updater.load_state().get("ready"), expect=st["latest"], previous=__version__)
+            except updater.UpdateError as exc:
+                console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+                return 1
+            console.print(f"[green]✓[/green] installing kcoder {st['latest']} (log: {paths.UPDATE_LOG_PATH})")
+            return 0
+    kind = "developer checkout" if st.get("dev") else "pip install"
+    console.print(f"kcoder {__version__} ({kind}); latest release: {st.get('latest') or 'unknown'}")
+    if st.get("error"):
+        console.print(f"[yellow]{escape(st['error'])}[/yellow]", highlight=False)
+    if st.get("available"):
+        how = "git pull --ff-only in the checkout" if st.get("dev") else ("downloaded and verified" if st.get("ready") else "not downloaded yet")
+        if st.get("failed"):
+            console.print(f"[yellow]{st['latest']} failed its health check and was rolled back:[/yellow] {escape(st['failed'])}\n"
+                          f"[dim]`kcoder update --now --force` retries it anyway[/dim]", highlight=False, soft_wrap=True)
+        else:
+            console.print(f"[green]update available:[/green] {st['latest']} ({how}). Install with `kcoder update --now`.", soft_wrap=True)
+    elif not st.get("error"):
+        console.print("[dim]up to date[/dim]")
+    return 0
+
+
+def cmd_uninstall(args) -> int:
+    from . import uninstall as uninstaller
+    if args.dry_run:
+        print(uninstaller.run(args.delete_history, args.delete_keys, pip=not args.keep_package, dry_run=True))
+        return 0
+    console.print("[bold]This removes kcoder from this Mac:[/bold]")
+    for what, where in uninstaller.plan(args.delete_history, args.delete_keys):
+        console.print(f"  • {what}  [dim]{escape(str(where))}[/dim]", highlight=False)
+    delete_history, delete_keys = args.delete_history, args.delete_keys
+    if not args.yes:
+        if not ui.confirm(console, "Remove kcoder?", yes_label="Remove", no_label="Cancel"):
+            console.print("[dim]nothing removed[/dim]")
+            return 0
+        if not delete_history:
+            delete_history = ui.confirm(console, "Also delete session history, stats and worktrees? (default: keep)",
+                                        yes_label="Delete history", no_label="Keep")
+        if not delete_keys:
+            delete_keys = ui.confirm(console, "Also delete saved provider keys? (default: keep)",
+                                     yes_label="Delete keys", no_label="Keep")
+    pid = None
+    running = already_running()
+    if running:
+        pid = int(running["pid"])
+        try:
+            with DaemonClient.connect(autostart=False, reconcile=False) as client:
+                client.request("shutdown")
+        except (ClientError, DaemonUnavailable):
+            pass
+    uninstaller.run(delete_history, delete_keys, wait_pid=pid, pip=not args.keep_package, detach=False)
+    console.print("[green]✓[/green] kcoder removed" + ("" if delete_history else " (history kept)") + ("" if delete_keys else " (keys kept)"))
+    return 0
+
+
 def cmd_daemon(args) -> int:
     action = args.action
     if action == "run":
@@ -1124,7 +1200,7 @@ def cmd_daemon(args) -> int:
     if action in ("stop", "restart"):
         running = already_running()
         if running:
-            with DaemonClient.connect(autostart=False) as client:
+            with DaemonClient.connect(autostart=False, reconcile=False) as client:
                 sessions = client.request("list")["sessions"]
                 busy = [s["name"] for s in sessions if s.get("status") in ("working", "waiting")]
                 if busy and not args.force:
@@ -1160,7 +1236,7 @@ def cmd_daemon(args) -> int:
         try:
             running = already_running()
             if running:
-                with DaemonClient.connect(autostart=False) as client:
+                with DaemonClient.connect(autostart=False, reconcile=False) as client:
                     sessions = client.request("list")["sessions"]
                     busy = [s["name"] for s in sessions if s.get("status") in ("working", "waiting")]
                     if busy and not args.force:
@@ -1197,7 +1273,7 @@ def cmd_daemon(args) -> int:
         if not running:
             console.print("[dim]kcoderd is not running[/dim]")
             return 1
-        with DaemonClient.connect(autostart=False) as client:
+        with DaemonClient.connect(autostart=False, reconcile=False) as client:
             n = len(client.request("list")["sessions"])
         how = "login item" if appmod.agent_loaded() else "on demand"
         stale = "" if running.get("version") == __version__ else f" [yellow](kcoder {__version__} is installed - `kcoder daemon restart`)[/yellow]"
@@ -1278,7 +1354,7 @@ def cmd_chat(args) -> int:
                     model=model,
                     name=args.name,
                     trust=args.trust or ("auto" if args.yes else config.load().get("default_trust") or "auto"),
-                    worktree=bool(args.worktree),
+                    worktree=True if args.worktree else (False if args.no_worktree else None),
                 )
             except ClientError as exc:
                 console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
@@ -1352,7 +1428,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
 # entry point
 # ----------------------------------------------------------------------
 
-SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export"}
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1368,7 +1444,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-y", "--yes", action="store_true", help="auto-approve all tool executions (no y/n prompts)")
     p.add_argument("--no-banner", action="store_true", help="skip the startup banner")
     p.add_argument("--trust", choices=list(TRUST_LEVELS), help="what runs without asking (default: config default_trust, auto)")
-    p.add_argument("--worktree", action="store_true", help="work on a fresh git worktree + branch for this session")
+    p.add_argument("--worktree", action="store_true", help="work on a fresh git worktree + branch (the default in a git repo)")
+    p.add_argument("--no-worktree", action="store_true", help="work directly in this folder instead of a worktree")
     p.add_argument("--keep", action="store_true", help="one-shot: keep the session instead of deleting it")
     p.add_argument("--provider", metavar="NAME", help=f"provider to use ({', '.join(PROVIDERS)})")
     p.add_argument("--model", metavar="NAME", help="model to start with")
@@ -1415,6 +1492,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--chrome", action="store_true", help="use a Chromium-family browser in app mode instead of the native window")
     p.add_argument("--foreground", action="store_true", help="keep the native window attached to this terminal (for debugging)")
     p.set_defaults(func=cmd_app)
+
+    p = sub.add_parser("update", help="check for a new kcoder release, or install one")
+    p.add_argument("--now", action="store_true", help="install the verified update and restart kcoderd")
+    p.add_argument("--force", action="store_true", help="with --now: even while sessions are working")
+    p.set_defaults(func=cmd_update)
+
+    p = sub.add_parser("uninstall", help="remove kcoder from this Mac (keeps history and keys unless told otherwise)")
+    p.add_argument("--yes", "-y", action="store_true", help="don't ask for confirmation")
+    p.add_argument("--delete-history", action="store_true", help="also delete session history, stats and worktrees")
+    p.add_argument("--delete-keys", action="store_true", help="also delete saved provider keys")
+    p.add_argument("--keep-package", action="store_true", help="leave the Python package installed")
+    p.add_argument("--dry-run", action="store_true", help="print what would be done")
+    p.set_defaults(func=cmd_uninstall)
 
     p = sub.add_parser("daemon", help="manage kcoderd")
     p.add_argument("action", choices=["start", "stop", "restart", "status", "run", "install", "uninstall"],

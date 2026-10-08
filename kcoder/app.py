@@ -35,8 +35,8 @@ AGENT_LABEL = "com.kyersreserve.kcoderd"
 
 PROFILE_DIR = os.path.join(paths.DATA_DIR, "app-profile")
 APP_LOG_PATH = os.path.join(paths.DATA_DIR, "app.log")
-BUNDLE_PATH = os.path.expanduser("~/Applications/kcoder.app")
-AGENT_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{AGENT_LABEL}.plist")
+BUNDLE_PATH = os.environ.get("KCODER_APP_BUNDLE") or os.path.expanduser("~/Applications/kcoder.app")
+AGENT_PLIST = os.environ.get("KCODER_AGENT_PLIST") or os.path.expanduser(f"~/Library/LaunchAgents/{AGENT_LABEL}.plist")
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 _CHROMIUM_MAC = [

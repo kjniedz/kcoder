@@ -92,7 +92,10 @@ a { color: var(--accent); }
 .pane.st-waiting { border-color: var(--yellow); animation: pulse 1.1s ease-in-out infinite; box-shadow: 0 0 0 1px var(--yellow) inset; }
 .pane.st-error { border-color: var(--red); }
 .pane.st-done { border-color: #2f7f57; }
-.pane.st-paused { border-color: var(--fg-mute); opacity: .8; }
+.pane.st-capped { border-color: var(--fg-mute); opacity: .8; }
+.pane.st-paused { border-color: var(--yellow); }
+.pane-status button { padding: 0 6px; font-size: 10px; line-height: 14px; }
+.note.paused { border-left: 2px solid var(--yellow); padding-left: 8px; }
 .pane.active { outline: 1px solid var(--accent-2); }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 1px var(--yellow) inset, 0 0 6px 0 rgba(251,191,36,.35);} 50% { box-shadow: 0 0 0 2px var(--yellow) inset, 0 0 18px 2px rgba(251,191,36,.7);} }
 @media (prefers-reduced-motion: reduce) { .pane.st-waiting { animation: none; box-shadow: 0 0 0 2px var(--yellow) inset; } }
@@ -114,7 +117,8 @@ a { color: var(--accent); }
 .dot.waiting { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
 .dot.done, .dot.idle { background: var(--green); }
 .dot.error { background: var(--red); }
-.dot.paused, .dot.archived { background: var(--fg-mute); }
+.dot.capped, .dot.archived { background: var(--fg-mute); }
+.dot.paused { background: var(--yellow); }
 .pane-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 8px; font-size: 11.5px; }
 .pane-body.term { white-space: pre-wrap; word-break: break-word; }
 .pane-body .chat-log { padding: 0; }

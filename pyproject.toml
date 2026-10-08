@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kcoder"
-version = "0.3.0"
+version = "0.4.0"
 description = "kcoder - a terminal coding agent developed by Kyle Niedzwiecki"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [{ name = "Kyle Niedzwiecki" }]
 dependencies = [
@@ -18,6 +19,9 @@ dependencies = [
     "prompt_toolkit>=3.0",
     "pywebview>=5.0; sys_platform == 'darwin'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/kjniedz/kcoder"
 
 [project.optional-dependencies]
 app = ["pywebview>=5.0"]

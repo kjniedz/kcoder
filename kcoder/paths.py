@@ -2,6 +2,9 @@
 
     ~/.config/kcoder/credentials.json      provider credentials (chmod 600)
     ~/.local/share/kcoder/token            daemon auth token (chmod 600)
+    ~/.local/share/kcoder/kcoderd.sock     daemon Unix socket (user-only)
+    ~/.local/share/kcoder/updates/         downloaded + verified releases
+    ~/.local/share/kcoder/ui-state.json    window layout, synced from the app
     ~/.local/share/kcoder/daemon.json      host/port/pid of the running daemon
     ~/.local/share/kcoder/daemon.log       daemon log
     ~/.local/share/kcoder/usage.jsonl      one line per model call (fleet stats)
@@ -27,6 +30,10 @@ TOKEN_PATH = os.path.join(DATA_DIR, "token")
 DAEMON_INFO_PATH = os.path.join(DATA_DIR, "daemon.json")
 DAEMON_LOG_PATH = os.path.join(DATA_DIR, "daemon.log")
 USAGE_LOG_PATH = os.path.join(DATA_DIR, "usage.jsonl")
+SOCKET_PATH = os.environ.get("KCODER_SOCKET") or os.path.join(DATA_DIR, "kcoderd.sock")
+UPDATES_DIR = os.path.join(DATA_DIR, "updates")
+UPDATE_LOG_PATH = os.path.join(DATA_DIR, "update.log")
+UI_STATE_PATH = os.path.join(DATA_DIR, "ui-state.json")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.environ.get("KCODER_PORT", "47321"))
