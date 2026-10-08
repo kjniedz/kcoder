@@ -127,6 +127,7 @@ async function onConnected() {
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
   renderAll();
+  if ((state.providers || []).length && !state.providers.some((p) => p.configured) && !state._setupShown) { state._setupShown = true; setupDialog(); }
   const open = new URLSearchParams(location.search).get('open');
   if (open && !state._openedOnce) { state._openedOnce = true; ({ new: openNewSession, inbox: openInbox, palette: openPalette, help: helpDialog }[open] || (() => {}))(); }
 }
@@ -1186,8 +1187,10 @@ async function openNewSession(pre = {}) {
     <label>initial task<textarea id="ns-task" placeholder="what should it do first?"></textarea></label>
     <label>follow-up tasks, one per line (optional)<textarea id="ns-queue" placeholder="run the tests&#10;open a PR"></textarea></label>
     <label class="check"><input type="checkbox" id="ns-wt" ${cfg.worktrees === false ? '' : 'checked'}> use a separate git worktree + branch (recommended when running several sessions on one repo)</label>
+    <div class="help" style="text-transform:none;letter-spacing:0">Provider not set up yet? <a href="#" id="ns-setup">Connect your AI</a></div>
   </div><div class="foot"><span class="help" id="ns-status"></span><span class="spacer" style="flex:1"></span><button data-x="cancel">cancel</button><button class="primary" data-x="ok">start</button></div>`, 'new');
   const modelSel = $('#ns-model', d), provSel = $('#ns-provider', d), cwdIn = $('#ns-cwd', d), repoMenu = $('#ns-repos', d), status = $('#ns-status', d);
+  $('#ns-setup', d).addEventListener('click', (e) => { e.preventDefault(); const pid = provSel.value; closeDialog(); setupDialog(pid); });
   $('#ns-trust', d).value = state.config && state.config.default_trust ? state.config.default_trust : 'auto';
   const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; modelSel.innerHTML = (p.models || []).map((m) => `<option${m === p.default_model ? ' selected' : ''}>${esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
   provSel.addEventListener('change', fill); fill();
@@ -1225,7 +1228,7 @@ async function openNewSession(pre = {}) {
 // command palette
 function paletteItems() {
   const items = [
-    ['new session', () => openNewSession(), 'n'], ['approval inbox', openInbox, 'a'], ['cycle waiting sessions', cycleWaiting, 'w'],
+    ['new session', () => openNewSession(), 'n'], ['connect your AI (sign in to a provider)', () => setupDialog()], ['approval inbox', openInbox, 'a'], ['cycle waiting sessions', cycleWaiting, 'w'],
     ['wall view', () => setView('wall'), 'alt+1'], ['chat view', () => setView('chat'), 'alt+2'], ['terminal view', () => setView('terminal'), 'alt+3'],
     ['toggle sound', toggleSound], ['enable browser notifications', () => Notification.requestPermission().then((p) => toast('notifications: ' + p))],
     ['set default trust for new sessions', async () => { const v = await chooseDialog('Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']]); if (v) { const r = await request('config', { default_trust: v }); state.config = r.config; toast('default trust: ' + v, 'ok'); } }],
@@ -1261,6 +1264,49 @@ function openPalette() {
   render();
 }
 function fuzzy(text, q) { let i = 0; for (const ch of q) { i = text.indexOf(ch, i); if (i < 0) return false; i++; } return true; }
+
+// first-run setup: connect an AI provider (API key, or Claude Code for a Claude plan)
+async function refreshProviders() { try { state.providers = (await request('providers')).providers; } catch {} return state.providers || []; }
+async function setupDialog(pid) {
+  let provs = await refreshProviders();
+  if (!provs.length) return;
+  const cur = pid || (provs.find((p) => p.default) || provs[0]).id;
+  const d = openDialog(`<h2>connect your AI<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body setup">
+    <div class="help plain">kcoder runs on a model you already have access to. Pick where your model lives and sign in once.</div>
+    <label>provider<select id="su-prov">${provs.map((p) => `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${esc(p.label)}${p.configured ? ' ✓' : ''}</option>`).join('')}</select></label>
+    <div id="su-panel"></div>
+  </div><div class="foot"><span class="help plain" id="su-status"></span><span class="spacer" style="flex:1"></span><button data-x="close">close</button></div>`, 'setup');
+  const sel = $('#su-prov', d), panel = $('#su-panel', d), status = $('#su-status', d);
+  const render = () => {
+    const p = provs.find((x) => x.id === sel.value) || {};
+    if (p.kind === 'claude') {
+      panel.innerHTML = `<div class="status"><span>Claude Code: ${p.installed ? '<b class="ok">installed</b>' : '<b class="warn">not installed</b>'}</span><span>Account: ${p.logged_in ? `<b class="ok">signed in${p.email ? ' as ' + esc(p.email) : ''}</b>` : '<b class="warn">not signed in</b>'}</span></div>
+        <div class="help plain">Uses your Claude subscription from claude.ai. No API key and no per-token billing.${p.installed ? '' : ' Installing opens a Terminal window; follow the steps there, then come back and click Check again.'}</div>
+        <div class="row">${!p.installed ? '<button class="primary" data-su="install">Install Claude Code and sign in</button>' : !p.logged_in ? '<button class="primary" data-su="login">Sign in to Claude</button>' : '<button class="primary" data-su="use-claude">Use my Claude plan</button>'}<button data-su="check">Check again</button></div>`;
+    } else {
+      panel.innerHTML = `<div class="help plain">${p.configured ? 'Already connected. Paste a new key to replace it.' : 'Paste an API key from your account.'}${p.key_url ? ` <a href="${esc(p.key_url)}" target="_blank" rel="noopener">Get a ${esc(p.label)} key ↗</a>` : ''}</div>
+        <label>api key<input id="su-key" type="password" placeholder="paste your key" autocomplete="off"></label>
+        <div class="row"><button class="primary" data-su="connect">Connect</button>${p.configured && !p.default ? '<button data-su="default">Make default</button>' : ''}</div>`;
+    }
+  };
+  render();
+  sel.addEventListener('change', render);
+  d.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'su-key') { e.preventDefault(); $('[data-su="connect"]', d).click(); } });
+  d.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-x]')) { closeDialog(); return; }
+    const b = e.target.closest('[data-su]'); if (!b) return;
+    const id = sel.value; status.textContent = '';
+    try {
+      switch (b.dataset.su) {
+        case 'connect': { status.textContent = 'checking the key…'; const r = await request('connect', { provider: id, api_key: $('#su-key', d).value }); state.providers = r.providers || state.providers; toast(r.message, 'ok'); closeDialog(); return; }
+        case 'default': { const r = await request('connect', { provider: id, action: 'default' }); state.providers = r.providers || state.providers; provs = state.providers; toast(r.message, 'ok'); render(); return; }
+        case 'install': case 'login': { const r = await request('connect', { provider: 'claude', action: b.dataset.su }); status.textContent = r.message; return; }
+        case 'check': { status.textContent = 'checking…'; provs = await refreshProviders(); render(); status.textContent = ''; return; }
+        case 'use-claude': { const r = await request('connect', { provider: 'claude' }); state.providers = r.providers || state.providers; toast(r.message, 'ok'); closeDialog(); return; }
+      }
+    } catch (err) { status.textContent = err.message; }
+  });
+}
 
 // token gate (first launch without #token=)
 function tokenGate(msg) {

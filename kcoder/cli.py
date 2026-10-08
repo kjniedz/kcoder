@@ -152,7 +152,7 @@ def pick_model_interactively(provider, current: str) -> str:
     ]
     labels.append("[dim]type another model name…[/dim]")
     start = provider.models.index(current) if current in provider.models else 0
-    choice = ui.select(console, f"Models — {provider.label}", labels, index=start)
+    choice = ui.select(console, f"Models - {provider.label}", labels, index=start)
     if choice is None:
         return current
     if choice == len(provider.models):
@@ -670,7 +670,7 @@ def _chat_loop(client: DaemonClient, meta: dict, renderer: TurnRenderer, prompt:
             continue
 
         parts = user_input.split(maxsplit=1)
-        # A command is "/word" — this excludes dragged paths like /Users/...
+        # A command is "/word" - this excludes dragged paths like /Users/...
         # and pasted code, which start with "/" but aren't a bare word.
         if parts and re.fullmatch(r"/[a-zA-Z]+", parts[0]):
             command, arg = parts[0].lower(), (parts[1].strip() if len(parts) > 1 else "")

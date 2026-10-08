@@ -44,7 +44,7 @@ from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, chatlog, config, paths, pricing, projects, repos
+from . import __version__, auth, chatlog, config, paths, pricing, projects, repos, setup
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
@@ -786,12 +786,32 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {"path": path, "spec": spec}
 
     if t == "providers":
-        default = auth.load_config().get("default_provider")
-        return {"providers": [
-            {"id": p.id, "label": p.label, "models": p.models, "default_model": p.default_model,
-             "configured": auth.has_credentials(p.id), "default": p.id == default}
-            for p in PROVIDERS.values()
-        ]}
+        return {"providers": await asyncio.get_running_loop().run_in_executor(None, setup.providers_info)}
+
+    if t == "connect":
+        # first-run sign-in from the app: API key providers are validated and
+        # saved here; Claude Code install / sign-in run in the user's Terminal
+        pid = str(req.get("provider") or "")
+        action = str(req.get("action") or "")
+        loop = asyncio.get_running_loop()
+        try:
+            if pid == "claude" and action in ("install", "login"):
+                cmd = setup.claude_install_command() if action == "install" else setup.claude_login_command()
+                if await loop.run_in_executor(None, setup.open_terminal, cmd):
+                    msg = "A Terminal window opened. Follow the steps there, then click Check again."
+                else:
+                    msg = f"Could not open a terminal. Run this yourself: {cmd}"
+                return {"message": msg}
+            if action == "default":
+                setup.make_default(pid)
+                msg = f"{PROVIDERS[pid].label} is now the default provider" if pid in PROVIDERS else "unknown provider"
+            elif pid == "claude":
+                msg = await loop.run_in_executor(None, setup.use_claude)
+            else:
+                msg = await loop.run_in_executor(None, setup.connect_api_key, pid, str(req.get("api_key") or ""))
+        except ValueError as exc:
+            raise RequestError(str(exc))
+        return {"message": msg, "providers": await loop.run_in_executor(None, setup.providers_info)}
 
     if t == "history":
         return {"chats": manager.history(req.get("project"), not req.get("active_only"), int(req.get("limit") or 200)),
