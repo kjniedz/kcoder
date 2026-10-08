@@ -155,7 +155,9 @@ class DaemonClient:
             if self.closed.is_set():
                 raise DaemonUnavailable("connection to kcoderd closed")
             raise ClientError(f"kcoderd did not answer {type_!r} within {timeout:.0f}s")
-        reply = self._replies.pop(rid)
+        reply = self._replies.pop(rid, None)
+        if reply is None:
+            raise DaemonUnavailable(f"connection to kcoderd closed while waiting for {type_!r}")
         if not reply.get("ok"):
             raise ClientError(reply.get("error", "request failed"))
         return reply

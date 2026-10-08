@@ -38,6 +38,15 @@ from .tools import TOOLS
 ANTHROPIC_MAX_TOKENS = 64000
 
 
+class ProviderOutage(Exception):
+    """The provider refused the turn for capacity reasons (rate limit, usage
+    limit, overloaded, unreachable). The engine may fall back to another
+    configured provider."""
+
+
+_OUTAGE_TEXT = ("rate limit", "rate_limit", "usage limit", "overloaded", "capacity", "too many requests", "quota")
+
+
 @dataclass
 class Provider:
     id: str
@@ -600,6 +609,10 @@ class ClaudeCodeBackend:
                     hooks.usage(int(u.get("input_tokens") or 0) + cr + cw, int(u.get("output_tokens") or 0),
                                 cache_read=cr, cache_write=cw, cost=float(d.get("total_cost_usd") or 0.0))
                     if d.get("is_error") or d.get("subtype") not in (None, "success"):
+                        text_ = f"{d.get('subtype') or ''} {str(d.get('result') or '')}"
+                        if any(k in text_.lower() for k in _OUTAGE_TEXT):
+                            _kill(proc)
+                            raise ProviderOutage(f"Claude Code: {text_.strip()[:200]}")
                         hooks.notice(f"Claude Code: {d.get('subtype')}: {str(d.get('result') or '')[:500]}")
         except Interrupted:
             _kill(proc)

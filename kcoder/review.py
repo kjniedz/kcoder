@@ -190,14 +190,31 @@ def approve(session_dir: str, cwd: str, base: str | None = None) -> str:
     return tree
 
 
-def is_approved(sid: str, data_dir: str, tree: str) -> bool:
+SCREENSHOT_DIR = ".kcoder/screenshots/"
+
+
+def _tree_ok(cwd: str | None, approved: dict, tree: str) -> bool:
+    if tree in approved:
+        return True
+    if not cwd:
+        return False
+    # PR screenshots are added after approval: a tree that differs from an
+    # approved one only under .kcoder/screenshots/ still counts
+    for a in approved:
+        names = _git(cwd, "diff-tree", "--name-only", "-r", a, tree, check=False).split()
+        if names and all(n.startswith(SCREENSHOT_DIR) for n in names):
+            return True
+    return False
+
+
+def is_approved(sid: str, data_dir: str, tree: str, cwd: str | None = None) -> bool:
     sdir = os.path.join(data_dir, "sessions", sid)
-    return tree in (load_state(sdir).get("approved") or {})
+    return _tree_ok(cwd or os.getcwd(), load_state(sdir).get("approved") or {}, tree)
 
 
 def approved_now(session_dir: str, cwd: str) -> bool:
     """Is the current working tree one of the approved trees?"""
     try:
-        return worktree_tree(cwd) in (load_state(session_dir).get("approved") or {})
+        return _tree_ok(cwd, load_state(session_dir).get("approved") or {}, worktree_tree(cwd))
     except ReviewError:
         return False

@@ -101,23 +101,67 @@ def model_summary(session, title_hint: str, deterministic: str, diff: str, timeo
     except Exception:  # noqa: BLE001
         return None
     text = hooks.text.strip()
-    if "TITLE:" not in text:
+    if not text:
         return None
+    if "TITLE:" not in text:
+        text = "TITLE: " + (title_hint or "")[:70] + "\n\n" + text
     return text
 
 
-def open_pr(manager, session, info: dict, title: str | None = None, body: str | None = None, draft: bool = True) -> dict:
+def take_screenshots(manager, session, path: str) -> list:
+    """Desktop + mobile screenshots of the session's preview, committed under
+    .kcoder/screenshots/. Returns the repo-relative paths (may be empty)."""
+    from . import preview as previewmod
+    spec = previewmod.detect(path)
+    if not spec:
+        return []
+    temp = None
+    pv = getattr(session, "preview", None)
+    if pv is None or not pv.alive():
+        taken = {s.preview.port for s in manager.sessions.values() if getattr(s, "preview", None)}
+        temp = previewmod.Preview(path, spec, previewmod.free_port(taken), os.path.join(session.dir, "preview.log"))
+        temp.start()
+        if not temp.wait_ready(90):
+            temp.stop()
+            return []
+        pv = temp
+    out = []
+    try:
+        shots = os.path.join(path, review.SCREENSHOT_DIR)
+        profile = os.path.join(session.dir, "chrome-profile")
+        for name, w, h in (("desktop", 1440, 900), ("mobile", 390, 844)):
+            if previewmod.screenshot(pv.url, os.path.join(shots, f"{name}.png"), w, h, profile_dir=profile):
+                out.append(review.SCREENSHOT_DIR + f"{name}.png")
+    finally:
+        if temp is not None:
+            temp.stop()
+    if out:
+        commit_all(path, "kcoder: PR screenshots", skip_review=True)
+    return out
+
+
+def open_pr(manager, session, info: dict, title: str | None = None, body: str | None = None, draft: bool = True,
+            auto: bool = False) -> dict:
+    """`auto` (scheduled jobs): the draft PR is the review surface, so the
+    review policy is not applied to this push."""
     from . import config
     path, branch = info["path"], info["branch"]
     sdir = session.dir
+    cfg = config.load()
     # 1. commit whatever is uncommitted (the pre-commit hook scans for secrets)
-    committed = commit_all(path, title or f"kcoder: work on {branch}")
+    committed = commit_all(path, title or f"kcoder: work on {branch}", skip_review=auto)
     # 2. review policy
-    policy = config.load().get("review_required", "push")
-    if policy in ("push", "commit") and not review.approved_now(sdir, path):
+    policy = cfg.get("review_required", "push")
+    if not auto and policy in ("push", "commit") and not review.approved_now(sdir, path):
         raise GitError("review required before opening a PR: open this session's changes view, accept or reject each hunk, and approve")
     if not _git(path, "remote", check=False).strip():
         raise GitError("no git remote configured; add one (or use merge instead)")
+    shots = []
+    if cfg.get("pr_screenshots", True):
+        try:
+            shots = take_screenshots(manager, session, path)
+        except Exception as exc:  # noqa: BLE001 - screenshots are a bonus
+            manager._record(session, {"t": "notice", "ts": time.time(), "text": f"PR screenshots skipped: {exc}"})
     # 3. description
     ch = review.changes(path, info.get("base"))
     commits = [c for c in _git(path, "log", "--format=%s", f"{ch['base']}..HEAD", check=False).splitlines() if c.strip()]
@@ -126,17 +170,26 @@ def open_pr(manager, session, info: dict, title: str | None = None, body: str | 
     if not body:
         body = deterministic
         if not session.engine.busy:
-            summary = model_summary(session, title or "", deterministic, ch["diff"])
+            summary = model_summary(session, title or session.meta.get("title") or "", deterministic, ch["diff"])
             if summary:
                 first, _, rest = summary.partition("\n")
                 if not title:
-                    title = first.replace("TITLE:", "").strip()[:70]
+                    title = first.replace("TITLE:", "").strip()[:70] or None
                 body = rest.strip() + "\n\n---\n" + deterministic.split("---")[-1].strip()
     if not title:
         title = (session.meta.get("title") or f"kcoder: {branch}")[:70]
+    if shots:
+        from . import repos
+        spec = repos.github_spec(path)
+        if spec:
+            cells = " | ".join(f"![{os.path.basename(s).split('.')[0]}](https://github.com/{spec}/blob/{branch}/{s}?raw=true)" for s in shots)
+            heads = " | ".join(os.path.basename(s).split(".")[0] for s in shots)
+            body = body.rstrip() + f"\n\n## Screenshots\n\n| {heads} |\n|{'---|' * len(shots)}\n| {cells} |\n"
     # 4. push (pre-push hook: secrets + review) and open the PR as the signed-in account
     identity.ensure_credential_helper()
     env = identity.git_env()
+    if auto:
+        env["KCODER_SKIP_REVIEW"] = "1"
     r = subprocess.run(["git", "-C", path, "push", "-u", "origin", branch], capture_output=True, text=True, timeout=300, env=env)
     if r.returncode != 0:
         raise GitError((r.stderr or r.stdout).strip()[-1500:] or "push failed")

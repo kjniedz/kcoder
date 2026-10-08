@@ -46,10 +46,10 @@ class TaskQueue:
         os.replace(tmp, self.path)
 
     def add(self, text: str, repo: str, *, provider: str | None, model: str | None, trust: str | None,
-            name: str | None = None) -> dict:
+            name: str | None = None, schedule_id: str | None = None) -> dict:
         t = {"id": uuid.uuid4().hex[:8], "text": text.strip(), "repo": repo, "provider": provider, "model": model,
              "trust": trust, "name": name or None, "status": "queued", "sid": None, "created": time.time(),
-             "started": None, "finished": None, "error": None}
+             "started": None, "finished": None, "error": None, "schedule_id": schedule_id}
         self.tasks.append(t)
         self.save()
         return t

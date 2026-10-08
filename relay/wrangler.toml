@@ -1,0 +1,18 @@
+# kcoder approval relay: a Cloudflare Worker + one Durable Object per kcoder
+# install. Deploy with `wrangler deploy` after `wrangler secret put VAPID_PRIVATE`
+# (see README.md). Nothing here stores secrets of the user's repos: requests
+# carry a command line and a diff summary for the few minutes until they expire.
+name = "kcoder-relay"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[durable_objects]
+bindings = [{ name = "INSTALLS", class_name = "Install" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Install"]
+
+[vars]
+VAPID_SUBJECT = "mailto:kcoder@example.com"
+# VAPID_PUBLIC (base64url, 65-byte uncompressed P-256 point) goes here; VAPID_PRIVATE is a secret

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kcoder"
-version = "0.5.0"
+version = "0.6.0"
 description = "kcoder - a terminal coding agent developed by Kyle Niedzwiecki"
 readme = "README.md"
 license = { text = "MIT" }
@@ -34,4 +34,4 @@ kcoderd = "kcoder.daemon:main"
 include = ["kcoder*"]
 
 [tool.setuptools.package-data]
-kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.webmanifest", "web/vendor/*"]
+kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.webmanifest", "web/vendor/*", "data/*.txt"]

@@ -81,7 +81,7 @@ def pre_commit(a) -> int:
     if _policy(a.data_dir) == "commit" and not os.environ.get("KCODER_SKIP_REVIEW"):
         from . import review
         tree = _git(cwd, "write-tree").strip()
-        if not review.is_approved(a.sid, a.data_dir, tree):
+        if not review.is_approved(a.sid, a.data_dir, tree, cwd):
             return _block("commit blocked: review required before commit",
                           "Open this session's changes view in kcoder, accept or reject each hunk, and approve; then commit again.\n"
                           "(review_required in ~/.config/kcoder/config.json: push | commit | none)")
@@ -120,7 +120,7 @@ def pre_push(a, stdin_text: str) -> int:
         from . import review
         for sha, _ in ranges:
             tree = _git(cwd, "rev-parse", f"{sha}^{{tree}}").strip()
-            if not review.is_approved(a.sid, a.data_dir, tree):
+            if not review.is_approved(a.sid, a.data_dir, tree, cwd):
                 return _block("push blocked: review required before push",
                               "Open this session's changes view in kcoder, accept or reject each hunk, and approve; then push again.\n"
                               "(review_required in ~/.config/kcoder/config.json: push | commit | none)")

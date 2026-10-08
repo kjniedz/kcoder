@@ -1345,7 +1345,8 @@ def cmd_chat(args) -> int:
                 replay = events[starts[-1]:] if starts else []
                 history = _prompt_history(events)
         if meta is None:
-            model = args.model or os.environ.get("KCODER_MODEL") or PROVIDERS[provider_id].default_model
+            from . import routing
+            model = args.model or os.environ.get("KCODER_MODEL") or routing.default_model(PROVIDERS[provider_id], config.load())
             try:
                 reply = client.request(
                     "create",

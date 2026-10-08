@@ -40,3 +40,7 @@ daemon.json
 
 # Node (web UI tooling, if any)
 node_modules/
+
+# relay local secrets
+relay/.dev.vars
+relay/.wrangler/

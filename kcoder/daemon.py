@@ -47,8 +47,11 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 from . import __version__, auth, chatlog, config, identity, paths, pricing, projects, repos, setup, stats, updater
-from . import checkpoints, hooks, review
+from . import checkpoints, hooks, review, routing
 from . import pr as prmod
+from . import preview as previewmod
+from . import remote as remotemod
+from . import schedules as schedmod
 from . import secrets as secretsmod
 from . import tasks as tasksmod
 from . import uninstall as uninstaller
@@ -64,7 +67,7 @@ PERSISTED_EVENTS = {       # streamed text deltas are rebuilt from assistant_end
     "turn_start", "assistant_start", "assistant_end", "usage", "tool_call",
     "approval_request", "approval_result", "tool_result", "notice", "info",
     "error", "status", "turn_end", "user", "system", "retry", "compaction_start",
-    "compaction", "history_reset", "queue", "git",
+    "compaction", "history_reset", "queue", "git", "fallback",
 }
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -96,6 +99,7 @@ class Session:
         self.dir = session_dir(self.id)
         self._events_file = None
         self.shell = None   # phase 6: attached pty
+        self.preview = None  # running dev server (kcoder.preview.Preview)
 
     @property
     def meta_path(self) -> str:
@@ -122,6 +126,9 @@ class Session:
         root = (self.meta.get("project") or {}).get("path") or self.engine.cwd
         m["instructions"] = [os.path.basename(p) for p in projects.instruction_files(root)]
         m["review_policy"] = self.manager.cfg.get("review_required", "push")
+        m["active_model"] = self.engine.active_label()
+        m["fallback"] = self.meta.get("fallback")
+        m["preview"] = self.preview.info() if self.preview is not None else None
         return m
 
     def save_meta(self) -> None:
@@ -214,6 +221,8 @@ class Manager:
         self.cfg = {}
         self.restarting = False
         self.tasks = tasksmod.TaskQueue()
+        self.schedules = schedmod.Schedules()
+        self.remote = remotemod.Remote(self._remote_decision_threadsafe, log.info)
 
     # -- lifecycle -----------------------------------------------------
 
@@ -221,6 +230,8 @@ class Manager:
         paths.ensure_data_dir()
         self.cfg = config.load()
         self._load_today()
+        if self.remote.enabled():
+            self.remote.start()
         for sid in sorted(os.listdir(paths.SESSIONS_DIR)):
             sdir = session_dir(sid)
             meta_path = os.path.join(sdir, "meta.json")
@@ -420,7 +431,103 @@ class Manager:
             session.meta.pop("turn_pid", None)
         session.save_meta()
 
+    def fallbacks(self, sid: str, tier: str) -> list:
+        """[(provider, backend, model)] to try after the session's provider
+        fails: configured providers in config `fallback.order` (or registry
+        order). Never from a subscription (Claude Code) to a pay-per-token key
+        unless `fallback.to_api`; never to a paid provider under the daily cap."""
+        session = self.sessions.get(sid)
+        fb = self.cfg.get("fallback") or {}
+        if session is None or not fb.get("enabled", True):
+            return []
+        primary = session.engine.provider
+        order = [p for p in (fb.get("order") or []) if p in PROVIDERS] or [p for p in PROVIDERS if p != primary.id]
+        out = []
+        capped = self.cap_reached()
+        for pid in order:
+            p = PROVIDERS.get(pid)
+            if p is None or pid == primary.id:
+                continue
+            paid = p.kind != "claude"
+            if primary.kind == "claude" and paid and not fb.get("to_api"):
+                continue
+            if paid and capped:
+                continue
+            try:
+                resolved = auth.resolve_backend(pid)
+            except Exception:  # noqa: BLE001
+                resolved = None
+            if not resolved:
+                continue
+            prov, backend = resolved
+            out.append((prov, backend, routing.model_for(prov, tier, self.cfg)))
+        return out
+
+    # -- previews ----------------------------------------------------------
+
+    def preview_start(self, session: Session) -> dict:
+        if session.preview is not None and session.preview.alive():
+            return session.preview.info()
+        spec = previewmod.detect(session.engine.cwd)
+        if not spec:
+            raise ValueError("no dev server found: this does not look like a web project (package.json scripts, index.html, Django or Flask), "
+                             "or add .kcoder/preview.json {\"command\": \"...\"}")
+        taken = {s.preview.port for s in self.sessions.values() if s.preview is not None}
+        port = previewmod.free_port(taken)
+        pv = previewmod.Preview(session.engine.cwd, spec, port, os.path.join(session.dir, "preview.log"))
+        pv.start()
+        session.preview = pv
+        return pv.info()
+
+    def preview_stop(self, session: Session, why: str = "") -> None:
+        if session.preview is None:
+            return
+        session.preview.stop()
+        session.preview = None
+        session.meta.pop("preview", None)
+        self._record(session, {"t": "system", "ts": time.time(), "text": f"preview stopped{(' (' + why + ')') if why else ''}"})
+        self.broadcast_sessions()
+
+    # -- remote approvals ------------------------------------------------
+
+    def _remote_decision_threadsafe(self, request_id: str, approved: bool, device: dict) -> None:
+        self.loop.call_soon_threadsafe(self._remote_decision, request_id, approved, device)
+
+    def _remote_decision(self, request_id: str, approved: bool, device: dict) -> None:
+        for session in self.sessions.values():
+            if session.engine.pending_approval() == request_id:
+                if session.engine.approve(request_id, approved):
+                    self._record(session, {"t": "system", "ts": time.time(),
+                                           "text": f"{'approved' if approved else 'denied'} from phone {device.get('name') or ''}".strip()})
+                return
+        log.info("remote decision for %s arrived too late or for an unknown request", request_id)
+
+    def _remote_notify(self, session: Session, event: dict) -> None:
+        """Runs in a worker thread: tell the relay about a pending approval."""
+        try:
+            ttl = float((self.cfg.get("remote") or {}).get("ttl_minutes") or 10) * 60
+            diff = ""
+            info = session.meta.get("worktree")
+            if info and wt.is_attached(info):
+                diff = subprocess.run(["git", "-C", info["path"], "diff", "--stat", "HEAD"], capture_output=True, text=True, timeout=10).stdout[-1500:]
+            self.remote.post_request({"id": event["id"], "session": session.meta["name"], "title": f"wants to run {event.get('name')}",
+                                      "command": event.get("description") or "", "diff": diff, "expires_at": time.time() + ttl})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("remote notify failed: %s", exc)
+
+    def notify(self, title: str, body: str, sid: str | None = None) -> None:
+        """Desktop notification + a toast in every connected app."""
+        self.broadcast_raw(json.dumps({"type": "notice", "title": title, "body": body, "sid": sid}))
+        if sys.platform == "darwin":
+            script = 'display notification "%s" with title "%s"' % (
+                body.replace("\\", "\\\\").replace('"', '\\"')[:240], title.replace("\\", "\\\\").replace('"', '\\"')[:120])
+            self.loop.run_in_executor(None, lambda: subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10))
+
     def shutdown(self) -> None:
+        for session in self.sessions.values():
+            if session.preview is not None:
+                session.preview.stop()
+        self.remote.stop()
         busy = [s for s in self.sessions.values() if s.engine.busy]
         for session in busy:
             # come back paused, with the turn's text ready to resend
@@ -479,6 +586,8 @@ class Manager:
         engine.on_proc = lambda p, sid=sid: self.loop.call_soon_threadsafe(self._note_proc, sid, getattr(p, "pid", None))
         engine.scope = (meta.get("worktree") or {}).get("path")
         engine.before_turn = lambda idx, sid=sid: self._checkpoint(sid, idx)
+        engine.router = lambda text, ctx, prov=provider: routing.pick(prov, text, ctx, self.cfg)
+        engine.fallback_candidates = lambda tier, sid=sid: self.fallbacks(sid, tier)
         if hasattr(backend, "session_id"):
             backend.session_id = meta.get("claude_session")
         meta["archived"] = False
@@ -513,7 +622,7 @@ class Manager:
             "cwd": cwd,
             "project": projects.project_info(root),
             "provider": provider,
-            "model": model,
+            "model": model or routing.default_model(PROVIDERS[provider], self.cfg),
             "trust": trust if trust in TRUST_LEVELS else "read",
             "pinned": False,
             "archived": False,
@@ -616,6 +725,9 @@ class Manager:
         if session is not None:
             if session.engine.busy:
                 session.engine.interrupt()
+            if session.preview is not None:
+                session.preview.stop()
+                session.preview = None
             if session.shell is not None:
                 try:
                     session.shell.close()
@@ -727,6 +839,9 @@ class Manager:
         task = self.tasks.by_sid(session.id)
         if task is None:
             return
+        if task.get("schedule_id"):
+            self.loop.run_in_executor(None, self._finish_scheduled, session, task, result)
+            return
         if result == "ok":
             self.tasks.update(task["id"], status="review", finished=time.time())
             session.meta["needs_review"] = True
@@ -736,6 +851,55 @@ class Manager:
         else:
             self.tasks.update(task["id"], status="failed", finished=time.time(), error=result)
         self.loop.create_task(self.schedule_tasks())
+
+    def _finish_scheduled(self, session: Session, task: dict, result: str) -> None:
+        """Worker thread. A scheduled run opens a draft PR only when something
+        changed; otherwise it just logs. Failures notify."""
+        sched = self.schedules.get(task["schedule_id"]) or {}
+        name = sched.get("name") or task.get("name") or "scheduled task"
+        outcome = ""
+        try:
+            if result != "ok":
+                raise RuntimeError(f"run ended with {result}")
+            info = session.meta.get("worktree")
+            changed = []
+            if info and wt.is_attached(info):
+                changed = review.changes(info["path"], info.get("base")).get("files") or []
+            if not changed:
+                outcome = "no changes"
+                self.loop.call_soon_threadsafe(self.archive, session.id)
+            elif sched.get("pr", True) and _git_has_remote(info["path"]):
+                r = prmod.open_pr(self, session, info, title=f"{name}: {time.strftime('%Y-%m-%d')}", draft=True, auto=True)
+                outcome = f"draft PR {r.get('url') or 'opened'}"
+                self.loop.call_soon_threadsafe(self._record, session, {"t": "git", "ts": time.time(), "text": outcome})
+            else:
+                outcome = f"{len(changed)} file(s) changed; waiting for review"
+                session.meta["needs_review"] = True
+            status = "review" if "review" in outcome else "done"
+            self.tasks.update(task["id"], status=status, finished=time.time())
+            self.schedules.update(sched["id"], last_result={"ok": True, "text": outcome, "ts": time.time(), "sid": session.id}) if sched else None
+            if "review" in outcome:
+                self.loop.call_soon_threadsafe(self.notify, f"{name} needs your review", outcome, session.id)
+        except Exception as exc:  # noqa: BLE001
+            outcome = f"failed: {exc}"[:400]
+            self.tasks.update(task["id"], status="failed", finished=time.time(), error=outcome)
+            if sched:
+                self.schedules.update(sched["id"], last_result={"ok": False, "text": outcome, "ts": time.time(), "sid": session.id})
+            self.loop.call_soon_threadsafe(self.notify, f"{name} failed", outcome, session.id)
+        def finish():
+            if session.id in self.sessions:      # not when the run was archived as "no changes"
+                session.save_meta()
+            self.broadcast_sessions()
+            self.loop.create_task(self.schedule_tasks())
+        self.loop.call_soon_threadsafe(finish)
+
+    async def run_due_schedules(self) -> None:
+        for s in self.schedules.due():
+            task = self.tasks.add(s["text"], s["repo"], provider=s.get("provider"), model=s.get("model"), trust=s.get("trust"),
+                                  name=s.get("name"), schedule_id=s["id"])
+            self.schedules.mark_started(s["id"], task["id"])
+            log.info("schedule %s (%s) due: queued task %s", s["id"], s.get("name"), task["id"])
+        await self.schedule_tasks()
 
     def update_chat_meta(self, sid: str, **fields) -> dict:
         session = self.sessions.get(sid)
@@ -829,7 +993,8 @@ class Manager:
                     event.get("model") or session.engine.model, uncached, event["output"],
                     event.get("cache_read", 0), event.get("cache_write", 0),
                 ), 6)
-            if session.engine.provider.kind == "claude":
+            used = PROVIDERS.get(event.get("provider") or session.meta["provider"])
+            if (used.kind if used else session.engine.provider.kind) == "claude":
                 # covered by the user's Claude plan: keep the API-equivalent for
                 # reference, but it is not money spent
                 event["api_equivalent"] = event["cost"]
@@ -848,7 +1013,15 @@ class Manager:
             self.today["cost"] += event["cost"]
             self.today["calls"] += 1
             self._log_usage(session, event)
+        elif t == "fallback":
+            session.meta["fallback"] = None if event.get("restored") else {
+                "provider": event.get("provider"), "model": event.get("model"), "since": event.get("since"), "reason": event.get("reason")}
+        elif t == "approval_request" and self.remote.enabled():
+            self.loop.run_in_executor(None, self._remote_notify, session, event)
+        elif t == "approval_result" and self.remote.enabled():
+            self.loop.run_in_executor(None, self.remote.resolve, event.get("id"), "approved" if event.get("approved") else "denied")
         elif t == "turn_start":
+            session.meta["last_model"] = event.get("model")
             session.meta.pop("interrupted", None)
             session.meta.pop("resume_text", None)
             session.save_messages()      # so a crash mid-turn keeps the user's message
@@ -864,7 +1037,7 @@ class Manager:
             if not session.meta.get("title"):
                 session.meta["title"] = chatlog.auto_title(session.engine.messages, session.meta["name"])
         self._record(session, event)
-        if t in ("status", "turn_start", "turn_end", "usage", "compaction"):
+        if t in ("status", "turn_start", "turn_end", "usage", "compaction", "fallback"):
             session.save_meta()
             self.broadcast_sessions()
         if t == "turn_end":
@@ -901,7 +1074,11 @@ class Manager:
         self.broadcast_sessions()
 
     def _record(self, session: Session, event: dict) -> None:
-        """Assign a sequence number, persist, and fan out to subscribers."""
+        """Assign a sequence number, persist, and fan out to subscribers.
+        Safe to call from worker threads: it hops onto the event loop."""
+        if threading.current_thread() is not threading.main_thread():
+            self.loop.call_soon_threadsafe(self._record, session, event)
+            return
         session.seq += 1
         event = secretsmod.mask_event(event) if event.get("t") != "text" else dict(event)
         event["seq"] = session.seq
@@ -946,7 +1123,7 @@ class Manager:
                 "ts": event["ts"],
                 "date": dt.datetime.fromtimestamp(event["ts"]).strftime("%Y-%m-%d"),
                 "sid": session.id,
-                "provider": session.meta["provider"],
+                "provider": event.get("provider") or session.meta["provider"],
                 "model": event.get("model"),
                 "input": event["input"],
                 "output": event["output"],
@@ -972,11 +1149,17 @@ class Manager:
         return json.dumps({"type": "chats", "chats": self.history(), "projects": self.project_list()})
 
     def broadcast_sessions(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            self.loop.call_soon_threadsafe(self.broadcast_sessions)
+            return
         frame = self.sessions_frame()
         for client in list(self.clients):
             client.queue.put_nowait(frame)
 
     def broadcast_chats(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            self.loop.call_soon_threadsafe(self.broadcast_chats)
+            return
         frame = self.chats_frame()
         for client in list(self.clients):
             client.queue.put_nowait(frame)
@@ -1061,6 +1244,27 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             manager.cfg["max_concurrent"] = n
             config.save({"max_concurrent": n})
             asyncio.get_running_loop().create_task(manager.schedule_tasks())
+        if "routing_enabled" in req:
+            r = dict(manager.cfg.get("routing") or {}); r["enabled"] = bool(req["routing_enabled"])
+            manager.cfg["routing"] = r
+            config.save({"routing": r})
+        if "fallback_to_api" in req or "fallback_enabled" in req:
+            fb = dict(manager.cfg.get("fallback") or {})
+            if "fallback_to_api" in req:
+                fb["to_api"] = bool(req["fallback_to_api"])
+            if "fallback_enabled" in req:
+                fb["enabled"] = bool(req["fallback_enabled"])
+            manager.cfg["fallback"] = fb
+            config.save({"fallback": fb})
+        if "pr_screenshots" in req:
+            manager.cfg["pr_screenshots"] = bool(req["pr_screenshots"])
+            config.save({"pr_screenshots": bool(req["pr_screenshots"])})
+        if "preview_idle_minutes" in req:
+            try:
+                manager.cfg["preview_idle_minutes"] = max(1, int(req["preview_idle_minutes"]))
+            except (TypeError, ValueError):
+                raise RequestError("preview_idle_minutes must be a number")
+            config.save({"preview_idle_minutes": manager.cfg["preview_idle_minutes"]})
         return {"config": {k: v for k, v in manager.cfg.items() if k != "pricing"}, "stats": manager.stats()}
 
     if t == "projects":
@@ -1302,6 +1506,62 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {"root": root, "files": files, "names": list(projects.INSTRUCTIONS_FILES[:1] + projects.AGENT_FILES),
                 "path": projects.instructions_path(root), "text": projects.load_instructions(root, meta.get("cwd"))}
 
+    if t == "schedules":
+        action = req.get("action") or "list"
+        S = manager.schedules
+        if action == "add":
+            text, repo = (req.get("text") or "").strip(), (req.get("repo") or "").strip()
+            if not text or not repo:
+                raise RequestError("a schedule needs text and a repo")
+            if not repos.parse_spec(repo) and not os.path.isdir(os.path.expanduser(repo)):
+                raise RequestError(f"no such folder or GitHub repo: {repo}")
+            S.add(name=req.get("name"), repo=repo if repos.parse_spec(repo) else os.path.abspath(os.path.expanduser(repo)), text=text,
+                  provider=req.get("provider") or None, model=req.get("model") or None,
+                  trust=req.get("trust") if req.get("trust") in TRUST_LEVELS else None,
+                  every=req.get("every"), at=req.get("at"), weekday=req.get("weekday"), pr=req.get("pr", True))
+        elif action in ("update", "enable", "disable"):
+            s = S.get(str(req.get("id")))
+            if not s:
+                raise RequestError("no such schedule")
+            fields = {k: req[k] for k in ("name", "text", "every", "at", "weekday", "pr", "model", "trust") if k in req}
+            if action == "enable":
+                fields["enabled"] = True
+            elif action == "disable":
+                fields["enabled"] = False
+            S.update(s["id"], **fields)
+        elif action == "remove":
+            if not S.remove(str(req.get("id"))):
+                raise RequestError("no such schedule")
+        elif action == "run":
+            s = S.get(str(req.get("id")))
+            if not s:
+                raise RequestError("no such schedule")
+            S.update(s["id"], next_run=time.time() - 1)
+            await manager.run_due_schedules()
+        elif action != "list":
+            raise RequestError(f"unknown schedules action: {action}")
+        return {"schedules": list(S.items)}
+
+    if t == "remote":
+        action = req.get("action") or "status"
+        R = manager.remote
+        loop = asyncio.get_running_loop()
+        try:
+            if action == "enable":
+                st = await loop.run_in_executor(None, R.enable, str(req.get("relay") or ""))
+                return {"remote": st}
+            if action == "disable":
+                await loop.run_in_executor(None, R.disable)
+                return {"remote": R.status()}
+            if action == "pair":
+                return {"pairing": await loop.run_in_executor(None, R.pair), "remote": R.status()}
+            if action == "revoke":
+                await loop.run_in_executor(None, R.revoke, str(req.get("device") or ""))
+            return {"remote": await loop.run_in_executor(None, R.status),
+                    "ttl_minutes": (manager.cfg.get("remote") or {}).get("ttl_minutes", 10)}
+        except remotemod.RemoteError as exc:
+            raise RequestError(str(exc))
+
     if t == "tasks":
         action = req.get("action") or "list"
         q = manager.tasks
@@ -1406,6 +1666,34 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         except EngineBusy:
             raise RequestError("session is busy; wait for the current turn to finish")
         return {}
+
+    if t == "preview":
+        action = req.get("action") or "status"
+        loop = asyncio.get_running_loop()
+        if action == "start":
+            try:
+                info = await loop.run_in_executor(None, manager.preview_start, session)
+            except (ValueError, previewmod.PreviewError) as exc:
+                raise RequestError(str(exc))
+            ready = await loop.run_in_executor(None, session.preview.wait_ready, 60.0)
+            if not ready:
+                tail = previewmod.tail_log(session.preview.log_path, 15)
+                manager.preview_stop(session, "did not start")
+                raise RequestError("the dev server did not answer within 60s:\n" + tail[-800:])
+            session.meta["preview"] = session.preview.info()
+            session.meta["last_activity"] = time.time()
+            manager._record(session, {"t": "system", "ts": time.time(), "text": f"preview: {info['label']} on {info['url']}"})
+            manager.broadcast_sessions()
+            return {"preview": session.preview.info()}
+        if action == "stop":
+            manager.preview_stop(session, "stopped")
+            return {"preview": None}
+        if action == "signature":
+            return {"signature": await loop.run_in_executor(None, previewmod.tree_signature, engine.cwd)}
+        if action == "log":
+            return {"log": previewmod.tail_log(os.path.join(session.dir, "preview.log"), 80)}
+        return {"preview": session.preview.info() if session.preview is not None else None,
+                "detected": previewmod.detect(engine.cwd)}
 
     if t == "changes":
         info = session.meta.get("worktree")
@@ -1672,7 +1960,11 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {}
 
     if t in ("git", "pull", "merge", "pr", "discard", "commit"):
-        result = wt.handle_request(manager, session, t, req)
+        # merge / PR can take minutes (screenshots, a model-written description): keep the loop free
+        if t in ("pr", "merge", "pull"):
+            result = await asyncio.get_running_loop().run_in_executor(None, wt.handle_request, manager, session, t, req)
+        else:
+            result = wt.handle_request(manager, session, t, req)
         if t in ("git", "merge", "commit", "pr"):
             asyncio.get_running_loop().run_in_executor(None, manager._track_commits, session)
         return result
@@ -2002,10 +2294,12 @@ async def _serve(host: str, port: int) -> None:
         log.info("kcoderd %s listening on ws://%s:%d/ws and %s (pid %d)", __version__, host, port, sock_path, os.getpid())
         updates = asyncio.create_task(_update_loop(manager))
         prs = asyncio.create_task(_pr_loop(manager))
+        sched = asyncio.create_task(_schedule_loop(manager))
+        pv = asyncio.create_task(_preview_loop(manager))
         await stop.wait()
         log.info("shutting down")
-        updates.cancel()
-        prs.cancel()
+        for task in (updates, prs, sched, pv):
+            task.cancel()
         manager.shutdown()
         server.close()
         unix_server.close()
@@ -2014,6 +2308,45 @@ async def _serve(host: str, port: int) -> None:
             os.remove(p)
         except FileNotFoundError:
             pass
+
+
+def _git_has_remote(path: str) -> bool:
+    return bool(subprocess.run(["git", "-C", path, "remote"], capture_output=True, text=True).stdout.strip())
+
+
+async def _schedule_loop(manager: Manager) -> None:
+    """Every 30s: queue due scheduled jobs (once each, even after sleep)."""
+    while not manager.stop.is_set():
+        try:
+            await asyncio.wait_for(manager.stop.wait(), timeout=float(os.environ.get("KCODER_SCHEDULE_TICK", "30")))
+            return
+        except asyncio.TimeoutError:
+            pass
+        try:
+            if manager.schedules.due():
+                await manager.run_due_schedules()
+                manager.broadcast_sessions()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("schedule loop: %s", exc)
+
+
+async def _preview_loop(manager: Manager) -> None:
+    """Stop dev servers of sessions that have been idle for a while."""
+    while not manager.stop.is_set():
+        try:
+            await asyncio.wait_for(manager.stop.wait(), timeout=60)
+            return
+        except asyncio.TimeoutError:
+            pass
+        idle_s = float(manager.cfg.get("preview_idle_minutes") or 20) * 60
+        for session in list(manager.sessions.values()):
+            pv = session.preview
+            if pv is None:
+                continue
+            if not pv.alive():
+                manager.preview_stop(session, "the dev server exited")
+            elif not session.engine.busy and time.time() - float(session.meta.get("last_activity") or 0) > idle_s:
+                manager.preview_stop(session, f"idle for {int(idle_s // 60)} minutes")
 
 
 async def _pr_loop(manager: Manager) -> None:

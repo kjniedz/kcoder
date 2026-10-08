@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import base64
 import mimetypes
+import os
 import random
 import threading
 import time
@@ -42,8 +43,16 @@ import uuid
 import anthropic
 import openai
 
-from . import projects
+from . import projects, routing
+from .providers import ProviderOutage
 from .tools import DANGEROUS_TOOLS, READ_ONLY_TOOLS, describe_tool_call, execute_tool
+
+# after a fallback, keep using the fallback provider this long before trying the primary again
+FALLBACK_STICKY_SECONDS = 600
+# test hook: comma-separated provider ids that must fail as if rate limited
+_SIMULATED_OUTAGE = {p for p in os.environ.get("KCODER_SIMULATE_OUTAGE", "").split(",") if p}
+_FALLBACK_ERRORS = (anthropic.RateLimitError, openai.RateLimitError, anthropic.APIConnectionError, openai.APIConnectionError,
+                    anthropic.InternalServerError, openai.InternalServerError, ProviderOutage)
 
 SYSTEM_PROMPT = """\
 You are kcoder, a terminal coding agent developed by Kyle Niedzwiecki.
@@ -171,6 +180,8 @@ def _retryable(exc: Exception) -> str | None:
         return "rate limited"
     if isinstance(exc, (anthropic.APIConnectionError, openai.APIConnectionError)):
         return "connection error"
+    if isinstance(exc, ProviderOutage):
+        return "outage"
     status = getattr(exc, "status_code", None)
     if status in (500, 502, 503, 529):
         return "overloaded" if status == 529 else f"server error {status}"
@@ -215,6 +226,13 @@ class Engine:
         self.current_user_text = None  # text of the turn in flight (for resume after a crash)
         self.before_turn = None        # callback(turn_start_index) run before the model sees a turn (checkpoints)
         self.scope = None              # directory the built-in write tools must stay inside (the worktree)
+        self.router = None             # callback(text, context_tokens) -> (model, tier) when model is "auto"
+        self.fallback_candidates = None  # callback(tier) -> [(provider, backend, model), ...]
+        self.active = None             # (provider, backend, model) while running on a fallback provider
+        self.fallback_since = 0.0
+        self.fallback_reason = None
+        self.turn_model = None         # the concrete model of the current / last turn
+        self._current = None           # (provider, backend, model) the running call is using
 
     @property
     def proc(self):
@@ -245,6 +263,11 @@ class Engine:
     @auto_approve.setter
     def auto_approve(self, value: bool) -> None:
         self.trust = TRUST_AUTO if value else TRUST_READ
+
+    def active_label(self) -> str:
+        if self.active:
+            return f"{self.active[0].id}/{self.active[2]}"
+        return f"{self.provider.id}/{self.turn_model or self.model}"
 
     def needs_approval(self, tool_name: str) -> bool:
         if self.trust == TRUST_AUTO:
@@ -364,13 +387,21 @@ class Engine:
                 self.before_turn(turn_start)
             except Exception as exc:  # noqa: BLE001 - a failed checkpoint must not block the turn
                 self.emit("notice", text=f"checkpoint skipped: {exc}")
-        self.emit("turn_start")
+        text = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+        model, tier = self.model, None
+        if model == routing.AUTO:
+            if self.router is not None:
+                model, tier = self.router(text, self.last_input_tokens)
+            else:
+                model, tier = routing.pick(self.provider, text, self.last_input_tokens)
+        self.turn_model = model
+        self.emit("turn_start", model=model, tier=tier)
         result = "ok"
         try:
-            self._run_with_retries(turn_start)
+            self._run_turn_with_fallback(turn_start, model, tier or routing.classify(text, self.last_input_tokens))
         except Interrupted:
             result = "interrupted"
-            del self.messages[turn_start:]
+            del self.messages[min(turn_start, len(self.messages)):]
             self.emit("info", text="interrupted")
         except (anthropic.AuthenticationError, openai.AuthenticationError):
             result = "error"
@@ -383,10 +414,10 @@ class Engine:
             result = "error"
             del self.messages[turn_start:]
             self.emit("error", text=f"Model not found: {self.model} (try /model, or /provider)")
-        except (anthropic.RateLimitError, openai.RateLimitError):
+        except (anthropic.RateLimitError, openai.RateLimitError, ProviderOutage) as exc:
             result = "error"
-            del self.messages[turn_start:]
-            self.emit("error", text="Rate limited - wait a moment and try again.")
+            del self.messages[min(turn_start, len(self.messages)):]
+            self.emit("error", text=f"Rate limited or provider unavailable ({exc}) - no other provider could take over. Wait a moment and try again.")
         except (anthropic.APIConnectionError, openai.APIConnectionError):
             result = "error"
             del self.messages[turn_start:]
@@ -406,14 +437,84 @@ class Engine:
                 self._set_status(STATUS_ERROR if result == "error" else STATUS_IDLE)
             self.emit("turn_end", result=result, elapsed=round(time.monotonic() - self._turn_started, 2))
 
-    def _run_with_retries(self, turn_start: int) -> None:
+    def _run_turn_with_fallback(self, turn_start: int, model: str, tier: str) -> None:
+        """Run the turn on the primary provider; on a rate limit or outage
+        (after retries) move to the next configured provider, and say so."""
+        primary = (self.provider, self.backend, model)
+        candidates = [primary]
+        if self.active is not None and time.time() - self.fallback_since < FALLBACK_STICKY_SECONDS:
+            candidates = [self.active, primary]       # stay on the fallback for a while, primary as backup
+        extra = self.fallback_candidates(tier) if self.fallback_candidates is not None else []
+        seen = {c[0].id for c in candidates}
+        for c in extra:
+            if c[0].id not in seen:
+                candidates.append(c)
+                seen.add(c[0].id)
+        for i, (prov, backend, mdl) in enumerate(candidates):
+            self._current = (prov, backend, mdl)
+            try:
+                self._run_with_retries(turn_start, prov, backend, mdl)
+            except _FALLBACK_ERRORS as exc:
+                reason = _retryable(exc) or str(exc)
+                if i == len(candidates) - 1:
+                    raise
+                nxt = candidates[i + 1]
+                self.emit("notice", text=f"{prov.id}/{mdl}: {reason} - falling back to {nxt[0].id}/{nxt[2]}")
+                self.fallback_reason = f"{prov.id}: {reason}"[:160]
+                self._prepare_history_for(prov, nxt[0], turn_start)
+                continue
+            if prov.id != self.provider.id:
+                if self.active is None or self.active[0].id != prov.id:
+                    self.active = (prov, backend, mdl)
+                    self.fallback_since = time.time()
+                    self.emit("fallback", provider=prov.id, model=mdl, reason=self.fallback_reason, since=self.fallback_since)
+                else:
+                    self.active = (prov, backend, mdl)
+            elif self.active is not None:
+                self.active = None
+                self.fallback_since = 0.0
+                self.emit("fallback", restored=True, provider=prov.id, model=mdl)
+            self.turn_model = mdl
+            return
+
+    def _prepare_history_for(self, from_prov, to_prov, turn_start: int) -> None:
+        """Message formats differ between provider kinds. Anthropic-style
+        histories (Claude Code, Anthropic API) are interchangeable; anything
+        else gets a flattened text transcript, which is lossy but lets the
+        turn continue."""
+        from . import chatlog
+        compatible = {("claude", "anthropic"), ("anthropic", "claude"), ("anthropic", "anthropic"), ("openai", "openai"), ("claude", "claude")}
+        if (from_prov.kind, to_prov.kind) in compatible:
+            return
+        current = self.messages[turn_start]
+        lines = []
+        for m in self.messages[:turn_start]:
+            if m.get("role") == "user" and chatlog.is_user_turn(m):
+                lines.append("User: " + chatlog.user_text(m))
+            elif m.get("role") == "assistant":
+                t = chatlog.assistant_text(m)
+                if t:
+                    lines.append("Assistant: " + t)
+        text = chatlog.user_text(current) if chatlog.is_user_turn(current) else str(current.get("content"))
+        if lines:
+            text = "[Earlier conversation, carried over from another provider]\n" + "\n\n".join(lines)[-30_000:] + "\n\n[Current request]\n" + text
+        self.messages[:] = [{"role": "user", "content": text}]
+        # nothing before the current turn exists any more; keep indices valid for the caller
+        self._flattened = turn_start
+
+    def _run_with_retries(self, turn_start: int, provider=None, backend=None, model: str | None = None) -> None:
         """Call the backend, retrying with backoff on rate limits and
         overloads. The history is only ever appended by the backend after a
         complete model call, so a retry never replays a tool call."""
+        provider = provider or self.provider
+        backend = backend or self.backend
+        model = model or self.model
+        if provider.id in _SIMULATED_OUTAGE:
+            raise ProviderOutage(f"simulated outage of {provider.id} (KCODER_SIMULATE_OUTAGE)")
         attempt = 0
         while True:
             try:
-                self.backend.run_turn(self.messages, self.model, self.system_prompt(), self)
+                backend.run_turn(self.messages, model, self.system_prompt(), self)
                 return
             except (anthropic.APIError, openai.APIError) as exc:
                 reason = _retryable(exc)
@@ -442,7 +543,8 @@ class Engine:
         self.emit("compaction_start", tokens=self.last_input_tokens)
         hooks = _CaptureHooks()
         temp = list(self.messages) + [{"role": "user", "content": COMPACT_PROMPT}]
-        self.backend.run_turn(temp, self.model, self.system_prompt(), hooks)
+        model = self.turn_model or (routing.model_for(self.provider, "large") if self.model == routing.AUTO else self.model)
+        self.backend.run_turn(temp, model, self.system_prompt(), hooks)
         summary = hooks.text.strip()
         if not summary:
             raise RuntimeError("empty summary")
@@ -498,7 +600,8 @@ class Engine:
             output=int(output_tokens or 0),
             cache_read=int(cache_read or 0),
             cache_write=int(cache_write or 0),
-            model=self.model,
+            model=self._current[2] if self._current else (self.turn_model or self.model),
+            provider=self._current[0].id if self._current else self.provider.id,
             elapsed=round(time.monotonic() - self._turn_started, 2),
         )
         if cost is not None:

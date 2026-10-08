@@ -142,6 +142,7 @@ async function onFrame(msg) {
   if (msg.type === 'chats') { state.chats = msg.chats; state.projects = msg.projects; renderSidebar(); return; }
   if (msg.type === 'event') { onEvent(msg.sid, msg.ev); return; }
   if (msg.type === 'shell') { onShellData(msg.sid, msg.data, msg.exit); return; }
+  if (msg.type === 'notice') { toast(`${msg.title}: ${msg.body}`, 'warn'); notify(msg.title, msg.body, msg.sid, 'wait'); return; }
 }
 
 async function onConnected() {
@@ -558,12 +559,14 @@ function renderPaneChrome(pane, s, num) {
   const proj = s.project || {};
   const branch = s.worktree ? s.worktree.branch : (state.gitInfo.get(s.id) || {}).branch;
   $('.repo', pane).textContent = proj.name ? proj.name + (branch ? ' @ ' + branch : '') : shortHome(s.cwd);
-  $('.model', pane).textContent = s.model || '';
+  const am = (s.active_model || '').split('/')[1];
+  $('.model', pane).textContent = s.model === 'auto' ? (am && am !== 'auto' ? 'auto → ' + am : 'auto') : (s.model || '');
+  $('.model', pane).title = s.model === 'auto' ? 'model routing: ' + (s.active_model || '') : (s.active_model || '');
   let chips = $('.chips', pane); if (!chips) { chips = document.createElement('span'); chips.className = 'chips'; $('.model', pane).after(chips); }
   chips.innerHTML = paneChips(s);
   $('.window-pin', pane).classList.toggle('on', state.pins.includes(s.id));
   const pv = paneViewOf(s.id);
-  $('.view-toggle', pane).textContent = pv === 'term' ? '▤' : pv === 'shell' ? '$' : '☰';
+  $('.view-toggle', pane).textContent = pv === 'term' ? '▤' : pv === 'shell' ? '$' : pv === 'preview' ? '▶' : '☰';
   const u = s.usage || {};
   const ctx = s.context_tokens || 0;
   const git = state.gitInfo.get(s.id);
@@ -598,6 +601,7 @@ function renderPaneChrome(pane, s, num) {
       (s.project && s.project.git ? `<button data-act="git">git status</button><button data-act="pull" title="git pull --ff-only from the remote">⇣ pull</button>` : '') +
       (s.worktree ? `<button data-act="merge" title="merge this session's branch into the project">⇤ merge</button><button data-act="pr">open PR</button><button data-act="discard" class="danger">discard</button>` : '') +
       (s.worktree ? `<button data-act="changes" title="review this session's changes hunk by hunk">${s.needs_review ? '⚑ ' : ''}changes</button>` : '') +
+      `<button data-act="preview" title="live preview: the dev server for this worktree, in this pane">▶ preview</button>` +
       `<button data-act="instructions" title="the repo's instruction file (KCODER.md / AGENTS.md / CLAUDE.md)">instructions</button>` +
       `<button data-act="open-chat">open in chat</button><button data-act="export">export</button><button data-act="archive">archive</button>` +
       (s.resume_text ? `<button data-act="resume" class="primary">resume interrupted turn</button>` : '');
@@ -615,8 +619,9 @@ function renderPaneChrome(pane, s, num) {
 function fillModelSelect(sel, s) {
   const prov = (state.providers || []).find((p) => p.id === s.provider);
   const models = prov ? prov.models.slice() : [];
+  if (prov && prov.auto && !models.includes('auto')) models.unshift('auto');
   if (s.model && !models.includes(s.model)) models.unshift(s.model);
-  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
+  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc((prov.tiers || {}).small || '')} / ${esc((prov.tiers || {}).large || '')})` : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
   sel.value = s.model;
 }
 
@@ -628,6 +633,7 @@ function renderPaneBody(pane, sid) {
   const pv = paneViewOf(sid);
   const focused = pane.classList.contains('focused');
   if (pv === 'shell') { body.className = 'pane-body shell-box'; ensureShell(sid, body); return; }
+  if (pv === 'preview') { body.className = 'pane-body preview-box'; renderPreviewPane(body, sid); return; }
   if (pv === 'term') {
     body.className = 'pane-body term';
     body.innerHTML = buildTermHtml(store, sid, { tail: focused ? 0 : 40 });
@@ -773,7 +779,7 @@ function focusPane(sid) {
   if (sid) { const pane = $(`.pane[data-sid="${sid}"]`); if (pane) { renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); fitShell(sid); focusComposer(); } }
 }
 function cyclePaneView(sid) {
-  const order = ['chat', 'term', 'shell'];
+  const order = ['chat', 'term', 'shell', 'preview'];
   const cur = paneViewOf(sid);
   const next = order[(order.indexOf(cur) + 1) % order.length];
   setPaneView(sid, next);
@@ -816,6 +822,9 @@ async function handleAction(el, sid) {
       case 'resume': await request('resume_turn', { sid }); break;
       case 'dismiss': await request('resume_turn', { sid, discard: true }); break;
       case 'changes': changesDialog(sid); break;
+      case 'preview': { if (state.view !== 'wall') setView('wall'); setPaneView(sid, 'preview'); focusPane(sid); break; }
+      case 'preview-start': { toast('starting the dev server…'); const r = await request('preview', { sid, action: 'start' }); toast(`preview on ${r.preview.url}`, 'ok'); renderSession(sid); break; }
+      case 'preview-stop': await request('preview', { sid, action: 'stop' }); renderSession(sid); break;
       case 'instructions': instructionsDialog(sid); break;
       case 'undo': {
         const msg = el.closest('.msg-user'); const turn = Number(msg.dataset.turn);
@@ -1358,7 +1367,7 @@ async function openNewSession(pre = {}) {
   const modelSel = $('#ns-model', d), provSel = $('#ns-provider', d), cwdIn = $('#ns-cwd', d), repoMenu = $('#ns-repos', d), status = $('#ns-status', d);
   $('#ns-setup', d).addEventListener('click', (e) => { e.preventDefault(); const pid = provSel.value; closeDialog(); setupDialog(pid); });
   $('#ns-trust', d).value = state.config && state.config.default_trust ? state.config.default_trust : 'auto';
-  const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; modelSel.innerHTML = (p.models || []).map((m) => `<option${m === p.default_model ? ' selected' : ''}>${esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
+  const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; const auto = p.auto && (!state.config || !state.config.routing || state.config.routing.enabled !== false); modelSel.innerHTML = (auto ? `<option value="auto" selected>auto (${esc((p.tiers || {}).small || '')} for small tasks, ${esc((p.tiers || {}).large || '')} for large)</option>` : '') + (p.models || []).map((m) => `<option${!auto && m === p.default_model ? ' selected' : ''}>${esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
   provSel.addEventListener('change', fill); fill();
   // repo picker: local git repos + GitHub repos via gh
   let repos = state.repoCache;
@@ -1403,7 +1412,10 @@ function paletteItems() {
     ['toggle auto-publish of local folders to GitHub', async () => { const on = !(state.config && state.config.auto_publish !== false); const r = await request('config', { auto_publish: on }); state.config = r.config; toast('auto-publish to GitHub: ' + (on ? 'on' : 'off'), 'ok'); }],
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
-    ['task queue', () => setView('tasks'), 'alt+5'],
+    ['task queue + schedules', () => setView('tasks'), 'alt+5'],
+    ['phone approvals (pair, revoke, enable)', remoteDialog],
+    ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
+    ['toggle fallback from your Claude plan to a paid API key', async () => { const on = !!(state.config && state.config.fallback && state.config.fallback.to_api); const r = await request('config', { fallback_to_api: !on }); state.config = r.config; toast('fallback to paid API keys: ' + (!on ? 'ON' : 'off'), !on ? 'warn' : 'ok'); }],
     ['set review policy (when the changes view must approve)', async () => { const v = await chooseDialog('Review required before…', [['push', 'push - PRs, pushes and merges need an approved review (default)'], ['commit', 'commit - every commit needs an approved review'], ['none', 'none - review is optional']]); if (v) { const r = await request('config', { review_required: v }); state.config = r.config; toast('review required before: ' + v, 'ok'); } }],
     ['check for updates', checkUpdates], ['update now (install + restart kcoderd)', updateNow], ['restart kcoderd', restartDaemon],
     ['uninstall kcoder…', uninstallDialog],
@@ -1522,6 +1534,8 @@ function paneChips(s) {
     h += `<a class="chip pr ${esc(ck)}" href="${esc(s.pr.url)}" target="_blank" rel="noopener" title="${esc(s.pr.title || '')} · ${esc((s.pr.state || '').toLowerCase())}${s.pr.draft ? ' · draft' : ''} · checks: ${esc(ck)}">PR #${esc(s.pr.number)}${s.pr.draft ? ' draft' : ''} ${icon}</a>`;
   }
   if (s.needs_review) h += `<span class="chip warn" data-act="changes" title="a task finished; its changes wait for your review">⚑ review</span>`;
+  if (s.fallback && s.fallback.provider) h += `<span class="chip warn" title="running on a fallback provider since ${esc(new Date((s.fallback.since || 0) * 1000).toLocaleTimeString())}: ${esc(s.fallback.reason || '')}">⇄ ${esc(s.fallback.provider)}/${esc(s.fallback.model)} · ${age(s.fallback.since)}</span>`;
+  if (s.preview && s.preview.running) h += `<span class="chip ok" data-act="preview" title="dev server ${esc(s.preview.label)} on port ${esc(s.preview.port)} (click to show)">▶ :${esc(s.preview.port)}</span>`;
   return h;
 }
 
@@ -1601,12 +1615,12 @@ async function instructionsDialog(sid) {
 }
 
 // ---- task queue view ----
-let tasksData = null, tasksTimer = null;
+let tasksData = null, tasksTimer = null, schedulesData = null;
 async function renderTasksView(force) {
   if (state.view !== 'tasks') return;
   if (!force && tasksTimer) return;
   tasksTimer = setTimeout(() => (tasksTimer = null), 1500);
-  try { tasksData = await request('tasks', { action: 'list' }); } catch (e) { $('#tasks-body').innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
+  try { tasksData = await request('tasks', { action: 'list' }); if (!schedulesData || force) schedulesData = (await request('schedules', { action: 'list' })).schedules; } catch (e) { $('#tasks-body').innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
   const body = $('#tasks-body'); const t = tasksData; const provs = state.providers || [];
   const def = provs.find((p) => p.default && p.configured) || provs.find((p) => p.configured) || provs[0] || {};
   const row = (x, drag) => { const s = state.sessions.get(x.sid) || state.chats.find((c) => c.id === x.sid); return `<div class="task ${esc(x.status)}" data-id="${esc(x.id)}" ${drag ? 'draggable="true"' : ''}>
@@ -1631,7 +1645,11 @@ async function renderTasksView(force) {
     </form>
     <h3>running</h3><div class="task-list">${by('running').map((x) => row(x, false)).join('') || '<div class="empty-row">nothing running</div>'}</div>
     <h3>queued</h3><div class="task-list" id="tq-queued">${by('queued').map((x) => row(x, true)).join('') || '<div class="empty-row">queue is empty</div>'}</div>
-    <h3>finished</h3><div class="task-list">${t.tasks.filter((x) => !['running', 'queued'].includes(x.status)).reverse().map((x) => row(x, false)).join('') || '<div class="empty-row">none yet</div>'}</div>`;
+    <h3>finished</h3><div class="task-list">${t.tasks.filter((x) => !['running', 'queued'].includes(x.status)).reverse().map((x) => row(x, false)).join('') || '<div class="empty-row">none yet</div>'}</div>
+    ${schedulesHtml(schedulesData || [])}`;
+  const sform = $('#sc-form', body);
+  sform.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(sform); try { await request('schedules', { action: 'add', name: fd.get('name'), repo: fd.get('repo'), text: fd.get('text'), every: fd.get('every'), at: fd.get('at'), weekday: Number(fd.get('weekday')), pr: fd.get('pr') === 'on' }); toast('schedule added', 'ok'); schedulesData = null; renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
+  $('#sc-list', body).addEventListener('click', async (e) => { const b = e.target.closest('[data-s]'); if (!b) return; const id = b.closest('.task').dataset.sid; try { if (b.dataset.s === 'remove' && !(await confirmDialog('Remove this schedule?', ''))) return; await request('schedules', { action: b.dataset.s, id }); if (b.dataset.s === 'run') toast('queued a run', 'ok'); schedulesData = null; renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
   const form = $('#tq-form', body);
   form.querySelector('[name=provider]').addEventListener('change', (e) => { const p = provs.find((x) => x.id === e.target.value) || {}; form.querySelector('[name=model]').innerHTML = '<option value="">provider default</option>' + (p.models || []).map((m) => `<option>${esc(m)}</option>`).join(''); });
   form.querySelector('[name=trust]').value = (state.config && state.config.default_trust) || 'auto';
@@ -1654,6 +1672,80 @@ async function renderTasksView(force) {
   list.addEventListener('dragend', () => { dragId = null; for (const r of $$('.task', list)) r.classList.remove('dragging', 'drop-before', 'drop-after'); });
   list.addEventListener('dragover', (e) => { const r = e.target.closest('.task'); if (!r || !dragId || r.dataset.id === dragId) return; e.preventDefault(); const rect = r.getBoundingClientRect(); const before = (e.clientY - rect.top) < rect.height / 2; r.classList.toggle('drop-before', before); r.classList.toggle('drop-after', !before); });
   list.addEventListener('drop', async (e) => { const r = e.target.closest('.task'); if (!r || !dragId) return; e.preventDefault(); const before = r.classList.contains('drop-before'); const ids = $$('.task', list).map((x) => x.dataset.id).filter((x) => x !== dragId); const i = ids.indexOf(r.dataset.id); ids.splice(before ? i : i + 1, 0, dragId); dragId = null; try { await request('tasks', { action: 'reorder', ids }); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
+}
+
+// ---- live preview pane ----
+const previewPolls = new Map();
+function renderPreviewPane(body, sid) {
+  const s = state.sessions.get(sid) || {};
+  const pv = s.preview;
+  if (!body.querySelector('.pv-bar')) body.innerHTML = `<div class="pv-bar"><button data-act="preview-start" class="primary">▶ start</button><button data-act="preview-stop">■ stop</button><button data-pv="reload" title="reload">↻</button><button data-pv="desktop" title="desktop width">⌨</button><button data-pv="mobile" title="phone width">📱</button><a class="pv-url" target="_blank" rel="noopener"></a><span class="spacer"></span><span class="pv-status help"></span></div><div class="pv-frame"><iframe sandbox="allow-scripts allow-forms allow-same-origin allow-popups" referrerpolicy="no-referrer"></iframe></div>`;
+  const frame = $('iframe', body), url = $('.pv-url', body), st = $('.pv-status', body);
+  $('[data-act="preview-start"]', body).hidden = !!(pv && pv.running);
+  $('[data-act="preview-stop"]', body).hidden = !(pv && pv.running);
+  if (pv && pv.running) {
+    url.textContent = pv.url; url.href = pv.url; st.textContent = `${pv.label} · port ${pv.port}${pv.hmr ? ' · hot reload' : ' · reloads on change'}`;
+    if (frame.dataset.src !== pv.url) { frame.src = pv.url; frame.dataset.src = pv.url; }
+    if (!pv.hmr && !previewPolls.has(sid)) {
+      let last = null;
+      previewPolls.set(sid, setInterval(async () => {
+        const p = $(`.pane[data-sid="${sid}"] .preview-box`); if (!p) { clearInterval(previewPolls.get(sid)); previewPolls.delete(sid); return; }
+        try { const r = await request('preview', { sid, action: 'signature' }); if (last && r.signature !== last) { const f = $('iframe', p); f.src = f.src; } last = r.signature; } catch {}
+      }, 2500));
+    }
+  } else {
+    url.textContent = ''; url.removeAttribute('href'); st.textContent = 'no dev server running for this worktree';
+    if (frame.dataset.src) { frame.removeAttribute('src'); delete frame.dataset.src; }
+    if (previewPolls.has(sid)) { clearInterval(previewPolls.get(sid)); previewPolls.delete(sid); }
+  }
+  if (!body._wired) {
+    body._wired = true;
+    body.addEventListener('click', (e) => { const b = e.target.closest('[data-pv]'); if (!b) return; const f = $('iframe', body), fr = $('.pv-frame', body); if (b.dataset.pv === 'reload') f.src = f.src; else fr.classList.toggle('mobile', b.dataset.pv === 'mobile'); });
+  }
+}
+
+// ---- schedules (in the tasks tab) ----
+function schedulesHtml(list) {
+  const row = (s) => `<div class="task ${s.enabled ? 'queued' : 'cancelled'}" data-sid="${esc(s.id)}"><span class="grip"></span><span class="st">${s.enabled ? 'on' : 'off'}</span>
+    <div class="txt"><div class="t1"><b>${esc(s.name)}</b> · every ${esc(s.every)}${s.every !== 'hour' ? ' at ' + esc(s.at) : ' at :' + esc((s.at || '00:00').split(':')[1])}${s.every === 'week' ? ' on ' + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][s.weekday || 0] : ''}${s.pr ? ' · opens a draft PR when something changed' : ' · lands in review'}</div>
+    <div class="t2">${esc(s.text.slice(0, 120))} · ${esc(shortHome(s.repo))} · next ${esc(new Date((s.next_run || 0) * 1000).toLocaleString())}${s.last_result ? ' · last: ' + esc(s.last_result.text || '') : ''}</div></div>
+    <button data-s="run" title="run now">run</button><button data-s="${s.enabled ? 'disable' : 'enable'}">${s.enabled ? 'pause' : 'enable'}</button><button data-s="remove" class="danger">✕</button></div>`;
+  return `<h3>schedules</h3><form class="task-add card" id="sc-form">
+    <div class="row"><label>name<input name="name" placeholder="weekly dependency update" required></label><label>repo / folder<input name="repo" list="tq-repos" placeholder="/path or owner/name" required autocomplete="off"></label>
+      <label>every<select name="every"><option value="day">day</option><option value="week">week</option><option value="hour">hour</option></select></label><label>at<input name="at" type="time" value="09:00"></label>
+      <label>weekday (weekly)<select name="weekday">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d, i) => `<option value="${i}">${d}</option>`).join('')}</select></label></div>
+    <label>task<textarea name="text" placeholder="e.g. Update dependencies to their latest compatible versions and run the tests." required></textarea></label>
+    <div class="row"><label class="check"><input type="checkbox" name="pr" checked> open a draft PR when something changed (otherwise just log)</label><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add schedule</button></div></form>
+    <div class="task-list" id="sc-list">${list.map(row).join('') || '<div class="empty-row">no schedules</div>'}</div>`;
+}
+
+// ---- phone approvals ----
+async function remoteDialog() {
+  let r; try { r = await request('remote', { action: 'status' }); } catch (e) { toast(e.message, 'err'); return; }
+  const d = openDialog(`<h2>phone approvals<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body" id="rm-body"></div>`, 'remote');
+  const render = (res, pairing) => {
+    const st = res.remote || {};
+    $('#rm-body', d).innerHTML = `
+      <p class="help plain">Off by default. Your Mac never opens a port: kcoderd keeps one outbound connection to a relay you host (see <code>relay/README.md</code>). Paired phones get a push notification whenever a session waits for you and can approve or deny from a page that shows the command and a diff summary. Approvals expire after ${esc(res.ttl_minutes || 10)} minutes.</p>
+      ${st.enabled ? `<p>relay <code>${esc(st.relay)}</code> · ${st.connected ? '<b class="ok-t" style="color:var(--green)">connected</b>' : '<b style="color:var(--yellow)">not connected</b>'}${st.error ? ' · ' + esc(st.error) : ''}</p>
+        <div class="row"><button class="primary" data-x="pair">pair a phone</button><button data-x="disable" class="danger">disable + forget devices</button></div>
+        ${pairing ? `<div class="card" style="text-align:center"><div id="rm-qr"></div><p>scan on the phone, or open <code>${esc(pairing.url)}</code><br><span class="help">code ${esc(pairing.code)} · valid 5 minutes</span></p></div>` : ''}
+        <div class="label-h">paired devices</div>
+        ${(st.devices || []).length ? st.devices.map((v) => `<div class="row" style="align-items:center"><span><b>${esc(v.name)}</b> <span class="help">${v.push ? 'push on' : 'no push subscription'} · paired ${age(v.created)} ago</span></span><span class="spacer" style="flex:1"></span><button data-x="revoke" data-dev="${esc(v.id)}" class="danger">revoke</button></div>`).join('') : '<p class="help">none yet</p>'}`
+      : `<label>relay URL<input id="rm-relay" placeholder="https://kcoder-relay.you.workers.dev" value="${esc(st.relay || '')}"></label><div class="row"><button class="primary" data-x="enable">enable</button></div>`}`;
+    if (pairing && window.qrcode) { try { const q = qrcode(0, 'M'); q.addData(pairing.url); q.make(); $('#rm-qr', d).innerHTML = q.createSvgTag({ cellSize: 5, margin: 2 }); } catch (e) { $('#rm-qr', d).textContent = pairing.url; } }
+  };
+  render(r);
+  d.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-x]'); if (!b) return;
+    try {
+      if (b.dataset.x === 'close') closeDialog();
+      else if (b.dataset.x === 'enable') { r = await request('remote', { action: 'enable', relay: $('#rm-relay', d).value.trim() }); toast('phone approvals enabled', 'ok'); render(r); }
+      else if (b.dataset.x === 'disable') { if (await confirmDialog('Disable phone approvals?', 'All paired devices are forgotten.')) { r = await request('remote', { action: 'disable' }); render(r); } }
+      else if (b.dataset.x === 'pair') { const p = await request('remote', { action: 'pair' }); render(p, p.pairing); }
+      else if (b.dataset.x === 'revoke') { r = await request('remote', { action: 'revoke', device: b.dataset.dev }); toast('device revoked', 'warn'); render(r); }
+    } catch (err) { toast(err.message, 'err'); }
+  });
 }
 
 // ---- updates, restart, uninstall ----

@@ -503,3 +503,15 @@ table.grid .warn, .card .warn { color: var(--yellow); }
 .task.drop-before::before, .task.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; background: var(--accent); }
 .task.drop-before::before { top: -2px; } .task.drop-after::after { bottom: -2px; }
 .msg-user .actions button[data-act="undo"] { color: var(--yellow); }
+
+/* ---- phase 3: preview pane, fallback/preview chips ---- */
+.chip.ok { border-color: var(--green); color: var(--green); }
+.preview-box { padding: 0 !important; display: flex; flex-direction: column; }
+.pv-bar { display: flex; gap: 6px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); background: var(--bg-3); font-size: 11px; flex: 0 0 auto; }
+.pv-bar button { padding: 0 7px; font-size: 11px; }
+.pv-bar .pv-url { color: var(--accent); font-size: 11px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-bar .spacer { flex: 1; }
+.pv-frame { flex: 1 1 auto; min-height: 0; background: #fff; display: flex; justify-content: center; }
+.pv-frame iframe { border: 0; width: 100%; height: 100%; background: #fff; }
+.pv-frame.mobile iframe { width: 390px; max-width: 100%; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.task.cancelled .st { color: var(--fg-mute); }

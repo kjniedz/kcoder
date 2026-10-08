@@ -537,6 +537,46 @@ reorder them, pause the queue, cancel tasks. A finished task lands in
 **review** (its pane shows ⚑ review and the changes view opens from the
 tasks tab); nothing is pushed on its own.
 
+### Model routing, fallback, previews, schedules, phone approvals
+
+- **Model routing**: a session or task whose model is **auto** (the default
+  for Claude Code and the Anthropic API) gets a cheaper model for small
+  turns and a stronger one for large or multi-file work (`sonnet` / `fable`
+  on your Claude plan, Haiku / Opus on the API; `routing.tiers` in the config
+  overrides). Pick a concrete model on a session or task to turn routing off
+  for it. The pane header shows `auto → <model>`.
+- **Fallback**: on a rate limit or outage (after the usual retries) the turn
+  moves to the next configured provider and the pane header shows
+  `⇄ provider/model · since`. kcoder never falls back from your Claude
+  subscription to a pay-per-token API key unless you turn that on (⌘K →
+  toggle fallback to paid API keys, `fallback.to_api`), never to a paid
+  provider once the daily cap is reached, and goes back to the primary
+  provider after ten minutes. Between providers with different message
+  formats the history is carried over as a flattened transcript.
+- **Live preview**: for web projects (npm `dev`/`start` scripts, Django,
+  Flask, a static `index.html`, or `.kcoder/preview.json`) the pane's ▶
+  preview view starts the dev server inside the session's worktree on its
+  own port (4300 to 4399), so parallel sessions never collide, and shows it
+  in the pane; static and server-rendered apps reload when files change,
+  bundlers use their own hot reload. Dev servers stop when the session is
+  idle for `preview_idle_minutes` (20) or archived. PRs of web projects get
+  desktop and mobile screenshots committed under `.kcoder/screenshots/`
+  and shown in the description (`pr_screenshots`).
+- **Scheduled tasks** (tasks tab → schedules): recurring jobs per repo
+  (every hour, day or week) feed the task queue. A job missed while the Mac
+  slept runs once on wake, never as a backlog. A run that changed nothing
+  just logs; one that did opens a draft PR (or lands in review when the
+  schedule says so). Failures and runs waiting for review notify you.
+  Note: a schedule's automatic draft PR push is exempt from the review
+  policy; the draft PR itself is the review.
+- **Phone approvals**: opt-in, off by default (⌘K → phone approvals). Your
+  Mac never opens a port; `kcoderd` keeps one outbound connection to a
+  small relay you host (`relay/`, a Cloudflare Worker with Web Push).
+  Pair a phone once by scanning a QR code; when a session waits for you
+  the phone gets a notification that opens a page showing exactly what is
+  being approved (command, diff summary) with approve / deny. Approvals
+  expire after `remote.ttl_minutes` (10); revoking a device is one click.
+
 ### Trust levels, queues, caps, compaction
 
 - Trust per session: `auto` (never ask - the default, change it with
