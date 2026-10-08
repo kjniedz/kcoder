@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 
-from . import auth
+from . import auth, identity
 from .providers import PROVIDERS, claude_path, make_backend
 
 CLAUDE_INSTALL_URL = "https://claude.ai/install.sh"
@@ -129,6 +129,35 @@ def claude_install_command() -> str:
     return (f"clear; echo 'Installing Claude Code...'; curl -fsSL {CLAUDE_INSTALL_URL} | bash && "
             f"echo && echo 'Claude Code is installed. Signing you in: a browser window will open.' && "
             f"{shlex.quote(claude)} auth login; echo; echo 'Done. Go back to the kcoder app and click Check again.'")
+
+
+def github_status(refresh: bool = False) -> dict:
+    return identity.status(refresh=refresh)
+
+
+def gh_login_command() -> str:
+    """Install gh if needed (Homebrew, else the release zip), sign in with the
+    browser, and point git's https credentials at that account."""
+    arch = "arm64" if os.uname().machine == "arm64" else "amd64"
+    install = (
+        "if ! command -v gh >/dev/null 2>&1 && [ ! -x /opt/homebrew/bin/gh ] && [ ! -x \"$HOME/.local/bin/gh\" ]; then "
+        "echo 'Installing the GitHub CLI...'; "
+        "if command -v brew >/dev/null 2>&1; then brew install gh; else "
+        "mkdir -p \"$HOME/.local/bin\" && cd /tmp && "
+        f"URL=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep browser_download_url | grep 'macOS_{arch}.zip' | head -1 | cut -d '\"' -f 4) && "
+        "curl -fsSL \"$URL\" -o gh.zip && rm -rf gh-cli && unzip -q -o gh.zip -d gh-cli && cp gh-cli/*/bin/gh \"$HOME/.local/bin/gh\" && chmod +x \"$HOME/.local/bin/gh\"; "
+        "fi; fi; "
+    )
+    pick = "GH=$(command -v gh 2>/dev/null); [ -x \"$GH\" ] || GH=/opt/homebrew/bin/gh; [ -x \"$GH\" ] || GH=\"$HOME/.local/bin/gh\"; "
+    return ("clear; echo 'Connecting GitHub: your browser will open to sign in.'; " + install + pick +
+            "\"$GH\" auth login --hostname github.com --git-protocol https --web --scopes user:email && \"$GH\" auth setup-git --hostname github.com && "
+            "echo && echo 'GitHub connected. Go back to the kcoder app and click Check again.'")
+
+
+def gh_switch_command() -> str:
+    return ("clear; echo 'Switching GitHub account: your browser will open to sign in.'; "
+            "gh auth login --hostname github.com --git-protocol https --web --scopes user:email && gh auth setup-git --hostname github.com && "
+            "echo && echo 'Done. Go back to the kcoder app and click Check again.'")
 
 
 def claude_login_command() -> str:

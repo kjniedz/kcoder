@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from . import paths
+from . import identity, paths
 
 WORKTREES_DIR = os.path.join(paths.DATA_DIR, "worktrees")
 
@@ -19,9 +19,9 @@ class GitError(Exception):
     pass
 
 
-def _git(cwd: str, *args, check: bool = True, timeout: int = 120) -> str:
+def _git(cwd: str, *args, check: bool = True, timeout: int = 120, env: dict | None = None) -> str:
     try:
-        out = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=timeout, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise GitError(f"git {' '.join(args)}: {exc}")
     if check and out.returncode != 0:
@@ -104,8 +104,12 @@ def commit_all(cwd: str, message: str) -> str | None:
     """Stage and commit everything. Returns the short hash or None if clean."""
     if not _git(cwd, "status", "--porcelain", check=False).strip():
         return None
+    try:
+        identity.require()          # commits are signed as the signed-in GitHub account, or not at all
+    except identity.IdentityError as exc:
+        raise GitError(str(exc))
     _git(cwd, "add", "-A")
-    _git(cwd, "commit", "-q", "-m", message)
+    _git(cwd, "commit", "-q", "-m", identity.with_trailer(message), env=identity.git_env())
     return _git(cwd, "rev-parse", "--short", "HEAD").strip()
 
 
@@ -114,7 +118,12 @@ def merge_into_root(info: dict, message: str | None = None) -> str:
     committed = commit_all(path, message or f"kcoder: work from session on {branch}")
     if _git(root, "status", "--porcelain", check=False).strip():
         raise GitError("the main checkout has uncommitted changes; commit or stash them first")
-    out = subprocess.run(["git", "-C", root, "merge", "--no-ff", "--no-edit", branch], capture_output=True, text=True)
+    try:
+        identity.require()
+    except identity.IdentityError as exc:
+        raise GitError(str(exc))
+    out = subprocess.run(["git", "-C", root, "merge", "--no-ff", "--no-edit", branch], capture_output=True, text=True,
+                         env=identity.git_env())
     if out.returncode != 0:
         _git(root, "merge", "--abort", check=False)
         raise GitError("merge conflict - aborted. Resolve by merging " + branch + " manually.\n" + (out.stdout + out.stderr).strip()[-1500:])
@@ -127,7 +136,8 @@ def open_pr(info: dict, title: str | None = None, body: str | None = None) -> di
     committed = commit_all(path, title or f"kcoder: work on {branch}")
     if not _git(path, "remote", check=False).strip():
         raise GitError("no git remote configured; add one (or use merge instead)")
-    _git(path, "push", "-u", "origin", branch, timeout=300)
+    identity.ensure_credential_helper()   # push with the signed-in account's token
+    _git(path, "push", "-u", "origin", branch, timeout=300, env=identity.git_env())
     if not shutil.which("gh"):
         return {"url": None, "message": f"pushed {branch}; install the gh CLI to open PRs automatically", "committed": committed}
     args = ["gh", "pr", "create", "--head", branch]

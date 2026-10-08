@@ -238,7 +238,9 @@ class Engine:
         return tool_name in DANGEROUS_TOOLS  # TRUST_READ
 
     def system_prompt(self) -> str:
+        from . import identity
         base = SYSTEM_PROMPT.format(cwd=self.cwd)
+        base += "\n\n# Commits\n\n" + identity.prompt_note()
         extra = projects.load_instructions(self.project_root, self.cwd)
         if extra:
             base += "\n\n# Project instructions (KCODER.md)\n\n" + extra

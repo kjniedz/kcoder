@@ -419,11 +419,22 @@ def _spawn_claude(args: list, cwd: str, attempts: int = 4):
 
 
 def _claude_env() -> dict:
-    env = dict(os.environ)
+    from . import identity
+    env = identity.git_env()          # commits inside Claude Code are signed as the user's GitHub account
     for k in list(env):
         if k.startswith("CLAUDE_CODE") or k in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"):
             env.pop(k, None)   # nested Claude Code sessions refuse to start
     return env
+
+
+def _claude_settings() -> str | None:
+    """Inline settings for `claude --settings`: no AI attribution on commits
+    unless the user configured a trailer."""
+    from . import identity
+    if identity.trailer():
+        return None
+    import json as _json
+    return _json.dumps({"includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
 
 
 def describe_claude_tool(name: str, inp: dict) -> str:
@@ -475,6 +486,9 @@ class ClaudeCodeBackend:
             args += ["--resume", self.session_id]
         if system:
             args += ["--append-system-prompt", system]
+        settings = _claude_settings()
+        if settings:
+            args += ["--settings", settings]
         cwd = getattr(hooks, "cwd", None) or os.getcwd()
         proc = _spawn_claude(args, cwd)
         if hasattr(hooks, "proc"):

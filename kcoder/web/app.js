@@ -127,7 +127,7 @@ async function onFrame(msg) {
 
 async function onConnected() {
   await request('attach', { sid: '*' });
-  try { state.providers = (await request('providers')).providers; } catch {}
+  await refreshProviders();
   try { state.config = (await request('config')).config; } catch {}
   applyUrlParams();
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
@@ -135,7 +135,7 @@ async function onConnected() {
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
   syncSid();
   renderAll();
-  if ((state.providers || []).length && !state.providers.some((p) => p.configured) && !state._setupShown) { state._setupShown = true; setupDialog(); }
+  if (!state._setupShown && (((state.providers || []).length && !state.providers.some((p) => p.configured)) || (state.github && !state.github.connected))) { state._setupShown = true; setupDialog(); }
   const open = new URLSearchParams(location.search).get('open');
   if (open && !state._openedOnce) { state._openedOnce = true; ({ new: openNewSession, inbox: openInbox, palette: openPalette, help: helpDialog }[open] || (() => {}))(); }
 }
@@ -1342,7 +1342,7 @@ async function openNewSession(pre = {}) {
 // command palette
 function paletteItems() {
   const items = [
-    ['new session', () => openNewSession(), 'n'], ['connect your AI (sign in to a provider)', () => setupDialog()], ['approval inbox', openInbox, 'a'],
+    ['new session', () => openNewSession(), 'n'], ['connect your AI (sign in to a provider)', () => setupDialog()], ['connect GitHub (commit identity)', () => setupDialog()], ['approval inbox', openInbox, 'a'],
     ['split: add a pane', () => { if (state.view !== 'chat') setView('chat'); splitAdd(null); }, '⌘\\'], ['pop out / restore pane', () => toggleZoom(), '⌘⇧↩'], ['full screen', toggleFullscreen, '⌃⌘F'],
     ['stats view', () => setView('stats'), 'alt+4'], ['toggle broadcast (send to all panes)', toggleBroadcast], ['cycle waiting sessions', cycleWaiting, 'w'],
     ['wall view', () => setView('wall'), 'alt+1'], ['chat view', () => setView('chat'), 'alt+2'], ['terminal view', () => setView('terminal'), 'alt+3'],
@@ -1382,7 +1382,22 @@ function openPalette() {
 function fuzzy(text, q) { let i = 0; for (const ch of q) { i = text.indexOf(ch, i); if (i < 0) return false; i++; } return true; }
 
 // first-run setup: connect an AI provider (API key, or Claude Code for a Claude plan)
-async function refreshProviders() { try { state.providers = (await request('providers')).providers; } catch {} return state.providers || []; }
+async function refreshProviders() { try { const r = await request('providers'); state.providers = r.providers; state.github = r.github || state.github; } catch {} return state.providers || []; }
+async function refreshGithub(refresh) { try { state.github = (await request('github', { refresh: !!refresh })).github; } catch {} return state.github || {}; }
+function githubHtml() {
+  const g = state.github || {};
+  if (!g.connected) return `<div class="status"><span>GitHub: <b class="warn">not connected</b></span>${g.gh_installed ? '' : '<span class="dim">(the GitHub CLI will be installed)</span>'}</div>
+    <div class="help plain">Commits kcoder makes are authored as <b>your</b> GitHub account, never as kcoder or an AI, so every commit shows your avatar. Until GitHub is connected, commits are blocked.</div>
+    <div class="row"><button class="primary" data-gh="login">Connect GitHub</button><button data-gh="check">Check again</button></div>`;
+  return `<div class="status"><span>GitHub: <b class="ok">@${esc(g.login)}</b>${g.name ? ' <span class="dim">' + esc(g.name) + '</span>' : ''}</span><span>Push: ${g.push_ready ? '<b class="ok">uses this account</b>' : '<b class="warn">git credential helper not set</b>'}</span></div>
+    <div class="help plain">Commits are authored as <code>${esc(g.commit_as || '')}</code>. Switching accounts in gh changes this for the next commit.</div>
+    <div class="row wrap">
+      <label class="check"><input type="radio" name="gh-email" value="noreply" ${g.commit_email !== 'public' ? 'checked' : ''}> noreply address (links to your profile, hides your email)</label>
+      <label class="check"><input type="radio" name="gh-email" value="public" ${g.commit_email === 'public' ? 'checked' : ''} ${g.public_email ? '' : 'disabled'}> public email${g.public_email ? ' (' + esc(g.public_email) + ')' : ' (none set on GitHub)'}</label>
+    </div>
+    <label>ai trailer on commits (empty = none, the default)<input id="gh-trailer" value="${esc(g.ai_trailer || '')}" placeholder="e.g. Co-Authored-By: Claude <noreply@anthropic.com>"></label>
+    <div class="row"><button data-gh="trailer">Save trailer</button><button data-gh="switch">Switch account</button><button data-gh="check">Check again</button></div>`;
+}
 async function setupDialog(pid) {
   let provs = await refreshProviders();
   if (!provs.length) return;
@@ -1391,6 +1406,8 @@ async function setupDialog(pid) {
     <div class="help plain">kcoder runs on a model you already have access to. Pick where your model lives and sign in once.</div>
     <label>provider<select id="su-prov">${provs.map((p) => `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${esc(p.label)}${p.configured ? ' ✓' : ''}</option>`).join('')}</select></label>
     <div id="su-panel"></div>
+    <div class="label-h">github</div>
+    <div id="su-github" class="setup">${githubHtml()}</div>
   </div><div class="foot"><span class="help plain" id="su-status"></span><span class="spacer" style="flex:1"></span><button data-x="close">close</button></div>`, 'setup');
   const sel = $('#su-prov', d), panel = $('#su-panel', d), status = $('#su-status', d);
   const render = () => {
@@ -1408,8 +1425,21 @@ async function setupDialog(pid) {
   render();
   sel.addEventListener('change', render);
   d.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'su-key') { e.preventDefault(); $('[data-su="connect"]', d).click(); } });
+  d.addEventListener('change', async (e) => { const r = e.target.closest('input[name="gh-email"]'); if (r) { try { await request('config', { commit_email: r.value }); await refreshGithub(false); $('#su-github', d).innerHTML = githubHtml(); toast('commits use the ' + r.value + ' email', 'ok'); } catch (err) { status.textContent = err.message; } } });
   d.addEventListener('click', async (e) => {
     if (e.target.closest('[data-x]')) { closeDialog(); return; }
+    const gb = e.target.closest('[data-gh]');
+    if (gb) {
+      status.textContent = '';
+      try {
+        switch (gb.dataset.gh) {
+          case 'login': case 'switch': { const r = await request('connect', { provider: 'github', action: gb.dataset.gh }); status.textContent = r.message; return; }
+          case 'check': { status.textContent = 'checking…'; const r = await request('connect', { provider: 'github' }); state.github = r.github || state.github; $('#su-github', d).innerHTML = githubHtml(); status.textContent = r.message; return; }
+          case 'trailer': { await request('config', { ai_trailer: $('#gh-trailer', d).value }); await refreshGithub(false); $('#su-github', d).innerHTML = githubHtml(); toast('commit trailer saved', 'ok'); return; }
+        }
+      } catch (err) { status.textContent = err.message; }
+      return;
+    }
     const b = e.target.closest('[data-su]'); if (!b) return;
     const id = sel.value; status.textContent = '';
     try {
@@ -1436,7 +1466,9 @@ function tokenGate(msg) {
 // ----------------------------------------------------------------------
 function toast(text, kind = '') {
   const el = document.createElement('div'); el.className = 'toast ' + kind; el.textContent = text;
-  $('#toasts').appendChild(el); el.onclick = () => el.remove(); setTimeout(() => el.remove(), 5000);
+  const blocked = /GitHub is (not )?connected|Connect GitHub/i.test(text) && /block/i.test(text);
+  if (blocked) { el.classList.add('warn'); const b = document.createElement('button'); b.textContent = 'Connect GitHub'; b.className = 'primary'; b.style.marginLeft = '8px'; b.onclick = (e) => { e.stopPropagation(); el.remove(); setupDialog(); }; el.appendChild(b); }
+  $('#toasts').appendChild(el); el.onclick = () => el.remove(); setTimeout(() => el.remove(), blocked ? 12000 : 5000);
 }
 let audioCtx = null;
 function ping(kind) {

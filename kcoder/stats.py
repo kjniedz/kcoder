@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 
-from . import paths, repos
+from . import identity, paths, repos
 
 log = logging.getLogger("kcoder.stats")
 
@@ -217,14 +217,14 @@ def _main_root(cwd: str) -> str | None:
 
 
 def _parse_log(text: str) -> list:
-    """Parse `git log --format=%H%x1f%ct%x1f%an%x1f%s --numstat` output."""
+    """Parse `git log --format=%H%x1f%ct%x1f%an%x1f%ae%x1f%s --numstat` output."""
     commits, cur = [], None
     for line in text.splitlines():
         if "\x1f" in line:
             if cur:
                 commits.append(cur)
-            sha, ct, author, subject = (line.split("\x1f") + ["", "", "", ""])[:4]
-            cur = {"sha": sha, "ts": float(ct or 0), "author": author, "subject": subject[:200],
+            sha, ct, author, email, subject = (line.split("\x1f") + ["", "", "", "", ""])[:5]
+            cur = {"sha": sha, "ts": float(ct or 0), "author": author, "author_email": email, "subject": subject[:200],
                    "insertions": 0, "deletions": 0, "files": 0}
         elif cur and line.strip():
             m = re.match(r"^(\d+|-)\t(\d+|-)\t", line)
@@ -256,6 +256,7 @@ def _row_for(c: dict, sid: str, root: str, branch: str | None, meta: dict | None
         "ts": c["ts"], "date": local_date(c["ts"]), "sha": c["sha"], "sid": sid,
         "session": (meta or {}).get("name"), "repo": root, "project": os.path.basename(root),
         "github": repos.github_spec(root), "branch": branch, "subject": c["subject"], "author": c["author"],
+        "author_email": c.get("author_email") or "", "login": (identity.account() or {}).get("login"),
         "insertions": c["insertions"], "deletions": c["deletions"], "files": c["files"],
     }
 
@@ -270,7 +271,7 @@ def record_new_commits(sid: str, cwd: str, since_head: str | None, meta: dict | 
     if not root:
         return []
     rng = f"{since_head}..HEAD" if since_head else "-n 20"
-    out = _git(cwd, "log", f"--format=%H%x1f%ct%x1f%an%x1f%s", "--numstat", *rng.split())
+    out = _git(cwd, "log", f"--format=%H%x1f%ct%x1f%an%x1f%ae%x1f%s", "--numstat", *rng.split())
     if not out:
         return []
     branch = (_git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "").strip() or None
@@ -302,7 +303,7 @@ def backfill_commits() -> int:
     added = []
     for root, sessions in by_root.items():
         earliest = min(float(m.get("created") or time.time()) for _, m in sessions)
-        out = _git(root, "log", "--all", f"--since={int(earliest) - 60}", f"--format=%H%x1f%ct%x1f%an%x1f%s",
+        out = _git(root, "log", "--all", f"--since={int(earliest) - 60}", f"--format=%H%x1f%ct%x1f%an%x1f%ae%x1f%s",
                    "--numstat", "-n", "2000", timeout=120)
         if not out:
             continue
@@ -329,7 +330,9 @@ def backfill_commits() -> int:
             if owner is None:
                 continue
             known.add(c["sha"])
-            added.append(_row_for(c, owner[0], root, None, owner[1]))
+            row = _row_for(c, owner[0], root, None, owner[1])
+            row["login"] = None            # backfilled: ownership comes from the author email alone
+            added.append(row)
     if added:
         added.sort(key=lambda r: r["ts"])
         _append_jsonl(COMMITS_LOG_PATH, added)
@@ -351,8 +354,17 @@ def pushed_shas(root: str, max_age: float = 20.0) -> set:
     return shas
 
 
+def my_commit_rows() -> list:
+    """Commits that belong to the signed-in GitHub account (each person's
+    numbers are their own). Signed out: nothing."""
+    acct = identity.account()
+    if not acct:
+        return []
+    return [r for r in commit_rows() if identity.matches(r.get("author_email"), r.get("login"), acct)]
+
+
 def commits_with_state(limit: int | None = None, since_date: str | None = None) -> list:
-    rows = [r for r in commit_rows() if not since_date or r.get("date", "") >= since_date]
+    rows = [r for r in my_commit_rows() if not since_date or r.get("date", "") >= since_date]
     rows.sort(key=lambda r: -float(r.get("ts") or 0))
     if limit:
         rows = rows[:limit]
@@ -395,7 +407,7 @@ def header_stats() -> dict:
             tokens[d] += int(r.get("input") or 0) + int(r.get("output") or 0)
     t = today()
     return {
-        "commits_today": sum(1 for r in commit_rows() if r.get("date") == t),
+        "commits_today": sum(1 for r in my_commit_rows() if r.get("date") == t),
         "week_tokens": [tokens[d] for d in reversed(week)],
         "week_dates": list(reversed(week)),
     }

@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 
-from . import config
+from . import config, identity
 
 SEARCH_ROOTS = ["~", "~/Desktop", "~/Documents", "~/projects", "~/Projects", "~/code", "~/src",
                 "~/dev", "~/repos", "~/work", "~/github", "~/kcoder-projects"]
@@ -185,12 +185,17 @@ def init_repo(path: str) -> None:
             raise RuntimeError((r.stderr or r.stdout).strip()[-400:] or "git init failed")
     if _git(path, "rev-parse", "--verify", "HEAD").returncode == 0:
         return
+    try:
+        identity.require()
+    except identity.IdentityError as exc:
+        raise RuntimeError(str(exc))
     gi = os.path.join(path, ".gitignore")
     if not os.path.exists(gi):
         with open(gi, "w", encoding="utf-8") as f:
             f.write(DEFAULT_GITIGNORE)
     _git(path, "add", "-A")
-    r = _git(path, "commit", "-q", "-m", "Initial commit", timeout=120)
+    r = subprocess.run(["git", "-C", path, "commit", "-q", "-m", identity.with_trailer("Initial commit")],
+                       capture_output=True, text=True, timeout=120, env=identity.git_env())
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip()[-400:] or "initial commit failed (empty folder?)")
 
@@ -201,6 +206,11 @@ def publish(path: str, private: bool = True) -> str:
     path = os.path.abspath(os.path.expanduser(path))
     if not shutil.which("gh"):
         raise RuntimeError("the gh CLI is not installed")
+    try:
+        identity.require()
+    except identity.IdentityError as exc:
+        raise RuntimeError(str(exc))
+    identity.ensure_credential_helper()
     init_repo(path)
     remote = _remote(path)
     if remote:
@@ -214,7 +224,7 @@ def publish(path: str, private: bool = True) -> str:
         name = base if attempt == 0 else f"{base}-{attempt + 1}"
         cmd = ["gh", "repo", "create", name, "--private" if private else "--public",
                "--source", path, "--remote", "origin", "--push"]
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=identity.git_env())
         if out.returncode == 0:
             break
         last = (out.stderr or out.stdout).strip()[-600:]

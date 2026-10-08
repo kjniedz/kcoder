@@ -177,15 +177,18 @@ MAX_OUTPUT = 200_000
 
 
 def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
-             on_output=None, proc_slot=None) -> str:
+             on_output=None, proc_slot=None, env: dict | None = None) -> str:
     """Run a shell command, streaming combined output through `on_output`
     (if given) while it runs. `proc_slot` (any object) gets a `.proc`
     attribute so the caller can kill a runaway command."""
     import time
 
     try:
+        if env is None:
+            from . import identity
+            env = identity.git_env()
         proc = subprocess.Popen(
-            command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL,
+            command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
         )
     except OSError as exc:

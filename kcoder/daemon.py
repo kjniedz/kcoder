@@ -46,7 +46,7 @@ from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, chatlog, config, paths, pricing, projects, repos, setup, stats
+from . import __version__, auth, chatlog, config, identity, paths, pricing, projects, repos, setup, stats
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
@@ -254,6 +254,11 @@ class Manager:
     def start_backfill(self) -> None:
         """Fill usage/commit history from session logs so stats never start at zero."""
         def run():
+            try:
+                if identity.account():
+                    identity.ensure_credential_helper()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("git credential setup failed: %s", exc)
             try:
                 stats.backfill_all()
             except Exception as exc:  # noqa: BLE001
@@ -815,6 +820,12 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if "auto_publish" in req:
             manager.cfg["auto_publish"] = bool(req["auto_publish"])
             config.save({"auto_publish": bool(req["auto_publish"])})
+        if req.get("commit_email") in ("noreply", "public"):
+            manager.cfg["commit_email"] = req["commit_email"]
+            config.save({"commit_email": req["commit_email"]})
+        if "ai_trailer" in req:
+            manager.cfg["ai_trailer"] = str(req["ai_trailer"] or "").strip()[:200]
+            config.save({"ai_trailer": manager.cfg["ai_trailer"]})
         return {"config": {k: v for k, v in manager.cfg.items() if k != "pricing"}, "stats": manager.stats()}
 
     if t == "projects":
@@ -835,7 +846,12 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {"path": path, "spec": spec}
 
     if t == "providers":
-        return {"providers": await asyncio.get_running_loop().run_in_executor(None, setup.providers_info)}
+        loop = asyncio.get_running_loop()
+        return {"providers": await loop.run_in_executor(None, setup.providers_info),
+                "github": await loop.run_in_executor(None, setup.github_status)}
+
+    if t == "github":
+        return {"github": await asyncio.get_running_loop().run_in_executor(None, setup.github_status, bool(req.get("refresh")))}
 
     if t == "connect":
         # first-run sign-in from the app: API key providers are validated and
@@ -844,6 +860,19 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         action = str(req.get("action") or "")
         loop = asyncio.get_running_loop()
         try:
+            if pid == "github":
+                if action in ("login", "switch"):
+                    cmd = setup.gh_login_command() if action == "login" else setup.gh_switch_command()
+                    if await loop.run_in_executor(None, setup.open_terminal, cmd):
+                        msg = "A Terminal window opened and your browser will follow. Sign in there, then click Check again."
+                    else:
+                        msg = f"Could not open a terminal. Run this yourself: {cmd}"
+                    return {"message": msg}
+                st = await loop.run_in_executor(None, setup.github_status, True)
+                if st["connected"]:
+                    await loop.run_in_executor(None, identity.ensure_credential_helper)
+                    st = await loop.run_in_executor(None, setup.github_status, False)
+                return {"message": f"GitHub connected as @{st['login']}" if st["connected"] else "GitHub is not connected yet", "github": st}
             if pid == "claude" and action in ("install", "login"):
                 cmd = setup.claude_install_command() if action == "install" else setup.claude_login_command()
                 if await loop.run_in_executor(None, setup.open_terminal, cmd):
