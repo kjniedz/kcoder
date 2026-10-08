@@ -45,6 +45,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 from . import __version__, auth, chatlog, config, paths, pricing, projects, repos
+from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
 
@@ -712,10 +713,6 @@ class Manager:
 # ----------------------------------------------------------------------
 # request handling
 # ----------------------------------------------------------------------
-
-class RequestError(Exception):
-    pass
-
 
 def _save_images(session: Session, images: list) -> list:
     """Accept image paths (local clients) or {name, data_url} uploads (browser)."""

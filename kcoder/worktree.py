@@ -144,7 +144,7 @@ def open_pr(info: dict, title: str | None = None, body: str | None = None) -> di
 
 
 def handle_request(manager, session, t: str, req: dict) -> dict:
-    from .daemon import RequestError
+    from .errors import RequestError
 
     info = session.meta.get("worktree")
     cwd = session.engine.cwd

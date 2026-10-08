@@ -127,7 +127,7 @@ class Shell:
 
 
 def handle_request(manager, session, t: str, req: dict) -> dict:
-    from .daemon import RequestError
+    from .errors import RequestError
 
     if t == "shell_open":
         cols, rows = int(req.get("cols") or 100), int(req.get("rows") or 30)
