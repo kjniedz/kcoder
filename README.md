@@ -146,10 +146,14 @@ the best window it can:
    chromeless window with its own profile (`kcoder app --chrome` forces this);
 3. otherwise your default browser (`kcoder app --browser` forces this).
 
-On macOS, `kcoder app --install` writes `~/Applications/kcoder.app` with the
-kcoder icon, so it shows up in Spotlight and Launchpad and can be dragged to
-the Dock. Launching it does exactly what `kcoder app` does. Re-run the install
-after moving the Python install; `kcoder app --uninstall` removes it.
+On macOS, `kcoder app` always goes through `~/Applications/kcoder.app`
+(installed or refreshed automatically; `kcoder app --install` does it by
+hand). The bundle carries its own copy of the Python interpreter, so the
+window belongs to kcoder.app rather than to Python: the Dock shows the kcoder
+icon and name, right-click → Options → **Keep in Dock** pins it, and
+Spotlight and Launchpad find it. Launching it from the Dock does exactly what
+`kcoder app` does: it starts `kcoderd` if needed and opens the window.
+`kcoder app --uninstall` removes it.
 
 `kcoder daemon install` registers `kcoderd` as a login item (launchd), so the
 daemon is already up when you open the app and comes back after a crash.

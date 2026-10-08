@@ -1079,8 +1079,8 @@ def cmd_app(args) -> int:
             console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
             return 1
         console.print(f"[green]✓[/green] installed {escape(path)}", highlight=False)
-        console.print("[dim]Open it from Spotlight or Launchpad (search: kcoder), or drag it to the Dock. "
-                      "It starts kcoderd if needed and opens the app window.[/dim]")
+        console.print("[dim]Open it from Spotlight or Launchpad (search: kcoder), or `kcoder app`. "
+                      "Right-click its Dock icon → Options → Keep in Dock to pin it.[/dim]")
         if not appmod.agent_installed():
             console.print("[dim]Tip: `kcoder daemon install` keeps kcoderd running from login so the app opens instantly.[/dim]")
         return 0
