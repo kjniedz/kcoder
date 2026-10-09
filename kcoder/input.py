@@ -48,12 +48,12 @@ SLASH_COMMANDS = [
 
 STYLE = Style.from_dict({
     "prompt": "bold ansigreen",
-    "chip": "bold #87CEFA reverse",
+    "chip": "bold #7FC5FF reverse",
     "rprompt": "italic #888888",
     "completion-menu": "bg:#1c2230 #d0d8e8",
-    "completion-menu.completion.current": "bg:#87CEFA #0b0f14 bold",
+    "completion-menu.completion.current": "bg:#7FC5FF #0b0f14 bold",
     "completion-menu.meta.completion": "bg:#1c2230 #7f8ca0",
-    "completion-menu.meta.completion.current": "bg:#87CEFA #0b0f14",
+    "completion-menu.meta.completion.current": "bg:#7FC5FF #0b0f14",
 })
 
 

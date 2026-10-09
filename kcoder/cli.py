@@ -161,6 +161,35 @@ def pick_model_interactively(provider, current: str) -> str:
     return provider.models[choice]
 
 
+def pick_provider_model(current_pid: str, current_model: str):
+    """One list of every provider and its models. Returns (provider_id, model) or None."""
+    from . import routing
+    rows, labels = [], []
+    for p in PROVIDERS.values():
+        ready = auth.has_credentials(p.id)
+        models = (["auto"] if routing.has_tiers(p) else []) + list(p.models)
+        if not ready:
+            rows.append((p.id, p.default_model))
+            labels.append(f"[dim]{escape(p.label)} · not set up (choose to connect)[/dim]")
+            continue
+        for m in models:
+            cur = p.id == current_pid and m == current_model
+            rows.append((p.id, m))
+            labels.append(f"[dim]{escape(p.label)} ·[/dim] {escape(m)}" + (f"  [dim {ACCENT}](current)[/]" if cur else ""))
+        rows.append((p.id, None))
+        labels.append(f"[dim]{escape(p.label)} · type another model name…[/dim]")
+    start = next((i for i, r in enumerate(rows) if r == (current_pid, current_model)), 0)
+    choice = ui.select(console, "Model (all providers)", labels, index=start)
+    if choice is None:
+        return None
+    pid, model = rows[choice]
+    if model is None:
+        model = console.input("[bold]model name:[/bold] ").strip()
+        if not model:
+            return None
+    return pid, model
+
+
 # ----------------------------------------------------------------------
 # input handling
 # ----------------------------------------------------------------------
@@ -776,12 +805,26 @@ def _handle_command(client, meta, renderer, command, arg) -> bool:
         print_session_panel(meta)
         return True
     if command == "/model":
-        provider = PROVIDERS[meta["provider"]]
-        model = arg or pick_model_interactively(provider, meta["model"])
-        reply = client.request("set", sid=sid, model=model)
+        # `/model fable`, `/model anthropic/claude-opus-4-8`, or a picker of every provider + model
+        if arg:
+            pid, _, model = arg.partition("/") if "/" in arg and arg.split("/", 1)[0] in PROVIDERS else (meta["provider"], "", arg)
+            model = model or arg
+        else:
+            picked = pick_provider_model(meta["provider"], meta["model"])
+            if picked is None:
+                return True
+            pid, model = picked
+        if pid != meta["provider"]:
+            if not ensure_credentials(pid):
+                return True
+            reply = client.request("set", sid=sid, provider=pid, model=model)
+            if reply["changed"].get("cleared"):
+                console.print("[dim]conversation cleared (history formats differ between providers)[/dim]")
+        else:
+            reply = client.request("set", sid=sid, model=model)
         meta.update(reply["session"])
         console.print(
-            f"[bold {ACCENT}]✓[/bold {ACCENT}] [dim]model →[/dim] [bold]{escape(meta['model'])}[/bold]",
+            f"[bold {ACCENT}]✓[/bold {ACCENT}] [dim]model →[/dim] [bold]{escape(meta['provider'])}/{escape(meta['model'])}[/bold]",
             highlight=False,
         )
         return True

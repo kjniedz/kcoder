@@ -11,7 +11,7 @@ from rich.console import Group
 from rich.live import Live
 from rich.text import Text
 
-ACCENT = "#87CEFA"  # light sky blue - kcoder's accent color
+ACCENT = "#7FC5FF"  # light sky blue - kcoder's accent color
 
 
 @contextmanager

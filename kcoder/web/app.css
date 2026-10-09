@@ -550,3 +550,10 @@ table.grid .warn, .card .warn { color: var(--yellow); }
 .keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px 22px; }
 .keys h3 { margin: 0 0 6px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; }
 .keys .help-grid { grid-template-columns: max-content 1fr; }
+
+/* ---- /model picker ---- */
+.palette .group-h { padding: 6px 12px 2px; font-size: 10.5px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; border-top: 1px solid var(--line); }
+.palette .group-h:first-child { border-top: none; }
+.palette .item.off span:first-child { color: var(--fg-mute); }
+.keys-q { flex: 0 1 260px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; padding: 3px 8px; font-size: 12px; color: var(--fg); text-transform: none; letter-spacing: 0; }
+.keys-q:focus { outline: none; border-color: var(--focus); }
