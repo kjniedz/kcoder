@@ -175,8 +175,15 @@ def pick_provider_model(current_pid: str, current_model: str):
         for m in models:
             cur = p.id == current_pid and m == current_model
             rows.append((p.id, m))
-            credits = p.id == "claude" and "fable" in m
-            labels.append(f"[dim]{escape(p.label)} ·[/dim] {escape(m)}" + ("  [yellow](bills extra credits)[/yellow]" if credits else "")
+            note = ""
+            if p.kind == "claude":
+                from .providers import model_family, plan_block_for
+                blocked = plan_block_for(m) if m != "auto" else None
+                if blocked:
+                    note = f"  [yellow](limit reached, back {escape(_when_short(blocked.get('until')))})[/yellow]"
+                elif model_family(m) == "fable":
+                    note = "  [dim](weekly Fable limit; stops there, no credits)[/dim]"
+            labels.append(f"[dim]{escape(p.label)} ·[/dim] {escape(m)}" + note
                           + (f"  [dim {ACCENT}](current)[/]" if cur else ""))
         rows.append((p.id, None))
         labels.append(f"[dim]{escape(p.label)} · type another model name…[/dim]")
@@ -1151,6 +1158,49 @@ def cmd_app(args) -> int:
     return 0
 
 
+def _when_short(ts) -> str:
+    import datetime
+    return datetime.datetime.fromtimestamp(float(ts)).strftime("%a %-I:%M %p") if ts else "later"
+
+
+def _print_plan(st: dict) -> None:
+    if st["on_plan"]:
+        console.print(f"[green]✓[/green] Claude Code is on your Claude plan" + (f" ({escape(st['email'])})" if st.get("email") else ""), highlight=False)
+    else:
+        console.print(f"[yellow]{escape(st['problem'] or 'not connected')}[/yellow]", highlight=False)
+    for lim in st.get("limits") or []:
+        who = "all Claude models" if lim["scope"] == "all" else lim["scope"].capitalize()
+        console.print(f"[yellow]limit reached[/yellow] {who}: {escape(lim.get('label') or 'plan limit')}, back {_when_short(lim.get('until'))}", highlight=False)
+    console.print("[dim]kcoder never uses an API key or extra usage credits for Claude: at a limit the turn stops.[/dim]")
+
+
+def cmd_login(args) -> int:
+    """Connect (or reconnect) Claude Code to your Claude subscription."""
+    from . import providers, setup
+    import subprocess
+    path = providers.claude_path()
+    if not path:
+        console.print("Claude Code is not installed. Install it with: [bold]curl -fsSL https://claude.ai/install.sh | bash[/bold], then run [bold]kcoder login[/bold].")
+        return 1
+    console.print("Signing in with your Claude account (subscription, not an API key). A browser window will open.")
+    env = providers._claude_env()
+    code = subprocess.call([path, "auth", "login", "--claudeai"], env=env)
+    providers.forget_claude_auth()
+    st = setup.claude_status()
+    _print_plan(st)
+    return 0 if code == 0 and st["on_plan"] else 1
+
+
+def cmd_plan(args) -> int:
+    """Show which Claude login kcoder runs on and any limits it is waiting out."""
+    from . import providers, setup
+    if args.clear:
+        providers.clear_plan_limits()
+        console.print("[green]✓[/green] cleared; the next turn checks the limit again (and stops before spending if it is still used up)")
+    _print_plan(setup.claude_status())
+    return 0
+
+
 def cmd_update(args) -> int:
     from . import updater
     running = already_running()
@@ -1473,7 +1523,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
 # entry point
 # ----------------------------------------------------------------------
 
-SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall"}
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall", "login", "plan"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1537,6 +1587,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--chrome", action="store_true", help="use a Chromium-family browser in app mode instead of the native window")
     p.add_argument("--foreground", action="store_true", help="keep the native window attached to this terminal (for debugging)")
     p.set_defaults(func=cmd_app)
+
+    p = sub.add_parser("login", help="connect or reconnect your Claude plan (subscription sign-in, never an API key)")
+    p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("plan", help="show the Claude login kcoder uses and any plan limits it is waiting out")
+    p.add_argument("--clear", action="store_true", help="forget recorded limits (after you reset one on claude.ai)")
+    p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("update", help="check your kcoder checkout for new commits, or pull them")
     p.add_argument("--now", action="store_true", help="pull, rebuild and restart kcoderd")

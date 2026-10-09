@@ -8,7 +8,6 @@ app where they can see it and follow along."""
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import shutil
@@ -16,24 +15,19 @@ import subprocess
 import sys
 
 from . import auth, identity
+from . import providers as _prov
 from .providers import PROVIDERS, claude_path, make_backend
 
 CLAUDE_INSTALL_URL = "https://claude.ai/install.sh"
 
 
 def claude_status() -> dict:
-    """Is the Claude Code CLI installed, and is it signed in?"""
-    path = claude_path()
-    info = {"installed": path is not None, "logged_in": False, "email": None, "path": path}
-    if not path:
-        return info
-    try:
-        out = subprocess.run([path, "auth", "status", "--json"], capture_output=True, text=True, timeout=20)
-        data = json.loads(out.stdout or "{}")
-        info["logged_in"] = bool(data.get("loggedIn"))
-        info["email"] = data.get("email")
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
-        pass
+    """Is Claude Code installed, signed in, and signed in with a Claude plan
+    (not an API key)? Plus any plan limits kcoder is waiting out."""
+    info = _prov.claude_auth(refresh=True)
+    info["path"] = claude_path()
+    info["problem"] = _prov.not_on_plan_reason(info)
+    info["limits"] = [{"scope": k, **v} for k, v in _prov.plan_limits().items()]
     return info
 
 
@@ -48,8 +42,9 @@ def providers_info() -> list:
                "auto": routing.has_tiers(p), "tiers": routing.tiers_for(p)}
         if p.kind == "claude":
             st = claude_status()
-            row.update(installed=st["installed"], logged_in=st["logged_in"], email=st["email"])
-            row["configured"] = st["installed"] and st["logged_in"]
+            row.update(installed=st["installed"], logged_in=st["logged_in"], email=st["email"], on_plan=st["on_plan"],
+                       method=st["method"], problem=st["problem"], limits=st["limits"])
+            row["configured"] = st["on_plan"]
         rows.append(row)
     return rows
 
@@ -86,6 +81,8 @@ def use_claude() -> str:
         raise ValueError("Claude Code is not installed yet")
     if not st["logged_in"]:
         raise ValueError("Claude Code is installed but not signed in yet")
+    if not st["on_plan"]:
+        raise ValueError(st["problem"] + " Click Reconnect and sign in with your Claude account.")
     cfg = auth.load_config()
     if not cfg.get("default_provider"):
         auth.set_default_provider("claude")
@@ -130,7 +127,7 @@ def claude_install_command() -> str:
     claude = os.path.expanduser("~/.local/bin/claude")
     return (f"clear; echo 'Installing Claude Code...'; curl -fsSL {CLAUDE_INSTALL_URL} | bash && "
             f"echo && echo 'Claude Code is installed. Signing you in: a browser window will open.' && "
-            f"{shlex.quote(claude)} auth login; echo; echo 'Done. Go back to the kcoder app and click Check again.'")
+            f"{shlex.quote(claude)} auth login --claudeai; echo; echo 'Done. You can close this window; kcoder picks it up by itself.'")
 
 
 def github_status(refresh: bool = False) -> dict:
@@ -163,6 +160,8 @@ def gh_switch_command() -> str:
 
 
 def claude_login_command() -> str:
+    """Sign in (or back in) with the Claude subscription, never an API key."""
     path = claude_path() or "claude"
-    return (f"clear; echo 'Signing in to Claude: a browser window will open.'; {shlex.quote(path)} auth login; "
-            f"echo; echo 'Done. Go back to the kcoder app and click Check again.'")
+    return (f"clear; echo 'Connecting your Claude plan: a browser window will open. Sign in with your Claude account.'; "
+            f"env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN {shlex.quote(path)} auth login --claudeai; "
+            f"echo; echo 'Done. You can close this window; kcoder picks it up by itself.'")

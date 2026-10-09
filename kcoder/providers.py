@@ -44,6 +44,23 @@ class ProviderOutage(Exception):
     configured provider."""
 
 
+class PlanLimitReached(Exception):
+    """A Claude plan limit is used up, or the next request would be billed as
+    extra usage credits. kcoder stops here: no retry, no fallback, no credits."""
+
+    def __init__(self, message: str, *, resets_at: float | None = None, scope: str = "all", limit: str | None = None):
+        super().__init__(message)
+        self.resets_at = resets_at
+        self.scope = scope
+        self.limit = limit
+
+
+class NotOnPlan(Exception):
+    """Claude Code is not signed in with a Claude subscription (no login, or an
+    API key / Console / cloud account that bills per token). The fix is to
+    reconnect the Claude account; kcoder never runs Claude Code that way."""
+
+
 _OUTAGE_TEXT = ("rate limit", "rate_limit", "usage limit", "session limit", "weekly limit", "credit balance", "overloaded",
                 "capacity", "too many requests", "quota")
 
@@ -69,7 +86,7 @@ PROVIDERS = {
         key_url="https://claude.com/product/claude-code",
         base_url=None,
         # Claude Code aliases resolve to the plan's current models. Fable is listed last:
-        # on Kyle's Max plan Fable turns are billed as overage credits, so it is never a default.
+        # Fable draws on its own weekly allowance, so it is never a default; at any limit kcoder stops (no credits).
         models=["opus", "sonnet", "haiku", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5", "fable", "claude-fable-5-1"],
         default_model="opus",
     ),
@@ -428,13 +445,149 @@ def _spawn_claude(args: list, cwd: str, attempts: int = 4):
     )
 
 
+# Claude Code bills whatever credential it finds first. Any of these in its
+# environment would move a turn off the Claude plan onto per-token billing.
+_PAID_AUTH_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL",
+                  "ANTHROPIC_VERTEX_PROJECT_ID", "AWS_BEARER_TOKEN_BEDROCK")
+
+
 def _claude_env() -> dict:
     from . import identity
     env = identity.git_env()          # commits inside Claude Code are signed as the user's GitHub account
     for k in list(env):
         if k.startswith("CLAUDE_CODE") or k in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"):
-            env.pop(k, None)   # nested Claude Code sessions refuse to start
+            env.pop(k, None)   # nested Claude Code sessions refuse to start (also drops CLAUDE_CODE_USE_BEDROCK/VERTEX)
+        elif k in _PAID_AUTH_ENV:
+            env.pop(k, None)   # plan only: never hand Claude Code an API key
     return env
+
+
+# ----------------------------------------------------------------------
+# plan only: which login Claude Code uses, and the limits it reports
+# ----------------------------------------------------------------------
+
+# `claude auth status` authMethod values that are a Claude subscription login
+PLAN_AUTH_METHODS = ("claude.ai", "oauth_token")
+_auth_cache: dict = {}
+AUTH_CACHE_SECONDS = 60
+
+
+def claude_auth(refresh: bool = False) -> dict:
+    """{installed, logged_in, method, on_plan, email, error} for the login Claude Code would use in a kcoder turn."""
+    now = time.time()
+    if not refresh and _auth_cache.get("at", 0) > now - AUTH_CACHE_SECONDS:
+        return dict(_auth_cache["info"])
+    path = claude_path()
+    info = {"installed": path is not None, "logged_in": False, "method": None, "on_plan": False, "email": None, "error": None}
+    if path:
+        try:
+            out = subprocess.run([path, "auth", "status", "--json"], capture_output=True, text=True, timeout=20, env=_claude_env())
+            data = json.loads(out.stdout or "{}")
+            info["logged_in"] = bool(data.get("loggedIn"))
+            info["method"] = data.get("authMethod")
+            info["email"] = data.get("email")
+            info["on_plan"] = info["logged_in"] and info["method"] in PLAN_AUTH_METHODS and data.get("apiProvider", "firstParty") == "firstParty"
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as exc:
+            info["error"] = str(exc)[:200]
+    _auth_cache.update(at=now, info=info)
+    return dict(info)
+
+
+def forget_claude_auth() -> None:
+    _auth_cache.clear()
+
+
+def not_on_plan_reason(info: dict) -> str | None:
+    if not info["installed"]:
+        return "Claude Code is not installed."
+    if not info["logged_in"]:
+        return "Claude Code is not signed in to your Claude account."
+    if not info["on_plan"]:
+        how = {"api_key": "an API key", "api_key_helper": "an API key helper", "third_party": "a cloud provider account"}.get(info["method"], info["method"] or "an unknown login")
+        return f"Claude Code is signed in with {how}, which bills per token, not your Claude plan."
+    return None
+
+
+# rateLimitType (from Claude Code's rate_limit_event) -> which models it stops
+_LIMIT_SCOPE = {"five_hour": "all", "seven_day": "all", "seven_day_opus": "opus", "seven_day_sonnet": "sonnet",
+                "seven_day_overage_included": "fable", "overage": "fable"}
+_LIMIT_LABEL = {"five_hour": "5-hour limit", "seven_day": "weekly limit", "seven_day_opus": "weekly Opus limit",
+                "seven_day_sonnet": "weekly Sonnet limit", "seven_day_overage_included": "weekly Fable limit",
+                "overage": "extra usage"}
+_SCOPE_LABEL = {"all": "Claude", "opus": "Opus", "sonnet": "Sonnet", "fable": "Fable"}
+
+
+def model_family(model: str | None) -> str:
+    m = (model or "").lower()
+    for fam in ("fable", "opus", "sonnet", "haiku"):
+        if fam in m:
+            return fam
+    return "opus" if not m or m in ("default", "opusplan") else "other"
+
+
+def _load_limits() -> dict:
+    from . import paths
+    try:
+        with open(paths.PLAN_LIMITS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_limits(data: dict) -> None:
+    from . import paths
+    paths.ensure_data_dir()
+    tmp = paths.PLAN_LIMITS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, paths.PLAN_LIMITS_PATH)
+
+
+def plan_limits() -> dict:
+    """{scope: {until, limit, label, reason}} for limits that have not reset yet."""
+    now = time.time()
+    data = _load_limits()
+    live = {k: v for k, v in data.items() if float(v.get("until") or 0) > now}
+    if live != data:
+        _save_limits(live)
+    return live
+
+
+def clear_plan_limits() -> None:
+    _save_limits({})
+
+
+def _block(scope: str, until: float, limit: str | None, reason: str) -> None:
+    data = plan_limits()
+    data[scope] = {"until": until, "limit": limit, "label": _LIMIT_LABEL.get(limit or "", "plan limit"), "reason": reason[:300]}
+    _save_limits(data)
+
+
+def plan_block_for(model: str | None) -> dict | None:
+    lim = plan_limits()
+    return lim.get("all") or lim.get(model_family(model))
+
+
+def _when(ts: float | None) -> str:
+    if not ts:
+        return "when it resets"
+    import datetime
+    d = datetime.datetime.fromtimestamp(ts)
+    today = datetime.date.today()
+    day = "today" if d.date() == today else ("tomorrow" if (d.date() - today).days == 1 else d.strftime("%a %b %-d"))
+    return f"{day} at {d.strftime('%-I:%M %p').lower()}"
+
+
+def plan_limit_message(scope: str, limit: str | None, resets_at: float | None, *, credits: bool) -> str:
+    what = _LIMIT_LABEL.get(limit or "", "Claude plan limit")
+    who = _SCOPE_LABEL.get(scope, "Claude")
+    head = (f"Your {what} is used up and {who} switched to extra usage credits, so kcoder stopped the turn at once. "
+            if credits else f"Your {what} is reached, so kcoder stopped instead of spending credits. ")
+    tail = f"{who} is available again {_when(resets_at)}."
+    if scope != "all":
+        tail += " Other models on your plan still work: switch with /model."
+    return head + tail
 
 
 def _claude_settings() -> str | None:
@@ -479,6 +632,15 @@ class ClaudeCodeBackend:
 
     def run_turn(self, messages: list, model: str, system: str, hooks) -> None:
         from .engine import Interrupted
+
+        blocked = plan_block_for(model)
+        if blocked:
+            scope = "all" if plan_limits().get("all") else model_family(model)
+            raise PlanLimitReached(plan_limit_message(scope, blocked.get("limit"), blocked.get("until"), credits=False),
+                                   resets_at=blocked.get("until"), scope=scope, limit=blocked.get("limit"))
+        reason = not_on_plan_reason(claude_auth(refresh=True))   # ~0.2s; a stale "on plan" must never let a turn through
+        if reason:
+            raise NotOnPlan(reason)
 
         last = messages[-1]
         prompt = _prompt_text(last)
@@ -552,6 +714,27 @@ class ClaudeCodeBackend:
                 t = d.get("type")
                 if t == "system" and d.get("subtype") == "init":
                     self.session_id = d.get("session_id") or self.session_id
+                    src = d.get("apiKeySource")
+                    if src not in (None, "none", "oauth"):
+                        _kill(proc)
+                        forget_claude_auth()
+                        raise NotOnPlan(f"Claude Code picked up a per-token credential ({src}) instead of your Claude plan.")
+                elif t == "rate_limit_event":
+                    info = d.get("rate_limit_info") or {}
+                    limit = info.get("rateLimitType")
+                    resets = info.get("resetsAt")
+                    resets = float(resets) / (1000.0 if resets and float(resets) > 1e11 else 1.0) if resets else None
+                    credits = bool(info.get("isUsingOverage"))
+                    if credits or info.get("status") == "rejected":
+                        _kill(proc)
+                        scope = _LIMIT_SCOPE.get(limit or "", "all")
+                        msg = plan_limit_message(scope, limit, resets, credits=credits)
+                        _block(scope, resets or time.time() + 3600, limit, msg)
+                        raise PlanLimitReached(msg, resets_at=resets, scope=scope, limit=limit)
+                    if info.get("status") == "allowed_warning" and not getattr(self, "_warned", None) == limit:
+                        self._warned = limit
+                        hooks.notice(f"Close to your {_LIMIT_LABEL.get(limit or '', 'plan limit')} (resets {_when(resets)}). "
+                                     "kcoder stops at the limit instead of using credits.")
                 elif t == "stream_event":
                     ev = d.get("event") or {}
                     et = ev.get("type")
@@ -611,6 +794,12 @@ class ClaudeCodeBackend:
                                 cache_read=cr, cache_write=cw, cost=float(d.get("total_cost_usd") or 0.0))
                     if d.get("is_error") or d.get("subtype") not in (None, "success"):
                         text_ = f"{d.get('subtype') or ''} {str(d.get('result') or '')}"
+                        low = text_.lower()
+                        if any(k in low for k in ("usage limit", "hit your limit", "session limit", "weekly limit",
+                                                  "credit balance", "out of usage", "extra usage", "out of credits")):
+                            _kill(proc)
+                            raise PlanLimitReached("Claude Code: " + text_.strip()[:300] +
+                                                   ". kcoder stopped instead of spending credits.", scope="all")
                         if any(k in text_.lower() for k in _OUTAGE_TEXT):
                             _kill(proc)
                             raise ProviderOutage(f"Claude Code: {text_.strip()[:200]}")
@@ -626,7 +815,8 @@ class ClaudeCodeBackend:
         if not got_result:
             err = (proc.stderr.read() or "").strip()
             if "not logged in" in err.lower() or "login" in err.lower():
-                raise RuntimeError("Claude Code is not logged in - run `claude` once in a terminal and sign in.")
+                forget_claude_auth()
+                raise NotOnPlan("Claude Code is not signed in to your Claude account.")
             raise RuntimeError(f"claude exited with {code}: {err[-600:] or 'no output'}")
 
 

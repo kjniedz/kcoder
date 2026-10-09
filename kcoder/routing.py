@@ -8,8 +8,7 @@ task turns routing off for it.
 
 Fallback candidates are chosen by the daemon (see Manager.fallbacks): the
 next configured provider, never from a subscription (Claude Code, kind
-"claude") to a pay-per-token API key unless config `fallback.to_api` is on,
-and never to a paid provider once the daily spend cap is reached.
+"claude") to a pay-per-token API key, and never to a paid provider once the daily spend cap is reached.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ import re
 AUTO = "auto"
 
 TIERS = {
-    "claude": {"small": "sonnet", "large": "opus"},   # stays on the plan (Fable bills credits)
+    "claude": {"small": "sonnet", "large": "opus"},   # stays on the plan (Fable has its own weekly limit)
     "anthropic": {"small": "claude-haiku-4-5-20251001", "large": "claude-opus-4-8"},
 }
 

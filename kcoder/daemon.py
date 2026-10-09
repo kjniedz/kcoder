@@ -435,7 +435,7 @@ class Manager:
         """[(provider, backend, model)] to try after the session's provider
         fails: configured providers in config `fallback.order` (or registry
         order). Never from a subscription (Claude Code) to a pay-per-token key
-        unless `fallback.to_api`; never to a paid provider under the daily cap."""
+        (plan only, no setting); never to a paid provider under the daily cap."""
         session = self.sessions.get(sid)
         fb = self.cfg.get("fallback") or {}
         if session is None or not fb.get("enabled", True):
@@ -449,7 +449,7 @@ class Manager:
             if p is None or pid == primary.id:
                 continue
             paid = p.kind != "claude"
-            if primary.kind == "claude" and paid and not fb.get("to_api"):
+            if primary.kind == "claude" and paid:
                 continue
             if paid and capped:
                 continue
@@ -1248,10 +1248,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             r = dict(manager.cfg.get("routing") or {}); r["enabled"] = bool(req["routing_enabled"])
             manager.cfg["routing"] = r
             config.save({"routing": r})
-        if "fallback_to_api" in req or "fallback_enabled" in req:
+        if "fallback_enabled" in req:
             fb = dict(manager.cfg.get("fallback") or {})
-            if "fallback_to_api" in req:
-                fb["to_api"] = bool(req["fallback_to_api"])
+            fb.pop("to_api", None)
             if "fallback_enabled" in req:
                 fb["enabled"] = bool(req["fallback_enabled"])
             manager.cfg["fallback"] = fb
@@ -1313,6 +1312,8 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
                     st = await loop.run_in_executor(None, setup.github_status, False)
                 return {"message": f"GitHub connected as @{st['login']}" if st["connected"] else "GitHub is not connected yet", "github": st}
             if pid == "claude" and action in ("install", "login"):
+                from .providers import forget_claude_auth
+                forget_claude_auth()
                 cmd = setup.claude_install_command() if action == "install" else setup.claude_login_command()
                 if await loop.run_in_executor(None, setup.open_terminal, cmd):
                     msg = "A Terminal window opened. Follow the steps there, then click Check again."
@@ -1329,6 +1330,13 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         except ValueError as exc:
             raise RequestError(str(exc))
         return {"message": msg, "providers": await loop.run_in_executor(None, setup.providers_info)}
+
+    if t == "claude_plan":
+        # the Claude account kcoder runs on: status, and clearing limits the user reset themselves
+        from .providers import clear_plan_limits
+        if req.get("action") == "clear_limits":
+            clear_plan_limits()
+        return {"claude": await asyncio.get_running_loop().run_in_executor(None, setup.claude_status)}
 
     if t == "stats_full":
         return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") or 30))
@@ -1422,7 +1430,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
                     await asyncio.get_running_loop().run_in_executor(None, repos.init_repo, root)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("not initialising a repo in %s: %s", root, exc)
-            if manager.cfg.get("auto_publish", True) and shutil.which("gh") and projects.git_toplevel(root) and not repos.github_spec(root):
+            if manager.cfg.get("auto_publish", False) and shutil.which("gh") and projects.git_toplevel(root) and not repos.github_spec(root):
                 publish_root = root
         try:
             session = manager.create(

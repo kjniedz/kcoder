@@ -244,6 +244,7 @@ function statusChanged(s, prev) {
 }
 
 function onEvent(sid, ev) {
+  if (ev.t === 'error' && ev.fix) { refreshClaude().then(() => { if (ev.fix === 'claude-login' && !state.dialog) claudeDialog(); }); }
   let store = state.events.get(sid);
   if (!store) { store = { list: [], live: '', streaming: false, loaded: false, partial: true }; state.events.set(sid, store); }
   if (ev.t === 'text') { store.live += ev.delta; store.streaming = true; queueRender(sid); return; }
@@ -406,7 +407,7 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'usage':
         if (!opts.compact) out.push(`<div class="note usage">✓ ${e.elapsed != null ? e.elapsed.toFixed ? e.elapsed.toFixed(1) + 's · ' : e.elapsed + 's · ' : ''}${fmtInt(e.input)} in → ${fmtInt(e.output)} out tokens${e.plan ? ' · on your plan' : e.cost ? ' · ' + fmtUsd(e.cost) : ''}</div>`);
         break;
-      case 'error': out.push(`<div class="note err">${esc(e.text)}</div>`); break;
+      case 'error': out.push(`<div class="note err">${esc(e.text)}${e.fix === 'claude-login' ? ' <button class="primary" data-fix="claude">Reconnect Claude</button>' : e.fix === 'plan-limit' ? ' <button data-fix="claude">Claude plan</button>' : ''}</div>`); break;
       case 'notice': out.push(`<div class="note warn">${esc(e.text)}</div>`); break;
       case 'retry': out.push(`<div class="note warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</div>`); break;
       case 'info': out.push(`<div class="note">${esc(e.text)}</div>`); break;
@@ -490,7 +491,7 @@ function renderHeader() {
     `<button class="stat${st.waiting ? ' warn' : ''}" data-metric="sessions" title="open stats"><b>${st.waiting || 0}</b><span>waiting on you</span></button>`,
     `<button class="stat" data-metric="tokens" title="open stats"><b>${fmtTokens(tokens)}</b><span>tokens today</span></button>`,
     `<button class="stat" data-metric="commits" title="open stats"><b>${st.commits_today || 0}</b><span>commits today</span></button>`,
-    `<button class="stat" data-metric="tokens" title="tokens, last 7 days"><b>${spark}</b><span>7 days</span></button>`,
+    `<button class="stat spark" data-metric="tokens" title="tokens, last 7 days"><b>${spark}</b><span>7 days</span></button>`,
   ].join('');
   $('#btn-broadcast').classList.toggle('active', !!state.broadcast);
   const up = st.update || {};
@@ -638,7 +639,7 @@ function fillModelSelect(sel, s) {
   const models = prov ? prov.models.slice() : [];
   if (prov && prov.auto && !models.includes('auto')) models.unshift('auto');
   if (s.model && !models.includes(s.model)) models.unshift(s.model);
-  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : billsCredits(s.provider, m) ? esc(m) + ' (credits)' : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
+  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : claudeModelNote(s.provider, m) ? esc(m) + ' (' + claudeModelNote(s.provider, m) + ')' : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
   sel.value = s.model;
 }
 
@@ -1405,7 +1406,7 @@ async function openNewSession(pre = {}) {
     const q = cwdIn.value.trim().toLowerCase();
     const local = repos.local.filter((r) => !q || fuzzy((r.name + ' ' + r.path).toLowerCase(), q)).slice(0, 12);
     const gh = repos.github.filter((r) => !local.some((l) => l.path === r.path) && (!q || fuzzy(r.spec.toLowerCase(), q))).slice(0, 12);
-    const pub = !(state.config && state.config.auto_publish === false);
+    const pub = !!(state.config && state.config.auto_publish === true);
     const items = local.map((r) => ({ v: r.path, label: r.name, meta: shortHome(r.path) + (!r.remote && pub ? ' · will publish to GitHub' : '') })).concat(gh.map((r) => ({ v: r.path || r.spec, label: r.spec, meta: r.path ? 'github · cloned' : 'github · clone' })));
     repoMenu.hidden = items.length === 0;
     repoMenu.innerHTML = items.map((it) => `<div class="item" data-v="${esc(it.v)}"><span>${esc(it.label)}</span><span class="meta">${esc(it.meta)}</span></div>`).join('');
@@ -1437,13 +1438,12 @@ function paletteItems() {
 ['toggle broadcast (send to all panes)', toggleBroadcast], 
     ['toggle sound', toggleSound], ['enable browser notifications', () => Notification.requestPermission().then((p) => toast('notifications: ' + p))],
     ['set default trust for new sessions', async () => { const v = await chooseDialog('Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']]); if (v) { const r = await request('config', { default_trust: v }); state.config = r.config; toast('default trust: ' + v, 'ok'); } }],
-    ['toggle auto-publish of local folders to GitHub', async () => { const on = !(state.config && state.config.auto_publish !== false); const r = await request('config', { auto_publish: on }); state.config = r.config; toast('auto-publish to GitHub: ' + (on ? 'on' : 'off'), 'ok'); }],
+    ['toggle auto-publish of local folders to GitHub', async () => { const on = !(state.config && state.config.auto_publish === true); const r = await request('config', { auto_publish: on }); state.config = r.config; toast('auto-publish to GitHub: ' + (on ? 'on' : 'off'), 'ok'); }],
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
     ['theme: dark / light / system', async () => { const v = await chooseDialog('Theme', [['dark', 'dark (default)'], ['light', 'light'], ['system', 'follow the system setting']]); if (v) { setTheme(v); toast('theme: ' + v, 'ok'); } }],
     ['phone approvals (pair, revoke, enable)', remoteDialog],
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
-    ['toggle fallback from your Claude plan to a paid API key', async () => { const on = !!(state.config && state.config.fallback && state.config.fallback.to_api); const r = await request('config', { fallback_to_api: !on }); state.config = r.config; toast('fallback to paid API keys: ' + (!on ? 'ON' : 'off'), !on ? 'warn' : 'ok'); }],
     ['set review policy (when the changes view must approve)', async () => { const v = await chooseDialog('Review required before…', [['push', 'push - PRs, pushes and merges need an approved review (default)'], ['commit', 'commit - every commit needs an approved review'], ['none', 'none - review is optional']]); if (v) { const r = await request('config', { review_required: v }); state.config = r.config; toast('review required before: ' + v, 'ok'); } }],
     ['check for new commits', checkUpdates], ['pull + rebuild + restart kcoderd', updateNow], ['restart kcoderd', restartDaemon],
     ['uninstall kcoder…', uninstallDialog],
@@ -1478,7 +1478,54 @@ function openPalette() {
 function fuzzy(text, q) { let i = 0; for (const ch of q) { i = text.indexOf(ch, i); if (i < 0) return false; i++; } return true; }
 
 // first-run setup: connect an AI provider (API key, or Claude Code for a Claude plan)
-async function refreshProviders() { try { const r = await request('providers'); state.providers = r.providers; state.github = r.github || state.github; } catch {} return state.providers || []; }
+async function refreshProviders() { try { const r = await request('providers'); state.providers = r.providers; state.github = r.github || state.github; const c = (r.providers || []).find((p) => p.kind === 'claude'); if (c) { state.claude = { installed: c.installed, logged_in: c.logged_in, email: c.email, on_plan: c.on_plan, method: c.method, problem: c.problem, limits: c.limits || [] }; renderClaudeButton(); } } catch {} return state.providers || []; }
+async function refreshClaude(clear) { try { state.claude = (await request('claude_plan', clear ? { action: 'clear_limits' } : {})).claude; } catch {} renderClaudeButton(); return state.claude || {}; }
+function claudeLimitText(l) { const when = l.until ? new Date(l.until * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'later'; return `${l.scope === 'all' ? 'all Claude models' : l.scope[0].toUpperCase() + l.scope.slice(1)}: ${l.label || 'plan limit'} · back ${when}`; }
+function renderClaudeButton() {
+  const b = $('#btn-claude'); const c = state.claude; if (!b) return;
+  if (!c || !c.installed && !c.logged_in && c.on_plan === undefined) { b.textContent = 'Claude'; b.className = ''; return; }
+  const lim = c.limits || [];
+  b.className = !c.on_plan ? 'warn' : lim.length ? 'warn' : '';
+  b.textContent = !c.on_plan ? 'connect Claude' : lim.length ? `plan limit${lim.some((l) => l.scope === 'all') ? '' : ' · ' + lim.map((l) => l.scope).join(', ')}` : 'plan ✓';
+  b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.`;
+}
+async function claudeDialog() {
+  const d = openDialog(`<h2>your Claude plan<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body setup"><div id="cl-body" class="help plain">checking…</div></div>
+    <div class="foot"><span class="help plain" id="cl-status"></span><span class="spacer" style="flex:1"></span><button data-cl="check">Check again</button><button class="primary" data-cl="login">Reconnect Claude</button></div>`, 'claude');
+  const body = $('#cl-body', d), status = $('#cl-status', d);
+  const render = (c) => {
+    const lim = c.limits || [];
+    body.innerHTML = `<div class="status"><span>Claude Code: ${c.installed ? '<b class="ok">installed</b>' : '<b class="warn">not installed</b>'}</span>
+      <span>Account: ${c.on_plan ? `<b class="ok">your Claude plan${c.email ? ' (' + esc(c.email) + ')' : ''}</b>` : `<b class="warn">${esc(c.problem || 'not connected')}</b>`}</span></div>
+      <div class="help plain">kcoder only runs Claude on your subscription. It never uses an API key or extra usage credits: when a limit is reached the turn stops and kcoder waits for the reset.</div>
+      ${lim.length ? `<div class="label-h">limits reached</div>${lim.map((l) => `<div class="row"><span>${esc(claudeLimitText(l))}</span></div>`).join('')}
+        <div class="row"><button data-cl="clear">Clear: I reset my limit</button><span class="help plain">Only if you reset it on claude.ai. If it is still used up, the next turn stops again before spending anything.</span></div>` : ''}`;
+    $('[data-cl="login"]', d).textContent = !c.installed ? 'Install Claude Code' : c.on_plan ? 'Reconnect Claude' : 'Connect my Claude plan';
+  };
+  render(await refreshClaude());
+  let poll = null;
+  const stopPoll = () => { if (poll) { clearInterval(poll); poll = null; } };
+  d.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-x]')) { stopPoll(); closeDialog(); return; }
+    const b = e.target.closest('[data-cl]'); if (!b) return;
+    status.textContent = '';
+    try {
+      if (b.dataset.cl === 'check') { status.textContent = 'checking…'; render(await refreshClaude()); status.textContent = ''; }
+      else if (b.dataset.cl === 'clear') { render(await refreshClaude(true)); toast('limit cleared; the next turn checks it again', 'ok'); }
+      else if (b.dataset.cl === 'login') {
+        const c = state.claude || {};
+        const r = await request('connect', { provider: 'claude', action: c.installed ? 'login' : 'install' });
+        status.textContent = r.message + ' Waiting for you to sign in…';
+        const was = c.email; let n = 0; stopPoll();
+        poll = setInterval(async () => {
+          if (state.dialog !== 'claude' || ++n > 90) { stopPoll(); return; }
+          const now = await refreshClaude();
+          if (now.on_plan && (n > 3 || now.email !== was || !c.on_plan)) { stopPoll(); render(now); status.textContent = ''; toast(`Claude plan connected${now.email ? ' as ' + now.email : ''}`, 'ok'); }
+        }, 2000);
+      }
+    } catch (err) { status.textContent = err.message; }
+  });
+}
 async function refreshGithub(refresh) { try { state.github = (await request('github', { refresh: !!refresh })).github; } catch {} return state.github || {}; }
 function githubHtml() {
   const g = state.github || {};
@@ -1509,9 +1556,9 @@ async function setupDialog(pid) {
   const render = () => {
     const p = provs.find((x) => x.id === sel.value) || {};
     if (p.kind === 'claude') {
-      panel.innerHTML = `<div class="status"><span>Claude Code: ${p.installed ? '<b class="ok">installed</b>' : '<b class="warn">not installed</b>'}</span><span>Account: ${p.logged_in ? `<b class="ok">signed in${p.email ? ' as ' + esc(p.email) : ''}</b>` : '<b class="warn">not signed in</b>'}</span></div>
+      panel.innerHTML = `<div class="status"><span>Claude Code: ${p.installed ? '<b class="ok">installed</b>' : '<b class="warn">not installed</b>'}</span><span>Account: ${p.on_plan ? `<b class="ok">your Claude plan${p.email ? ' (' + esc(p.email) + ')' : ''}</b>` : p.logged_in ? `<b class="warn">${esc(p.problem || 'not on your Claude plan')}</b>` : '<b class="warn">not signed in</b>'}</span></div>
         <div class="help plain">Uses your Claude subscription from claude.ai. No API key and no per-token billing.${p.installed ? '' : ' Installing opens a Terminal window; follow the steps there, then come back and click Check again.'}</div>
-        <div class="row">${!p.installed ? '<button class="primary" data-su="install">Install Claude Code and sign in</button>' : !p.logged_in ? '<button class="primary" data-su="login">Sign in to Claude</button>' : '<button class="primary" data-su="use-claude">Use my Claude plan</button>'}<button data-su="check">Check again</button></div>`;
+        <div class="row">${!p.installed ? '<button class="primary" data-su="install">Install Claude Code and sign in</button>' : !p.on_plan ? '<button class="primary" data-su="login">Connect my Claude plan</button>' : '<button class="primary" data-su="use-claude">Use my Claude plan</button><button data-su="login">Reconnect</button>'}<button data-su="check">Check again</button></div>`;
     } else {
       panel.innerHTML = `<div class="help plain">${p.configured ? 'Already connected. Paste a new key to replace it.' : 'Paste an API key from your account.'}${p.key_url ? ` <a href="${esc(p.key_url)}" target="_blank" rel="noopener">Get a ${esc(p.label)} key ↗</a>` : ''}</div>
         <label>api key<input id="su-key" type="password" placeholder="paste your key" autocomplete="off"></label>
@@ -1703,7 +1750,12 @@ async function renderTasksView(force) {
 
 // ---- /model: every provider and its models in one list ----
 // on Kyle's Max plan Fable turns are billed as overage credits, not plan usage
-const billsCredits = (pid, m) => pid === 'claude' && /fable/i.test(m || '');
+const claudeModelNote = (pid, m) => {
+  if (pid !== 'claude' || !m || m === 'auto') return '';
+  const fam = /fable/i.test(m) ? 'fable' : /sonnet/i.test(m) ? 'sonnet' : /haiku/i.test(m) ? 'haiku' : 'opus';
+  if (((state.claude || {}).limits || []).some((l) => l.scope === 'all' || l.scope === fam)) return 'limit reached';
+  return fam === 'fable' ? 'weekly Fable limit' : '';
+};
 async function switchModel(sid, pid, model) {
   const s = state.sessions.get(sid) || {};
   if (pid === s.provider) { await request('set', { sid, model }); toast(`model → ${model}`, 'ok'); return; }
@@ -1720,7 +1772,7 @@ async function modelPicker(sid) {
   for (const p of state.providers || []) {
     const models = (p.auto ? ['auto'] : []).concat(p.models || []);
     if (!p.configured) { rows.push({ pid: p.id, model: p.default_model, label: p.label, meta: 'not set up · connect', off: true }); continue; }
-    for (const m of models) rows.push({ pid: p.id, model: m, label: p.label, meta: m === 'auto' ? `auto (${(p.tiers || {}).small || ''} / ${(p.tiers || {}).large || ''})` : billsCredits(p.id, m) ? `${m} · bills extra credits` : m, cur: p.id === s.provider && m === s.model });
+    for (const m of models) rows.push({ pid: p.id, model: m, label: p.label, meta: m === 'auto' ? `auto (${(p.tiers || {}).small || ''} / ${(p.tiers || {}).large || ''})` : claudeModelNote(p.id, m) ? `${m} · ${claudeModelNote(p.id, m)}` : m, cur: p.id === s.provider && m === s.model });
   }
   let sel = Math.max(0, rows.findIndex((r) => r.cur)), shown = rows;
   const d = openDialog(`<div class="palette"><input id="mp-in" placeholder="model or provider… (provider/model to type any model)"><div class="list" id="mp-list"></div></div>`, 'palette');
@@ -2024,6 +2076,9 @@ $('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
 $('#btn-palette').addEventListener('click', openPalette);
 $('#btn-sound').addEventListener('click', toggleSound);
+$('#btn-claude').addEventListener('click', () => claudeDialog());
+document.addEventListener('click', (e) => { if (e.target.closest('[data-fix="claude"]')) claudeDialog(); });
+setInterval(() => { if (state.connected) refreshClaude(); }, 5 * 60 * 1000);
 $('#btn-broadcast').addEventListener('click', toggleBroadcast);
 $('#stats').addEventListener('click', (e) => { const b = e.target.closest('[data-metric]'); if (b) openStats(b.dataset.metric); });
 if (window.addEventListener) window.addEventListener('pywebviewready', () => document.body.classList.add('native'));

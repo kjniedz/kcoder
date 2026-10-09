@@ -44,7 +44,7 @@ import anthropic
 import openai
 
 from . import projects, routing
-from .providers import ProviderOutage
+from .providers import NotOnPlan, PlanLimitReached, ProviderOutage
 from .tools import DANGEROUS_TOOLS, READ_ONLY_TOOLS, describe_tool_call, execute_tool
 
 # after a fallback, keep using the fallback provider this long before trying the primary again
@@ -414,6 +414,17 @@ class Engine:
             result = "error"
             del self.messages[turn_start:]
             self.emit("error", text=f"Model not found: {self.model} (try /model, or /provider)")
+        except PlanLimitReached as exc:
+            # plan only: stop here, never retry or fall back onto credits / an API key
+            result = "error"
+            del self.messages[min(turn_start, len(self.messages)):]
+            self.emit("error", text=str(exc), fix="plan-limit", resets_at=exc.resets_at, scope=exc.scope)
+        except NotOnPlan as exc:
+            result = "error"
+            del self.messages[min(turn_start, len(self.messages)):]
+            self.emit("error", text=f"{exc} kcoder only runs Claude on your Claude plan, so nothing ran and nothing was billed. "
+                                    "Reconnect your Claude account (`kcoder login`, or the Claude button in the app) and send again.",
+                      fix="claude-login")
         except (anthropic.RateLimitError, openai.RateLimitError, ProviderOutage) as exc:
             result = "error"
             del self.messages[min(turn_start, len(self.messages)):]

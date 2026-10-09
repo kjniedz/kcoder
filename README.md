@@ -143,6 +143,20 @@ Read/Write/Edit/Bash, with your trust level mapped onto its permission
 modes). The "cost" shown for these sessions is what the calls would have
 cost on the API, for reference.
 
+**Plan only, never credits:** Claude sessions only ever run on your Claude
+subscription. Before every turn kcoder checks that Claude Code is signed in
+with your Claude account (not an API key, Console key or cloud account), and
+it strips `ANTHROPIC_API_KEY` and similar variables from Claude Code's
+environment. When Claude Code reports that a limit is reached, or that a
+turn has switched to extra usage credits, kcoder stops the turn at once,
+records the limit until it resets (only that model's limit, so Opus keeps
+working when the weekly Fable limit is used up) and never retries, falls
+back to an API key or spends credits. The header shows `plan ✓`,
+`plan limit` or `connect Claude`; click it to see the account and limits,
+reconnect with one click, or clear a limit you reset yourself. In a
+terminal: `kcoder login` (connect or reconnect) and `kcoder plan`
+(`--clear` after a reset).
+
 **Using API keys instead:** sign in from the app (command palette, "connect
 your AI"), or run `kcoder --provider anthropic` (or any other provider) once
 in a terminal. The terminal flow shows a provider picker and walks you
@@ -281,8 +295,8 @@ clone is reused and fast-forwarded from its remote before the session starts
 (skipped, with a note in the session log, if the tree is dirty or offline).
 Every session in a git repo also has a `⇣ pull` button (and a "pull from
 remote" palette entry) for a fast-forward pull while it is idle. Local
-folders with no remote get a private GitHub repo created and pushed when
-`auto_publish` is on.
+folders with no remote get a private GitHub repo created and pushed only if
+you turn `auto_publish` on (it is off by default; ⌘K → toggle auto-publish).
 
 The first `kcoder` command starts `kcoderd` in the background automatically.
 Leaving a session with `/exit` or Ctrl+D **detaches** - the session keeps
@@ -551,9 +565,8 @@ tasks tab); nothing is pushed on its own.
 - **Fallback**: on a rate limit or outage (after the usual retries) the turn
   moves to the next configured provider and the pane header shows
   `⇄ provider/model · since`. kcoder never falls back from your Claude
-  subscription to a pay-per-token API key unless you turn that on (⌘K →
-  toggle fallback to paid API keys, `fallback.to_api`), never to a paid
-  provider once the daily cap is reached, and goes back to the primary
+  subscription to a pay-per-token API key (there is no setting for it),
+  never to a paid provider once the daily cap is reached, and goes back to the primary
   provider after ten minutes. Between providers with different message
   formats the history is carried over as a flattened transcript.
 - **Live preview**: for web projects (npm `dev`/`start` scripts, Django,

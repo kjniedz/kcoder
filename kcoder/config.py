@@ -45,13 +45,13 @@ DEFAULTS = {
     "review_required": "push", # push | commit | none - when the changes view must have approved the work
     "max_concurrent": 3,       # task queue: how many sessions it keeps running at once
     "routing": {"enabled": True, "tiers": {}},   # model "auto": cheaper model for small turns, stronger for large ones
-    "fallback": {"enabled": True, "to_api": False, "order": []},  # next provider on rate limit / outage; never plan -> paid API unless to_api
+    "fallback": {"enabled": True, "order": []},  # next provider on rate limit / outage; never from the Claude plan to a paid API
     "preview_idle_minutes": 20,   # stop a session's dev server after this long idle
     "pr_screenshots": True,       # attach desktop + mobile screenshots to PRs of web projects
     "remote": {"ttl_minutes": 10},  # phone approvals (opt-in via the UI; relay + tokens live in remote.json)
     "default_trust": "auto",   # auto | write | read | none - what new sessions run without asking
     "projects_dir": "~/kcoder-projects",   # where GitHub repos are cloned
-    "auto_publish": True,      # new sessions on local folders with no GitHub remote get a private repo created + pushed
+    "auto_publish": False,     # opt in: new sessions on local folders with no GitHub remote get a private repo created + pushed
     "commit_email": "noreply",  # noreply | public - which email of the signed-in GitHub account commits use
     "ai_trailer": "",          # extra trailer for commits kcoder makes (e.g. "Co-Authored-By: ..."); empty = none
 }

@@ -86,6 +86,8 @@ a { color: var(--accent-text); }
 .stats .stat b { font-size: 14px; color: var(--fg); }
 .stats .stat span { color: var(--fg-mute); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
 .stats .stat.warn b { color: var(--waiting); }
+#btn-claude.warn { color: var(--yellow); border-color: var(--yellow); }
+@media (max-width: 1500px) { .stats { gap: 10px; } .stats .stat.spark { display: none; } }
 .stats .stat.bad b { color: var(--red); }
 .views { display: flex; gap: 2px; background: var(--bg-3); border-radius: 5px; padding: 2px; }
 .views button { border: none; background: transparent; padding: 2px 10px; color: var(--fg-dim); }
