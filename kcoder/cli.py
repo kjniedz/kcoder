@@ -1178,6 +1178,9 @@ def cmd_update(args) -> int:
     console.print(f"kcoder {__version__} · checkout {'yes' if st.get('dev') else 'no'} · upstream {st.get('upstream') or '?'}")
     if st.get("error"):
         console.print(f"[yellow]{escape(st['error'])}[/yellow]", highlight=False)
+    if st.get("failed"):
+        console.print(f"[yellow]the last attempt to apply these commits failed and was rolled back: "
+                      f"{escape(str(st['failed'].get('error') or '?').splitlines()[-1])} (log: {paths.UPDATE_LOG_PATH})[/yellow]", highlight=False)
     if st.get("available"):
         console.print(f"[green]{st['behind']} new commit(s):[/green]")
         for c in st.get("commits") or []:

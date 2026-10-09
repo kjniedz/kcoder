@@ -114,6 +114,9 @@ def status_summary() -> dict:
     s = load_state()
     here = head()
     behind = int(s.get("behind") or 0) if s.get("head") == here else 0   # stale after a manual pull
+    last = s.get("last_result") or {}
+    # the upstream commit a rolled-back apply tried, while upstream still points at it
+    failed = last if behind and not last.get("ok") and last.get("tried") and last.get("tried") == s.get("upstream_head") else None
     return {
         "running": __version__,
         "installed": installed_version(),
@@ -127,6 +130,7 @@ def status_summary() -> dict:
         "checked": s.get("checked"),
         "error": s.get("error"),
         "last_result": s.get("last_result"),
+        "failed": failed,
     }
 
 
@@ -151,7 +155,7 @@ def check() -> dict:
         commits = _out(root, "log", "--format=%h %s", "-n", "20", f"HEAD..{upstream}").splitlines() if behind else []
         dirty = bool(_out(root, "status", "--porcelain", "--untracked-files=no"))
         _update(checked=time.time(), error=None, upstream=upstream, behind=behind, ahead=ahead,
-                commits=commits, dirty=dirty, head=head(root))
+                commits=commits, dirty=dirty, head=head(root), upstream_head=_out(root, "rev-parse", upstream))
     except (UpdateError, subprocess.TimeoutExpired, ValueError) as exc:
         _update(checked=time.time(), error=str(exc)[:300])
     return status_summary()
@@ -375,6 +379,7 @@ def helper_main(argv: list) -> int:
                     os.kill(int(info["pid"]), 15)
                     _wait_for_exit(int(info["pid"]), 30)
                 new = head(root)
+                result["tried"] = new
                 _out(root, "reset", "--hard", "--quiet", old)
                 if "pyproject.toml" in _changed(root, old, new or old):
                     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "-e", root], capture_output=True, timeout=900)

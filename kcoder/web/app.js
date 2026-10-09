@@ -165,7 +165,7 @@ async function onConnected() {
   await request('attach', { sid: '*' });
   await refreshProviders();
   try { state.config = (await request('config')).config; } catch {}
-  if (!state._updOffered) { state._updOffered = true; request('update', { action: 'check' }).then((r) => { if (r.update && r.update.available) updateNow(); }).catch(() => {}); }
+  if (!state._updOffered) { state._updOffered = true; request('update', { action: 'check' }).then((r) => { if (r.update && r.update.available && !r.update.failed) updateNow(); }).catch(() => {}); }
   if (!localStorage.getItem('kcoder.layout') && !localStorage.getItem('kcoder.order')) {
     // a fresh browser profile: pick up the layout the daemon kept for us
     try { const r = await request('ui_state'); if (r.state) { if (r.state.layout) { state.layout = r.state.layout; localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); } if (Array.isArray(r.state.order)) { state.order = r.state.order; localStorage.setItem('kcoder.order', JSON.stringify(state.order)); } } } catch {}
@@ -495,7 +495,7 @@ function renderHeader() {
   $('#btn-broadcast').classList.toggle('active', !!state.broadcast);
   const up = st.update || {};
   if (st.restarting) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn"><b>restarting</b><span>kcoderd</span></div>`);
-  else if (up.available) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn" data-upd="1" title="${esc((up.commits || []).join('\n'))}"><b>${up.behind}</b><span>new commit${up.behind === 1 ? '' : 's'} · click</span></div>`);
+  else if (up.available) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn" data-upd="1" title="${esc((up.commits || []).join('\n'))}"><b>${up.behind}</b><span>new commit${up.behind === 1 ? '' : 's'}${up.failed ? ' · failed, rolled back' : ' · click'}</span></div>`);
   const n = (st.pending_approvals || []).length;
   const c = $('#inbox-count'); c.hidden = !n; c.textContent = n;
   const tk = (st.tasks || {}).counts || {}; const openTasks = (tk.queued || 0) + (tk.running || 0);
@@ -1832,7 +1832,8 @@ async function updateNow() {
   const up = (state.stats || {}).update || {};
   if (!up.available) { toast('no new commits', 'warn'); return; }
   const busy = Array.from(state.sessions.values()).filter((s) => s.status === 'working' || s.status === 'waiting');
-  const ok = await confirmDialog(`Pull ${up.behind} new commit${up.behind === 1 ? '' : 's'}, rebuild and restart kcoderd?`, (up.commits || []).slice(0, 8).join(' · ') + (busy.length ? `  ·  ${busy.length} working session(s) will be interrupted and come back paused.` : '') + '  If the new code does not start, kcoder rolls back.');
+  const failed = up.failed ? `These commits failed last time and were rolled back (${up.failed.error || 'unknown error'}). See update.log in the kcoder data folder (kcoder update shows it).  ·  ` : '';
+  const ok = await confirmDialog(`Pull ${up.behind} new commit${up.behind === 1 ? '' : 's'}, rebuild and restart kcoderd?`, failed + (up.commits || []).slice(0, 8).join(' · ') + (busy.length ? `  ·  ${busy.length} working session(s) will be interrupted and come back paused.` : '') + '  If the new code does not start, kcoder rolls back.');
   if (!ok) return;
   try { await request('update', { action: 'apply', force: true }); toast('pulling… kcoderd is restarting', 'warn'); } catch (e) { toast(e.message, 'err'); }
 }
