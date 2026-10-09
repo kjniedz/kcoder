@@ -112,7 +112,7 @@ def run_native_window(url: str) -> None:
                 info["CFBundleName"] = APP_NAME
                 info["CFBundleDisplayName"] = APP_NAME
             app = AppKit.NSApplication.sharedApplication()
-            icon = AppKit.NSImage.alloc().initWithContentsOfFile_(os.path.join(WEB_DIR, "icon-1024.png"))
+            icon = AppKit.NSImage.alloc().initWithContentsOfFile_(os.path.join(WEB_DIR, "icon-macos-1024.png"))
             if icon is not None:
                 app.setApplicationIconImage_(icon)
         except Exception:  # noqa: BLE001 - cosmetics only
@@ -121,7 +121,74 @@ def run_native_window(url: str) -> None:
     os.makedirs(storage, exist_ok=True)
     api = WindowApi()
     api.window = webview.create_window(APP_NAME, url, width=1440, height=900, min_size=(900, 600), js_api=api)
+    if sys.platform == "darwin":
+        api.status_item = install_status_item(api, url)
     webview.start(private_mode=False, storage_path=storage)
+
+
+def install_status_item(api, url: str):
+    """A monochrome "k" in the menu bar (a template image, so it follows the
+    menu bar's light/dark appearance) with a small menu. Returns the status
+    item so it is not garbage-collected, or None when AppKit is unavailable."""
+    try:
+        import AppKit  # type: ignore
+        import Foundation  # type: ignore
+        import objc  # type: ignore
+    except ImportError:
+        return None
+    try:
+        class _MenuTarget(Foundation.NSObject):
+            def initWithApi_url_(self, api_, url_):
+                self = objc.super(_MenuTarget, self).init()
+                self.api, self.url = api_, url_
+                return self
+
+            def showWindow_(self, sender):
+                try:
+                    w = self.api.window
+                    w.restore()
+                    w.show()
+                    AppKit.NSApp.activateIgnoringOtherApps_(True)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            def openBrowser_(self, sender):
+                webbrowser.open(self.url)
+
+            def newSession_(self, sender):
+                self.showWindow_(sender)
+                try:
+                    self.api.window.evaluate_js("openNewSession()")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            def quit_(self, sender):
+                AppKit.NSApp.terminate_(None)
+
+        target = _MenuTarget.alloc().initWithApi_url_(api, url)
+        bar = AppKit.NSStatusBar.systemStatusBar()
+        item = bar.statusItemWithLength_(AppKit.NSVariableStatusItemLength)
+        image = AppKit.NSImage.alloc().initWithContentsOfFile_(os.path.join(WEB_DIR, "menubar-kTemplate.png"))
+        if image is not None:
+            image.setTemplate_(True)
+            image.setSize_(Foundation.NSMakeSize(18, 18))
+            item.button().setImage_(image)
+        item.button().setToolTip_("kcoder")
+        menu = AppKit.NSMenu.alloc().initWithTitle_("kcoder")
+        for title, sel, key in (("Open kcoder", "showWindow:", "o"), ("New session", "newSession:", "n"), ("Open in browser", "openBrowser:", "b"), (None, None, None), ("Quit kcoder", "quit:", "q")):
+            if title is None:
+                menu.addItem_(AppKit.NSMenuItem.separatorItem())
+                continue
+            mi = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, sel, key)
+            mi.setTarget_(target)
+            menu.addItem_(mi)
+        item.setMenu_(menu)
+        api.status_target = target       # keep the ObjC target alive (the item only holds a weak reference)
+        return item
+    except Exception as exc:  # noqa: BLE001 - the window works without a menu bar item
+        with open(APP_LOG_PATH, "a", encoding="utf-8") as log:
+            log.write(f"menu bar item unavailable: {exc}\n")
+        return None
 
 
 class WindowApi:
@@ -228,8 +295,11 @@ def _require_mac(what: str) -> None:
 
 
 def _make_icns(dest: str) -> bool:
-    """Build an .icns from web/icon-1024.png with the system tools. False if that fails."""
-    src = os.path.join(WEB_DIR, "icon-1024.png")
+    """Build an .icns from web/icon-macos-1024.png (the logo inside the macOS
+    icon template: margins + corner radius) with the system tools."""
+    src = os.path.join(WEB_DIR, "icon-macos-1024.png")
+    if not os.path.isfile(src):
+        src = os.path.join(WEB_DIR, "icon-1024.png")
     if not (os.path.isfile(src) and shutil.which("sips") and shutil.which("iconutil")):
         return False
     with tempfile.TemporaryDirectory() as tmp:

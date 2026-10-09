@@ -1,16 +1,18 @@
 // kcoder approval relay. See README.md. One Durable Object per kcoder install
 // holds its devices, pairing codes, open requests and the daemon's event stream.
 import { b64u, sendPush } from "./push.js";
+import { ICON_32, ICON_180, ICON_192, ICON_512 } from "./icons.js";
+const png = (b64) => new Response(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
 
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extra } });
 const err = (msg, status) => json({ error: msg }, status);
 const rnd = (n) => b64u.enc(crypto.getRandomValues(new Uint8Array(n)));
 const code = () => { const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s = ""; for (const b of crypto.getRandomValues(new Uint8Array(8))) s += a[b % a.length]; return s.slice(0, 4) + "-" + s.slice(4); };
-const html = (body, title = "kcoder") => new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0f14"><title>${title}</title><link rel="manifest" href="/manifest.webmanifest"><style>
-body{margin:0;background:#0b0f14;color:#dfe6ee;font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}main{max-width:640px;margin:0 auto;padding:18px}h1{color:#87CEFA;font-size:18px;margin:0 0 12px}
-.card{background:#121923;border:1px solid #223042;border-radius:10px;padding:14px;margin:12px 0}code,pre{background:#0b0f14;border:1px solid #223042;border-radius:6px;padding:8px;display:block;white-space:pre-wrap;word-break:break-word;font-size:13px;max-height:40vh;overflow:auto}
-button{font:inherit;padding:14px 18px;border-radius:10px;border:1px solid #2a3a4f;background:#1a2432;color:#dfe6ee;width:100%;margin:6px 0;font-size:17px}button.ok{background:#1f6f45;border-color:#2f9f65}button.no{background:#7a2b2b;border-color:#a33}input{font:inherit;width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:1px solid #2a3a4f;background:#0b0f14;color:#dfe6ee}
-.dim{color:#8b9bb0;font-size:13px}.ok-t{color:#7ee787}.err{color:#ff7b72}.small{font-size:12px}
+const html = (body, title = "kcoder") => new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0C0E12"><title>${title}</title><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="kcoder"><style>
+body{margin:0;background:#0C0E12;color:#D9E2EC;font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}main{max-width:640px;margin:0 auto;padding:18px}h1{color:#7FC5FF;font-size:18px;margin:0 0 12px}
+.card{background:#151D25;border:1px solid #2E4559;border-radius:10px;padding:14px;margin:12px 0}code,pre{background:#0C0E12;border:1px solid #2E4559;border-radius:6px;padding:8px;display:block;white-space:pre-wrap;word-break:break-word;font-size:13px;max-height:40vh;overflow:auto}
+button{font:inherit;padding:14px 18px;border-radius:10px;border:1px solid #2E4559;background:#151D25;color:#D9E2EC;width:100%;margin:6px 0;font-size:17px}button.ok{background:#1f6f45;border-color:#2f9f65}button.no{background:#7a2b2b;border-color:#a33}input{font:inherit;width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:1px solid #2E4559;background:#0C0E12;color:#D9E2EC}
+.dim{color:#8597AB;font-size:13px}.ok-t{color:#7ee787}.err{color:#ff7b72}.small{font-size:12px}
 </style></head><body><main>${body}</main></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY" } });
 
 const SW = `self.addEventListener('push', (e) => { const d = e.data ? e.data.json() : {}; e.waitUntil(self.registration.showNotification(d.title || 'kcoder', { body: d.body || '', tag: d.request_id || 'kcoder', data: d, requireInteraction: true, actions: [] })); });
@@ -29,7 +31,11 @@ export default {
     const p = url.pathname;
     const seg = p.split("/").filter(Boolean);
     if (p === "/sw.js") return new Response(SW, { headers: { "Content-Type": "application/javascript", "Cache-Control": "no-store" } });
-    if (p === "/manifest.webmanifest") return json({ name: "kcoder approvals", short_name: "kcoder", start_url: "/app", display: "standalone", background_color: "#0b0f14", theme_color: "#0b0f14", icons: [] }, 200, { "Content-Type": "application/manifest+json" });
+    if (p === "/manifest.webmanifest") return json({ name: "kcoder approvals", short_name: "kcoder", start_url: "/app", display: "standalone", background_color: "#0C0E12", theme_color: "#0C0E12", icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] }, 200, { "Content-Type": "application/manifest+json" });
+    if (p === "/icon-192.png") return png(ICON_192);
+    if (p === "/icon-512.png") return png(ICON_512);
+    if (p === "/apple-touch-icon.png") return png(ICON_180);
+    if (p === "/favicon-32.png" || p === "/favicon.ico") return png(ICON_32);
     if (p === "/" || p === "/health") return json({ ok: true, service: "kcoder-relay" });
     if (p === "/vapid") return json({ public: env.VAPID_PUBLIC || null });
     if (req.method === "POST" && p === "/v1/installs") {
@@ -75,7 +81,7 @@ function appPage() {
 <script>${PAGE_JS}
 const box = document.getElementById('box');
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-async function load() { if (!dev) { box.innerHTML = '<p class="err">this phone is not paired. Scan the QR code in kcoder (⌘K → phone approvals).</p>'; return; } try { const r = await api('GET', '/v1/installs/' + dev.install + '/requests'); box.innerHTML = r.requests.length ? r.requests.map((q) => '<p><a style="color:#87CEFA" href="/r/' + dev.install + '/' + q.id + '"><b>' + esc(q.session) + '</b> · ' + esc(q.title) + '</a><br><span class="dim small">' + esc(q.command || '').slice(0, 120) + '</span></p>').join('') : '<p class="dim">nothing waiting for you.</p>'; } catch (e) { box.innerHTML = '<p class="err">' + e.message + '</p>'; } }
+async function load() { if (!dev) { box.innerHTML = '<p class="err">this phone is not paired. Scan the QR code in kcoder (⌘K → phone approvals).</p>'; return; } try { const r = await api('GET', '/v1/installs/' + dev.install + '/requests'); box.innerHTML = r.requests.length ? r.requests.map((q) => '<p><a style="color:#7FC5FF" href="/r/' + dev.install + '/' + q.id + '"><b>' + esc(q.session) + '</b> · ' + esc(q.title) + '</a><br><span class="dim small">' + esc(q.command || '').slice(0, 120) + '</span></p>').join('') : '<p class="dim">nothing waiting for you.</p>'; } catch (e) { box.innerHTML = '<p class="err">' + e.message + '</p>'; } }
 load(); setInterval(load, 5000);
 </script>`;
 }

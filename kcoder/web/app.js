@@ -66,6 +66,22 @@ if (!state.winName) { state.winName = 'w' + Math.random().toString(36).slice(2, 
 state.pins = JSON.parse(localStorage.getItem('kcoder.pins.' + state.winName) || '[]');
 function savePins() { localStorage.setItem('kcoder.pins.' + state.winName, JSON.stringify(state.pins)); }
 
+// ---- theme: dark (default), light, or follow the system ----
+function themeChoice() { return localStorage.getItem('kcoder.theme') || 'dark'; }
+function effectiveTheme() { const c = themeChoice(); return c === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : c; }
+function applyTheme() {
+  const c = themeChoice(), eff = effectiveTheme();
+  if (c === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = c;
+  $('#hljs-dark').disabled = eff === 'light'; $('#hljs-light').disabled = eff !== 'light';
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = eff === 'light' ? '#FFFFFF' : '#0C0E12';
+  for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
+}
+function setTheme(c) { localStorage.setItem('kcoder.theme', c); applyTheme(); }
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function xtermTheme() { return { background: cssVar('--code-bg'), foreground: cssVar('--fg'), cursor: cssVar('--accent'), selectionBackground: cssVar('--accent-soft') }; }
+applyTheme();
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice() === 'system') applyTheme(); });
+
 // ----------------------------------------------------------------------
 // connection
 // ----------------------------------------------------------------------
@@ -621,7 +637,7 @@ function fillModelSelect(sel, s) {
   const models = prov ? prov.models.slice() : [];
   if (prov && prov.auto && !models.includes('auto')) models.unshift('auto');
   if (s.model && !models.includes(s.model)) models.unshift(s.model);
-  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc((prov.tiers || {}).small || '')} / ${esc((prov.tiers || {}).large || '')})` : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
+  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
   sel.value = s.model;
 }
 
@@ -1238,7 +1254,7 @@ function ensureShell(sid, box) {
   if (sh && sh.box === box) return;
   if (sh) { sh.term.dispose(); state.shells.delete(sid); }
   box.innerHTML = '';
-  const term = new Terminal({ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, theme: { background: '#000000', foreground: '#d5dde8', cursor: '#87CEFA' }, cursorBlink: true, scrollback: 5000, allowProposedApi: true });
+  const term = new Terminal({ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, theme: xtermTheme(), cursorBlink: true, scrollback: 5000, allowProposedApi: true });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(box); fit.fit();
   sh = { term, fit, box, open: false };
   state.shells.set(sid, sh);
@@ -1293,15 +1309,16 @@ function chooseDialog(title, items) {
 function infoDialog(title, html) { openDialog(`<h2>${esc(title)}<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">${html}</div>`, 'info').addEventListener('click', (e) => { if (e.target.closest('[data-x]')) closeDialog(); }); }
 
 function helpDialog() {
-  const rows = [
-    ['1-9', 'jump to pane'], ['click / enter', 'focus pane'], ['drag title bar', 'reorder panes'], ['esc', 'back to grid · interrupt agent while typing'], ['w', 'cycle sessions waiting on you'],
-    ['n', 'new session'], ['a', 'approval inbox'], ['y / n', 'approve / decline (inbox or focused pane)'], ['v', 'cycle pane view: chat → terminal → shell'],
-    ['alt+1 / 2 / 3', 'wall · chat · terminal view'], ['⌘K', 'command palette'], ['p', 'pin focused session to this window'], ['?', 'this help'],
-    ['enter', 'send'], ['shift+enter', 'newline'], ['↑', 'previous prompt'], ['/', 'slash commands'], ['@', 'reference a project file'], ['paste', 'never submits; big pastes become chips'],
-    ['⌘\\', 'split: add a pane (up to 3)'], ['⌘1 / 2 / 3', 'focus pane'], ['⌘⇧W', 'close pane'], ['⌘⇧↩', 'pop out the pane / back to the grid'], ['⌃⌘F', 'full screen'],
-    ['⌘F', 'find in this session'], ['⌘⇧F', 'search across sessions'], ['⌘A', 'select the whole transcript'], ['⌘C', 'copy selection as clean text'], ['alt+4', 'stats view'],
+  const groups = [
+    ['everywhere', [['⌘/', 'this sheet'], ['?', 'this sheet (outside a text field)'], ['⌘K', 'command palette'], ['alt+1 … 5', 'wall · chat · terminal · stats · tasks'], ['n', 'new session'], ['a', 'approval inbox'], ['w', 'cycle sessions waiting on you'], ['⌃⌘F', 'full screen'], ['esc', 'close dialog · back to the grid · interrupt while typing']]],
+    ['wall', [['1 … 9', 'jump to pane'], ['click / enter', 'focus pane'], ['drag title bar', 'reorder panes'], ['v', 'cycle pane view: chat → terminal → shell → preview'], ['p', 'pin focused session to this window'], ['y / n', 'approve / decline on the focused pane']]],
+    ['chat panes', [['⌘\\', 'add a pane (up to 3)'], ['⌘1 / 2 / 3', 'focus pane'], ['⌘⇧W', 'close pane'], ['⌘⇧↩', 'pop out the pane / back to the grid'], ['⌘F', 'find in this session'], ['⌘⇧F', 'search across sessions'], ['⌘A', 'select the whole transcript'], ['⌘C', 'copy selection as clean text'], ['drag a chat', 'from the sidebar onto a pane']]],
+    ['composer', [['enter', 'send'], ['shift+enter', 'newline'], ['esc', 'interrupt the running turn'], ['↑ / ↓', 'prompt history'], ['/', 'slash commands'], ['@', 'reference a project file'], ['⌘↩', 'submit in multi-line dialogs'], ['paste', 'never submits; big pastes become chips']]],
+    ['inbox + review', [['↑ / ↓ · j / k', 'move'], ['y / n', 'approve / decline'], ['a', 'approve all'], ['↶ on a message', 'undo to here (files + conversation)'], ['changes', 'accept / reject / edit each hunk, then approve']]],
+    ['tasks + queue', [['alt+5', 'task queue + schedules'], ['drag a queued task', 'reorder'], ['+ task', 'queue a follow-up on a session']]],
   ];
-  infoDialog('keyboard', `<div class="help-grid">${rows.map(([k, v]) => `<kbd>${esc(k)}</kbd><span>${esc(v)}</span>`).join('')}</div>`);
+  const d = infoDialog('keyboard shortcuts', `<div class="keys">${groups.map(([name, rows]) => `<section><h3>${esc(name)}</h3><div class="help-grid">${rows.map(([k, v]) => `<kbd>${esc(k)}</kbd><span>${esc(v)}</span>`).join('')}</div></section>`).join('')}</div>`);
+  const dlg = $('#overlay .dialog'); if (dlg) dlg.classList.add('sheet');
 }
 
 // approval inbox
@@ -1413,6 +1430,8 @@ function paletteItems() {
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
     ['task queue + schedules', () => setView('tasks'), 'alt+5'],
+    ['theme: dark / light / system', async () => { const v = await chooseDialog('Theme', [['dark', 'dark (default)'], ['light', 'light'], ['system', 'follow the system setting']]); if (v) { setTheme(v); toast('theme: ' + v, 'ok'); } }],
+    ['keyboard shortcuts', helpDialog, '⌘/'],
     ['phone approvals (pair, revoke, enable)', remoteDialog],
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
     ['toggle fallback from your Claude plan to a paid API key', async () => { const on = !!(state.config && state.config.fallback && state.config.fallback.to_api); const r = await request('config', { fallback_to_api: !on }); state.config = r.config; toast('fallback to paid API keys: ' + (!on ? 'ON' : 'off'), !on ? 'warn' : 'ok'); }],
@@ -1845,6 +1864,7 @@ document.addEventListener('keydown', (e) => {
   if (state.dialog === 'inbox') { inboxKey(e); return; }
   if (state.dialog && e.key === 'Escape') { closeDialog(); return; }
   if (mod && key === 'k') { e.preventDefault(); state.dialog ? closeDialog() : openPalette(); return; }
+  if (mod && e.key === '/') { e.preventDefault(); state.dialog === 'info' ? closeDialog() : helpDialog(); return; }
   if (e.altKey && ['1', '2', '3', '4', '5'].includes(e.key)) { e.preventDefault(); setView(['wall', 'chat', 'terminal', 'stats', 'tasks'][Number(e.key) - 1]); return; }
   if (e.metaKey && e.ctrlKey && key === 'f') { e.preventDefault(); toggleFullscreen(); return; }
   if (mod && !state.dialog) {

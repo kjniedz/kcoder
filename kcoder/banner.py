@@ -21,9 +21,9 @@ from rich.text import Text
 
 from . import config
 
-# Gradient stops, left to right: kcoder light blue -> periwinkle -> deep violet.
-GRADIENT = [(0x87, 0xCE, 0xFA), (0x7C, 0x6C, 0xFF), (0x4C, 0x1D, 0x95)]
-ACCENT = "#87CEFA"
+# Gradient stops, left to right: the kcoder accent fading into the logo's edge colour.
+GRADIENT = [(0x7F, 0xC5, 0xFF), (0x5F, 0xA9, 0xE6), (0x2E, 0x45, 0x59)]
+ACCENT = "#7FC5FF"
 
 COMPACT_WIDTH = 80          # below this, use the one-line wordmark
 ANIMATION_FRAMES = 12

@@ -273,7 +273,7 @@ class TurnRenderer:
     # -- live stream ---------------------------------------------------
 
     def _start_stream(self) -> None:
-        console.print("[bold magenta]kcoder>[/bold magenta]")
+        console.print("[bold #7FC5FF]kcoder>[/bold magenta]")
         self.text = ""
         self.stats = _StreamStats()
         self.spinner = Spinner("dots", text=self.stats, style=ACCENT)
@@ -375,7 +375,7 @@ class TurnRenderer:
                 imgs = "".join(f" [{ACCENT}]🖼 {escape(i)}[/{ACCENT}]" for i in ev.get("images", []))
                 console.print(f"[bold green]you>[/bold green] {escape(ev['text'])}{imgs}", highlight=False)
             elif t == "assistant_end":
-                console.print("[bold magenta]kcoder>[/bold magenta]")
+                console.print("[bold #7FC5FF]kcoder>[/bold magenta]")
                 if ev.get("text"):
                     console.print(Markdown(ev["text"]))
             elif t == "usage":
