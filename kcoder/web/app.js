@@ -165,6 +165,7 @@ async function onConnected() {
   await request('attach', { sid: '*' });
   await refreshProviders();
   try { state.config = (await request('config')).config; } catch {}
+  if (!state._updOffered) { state._updOffered = true; request('update', { action: 'check' }).then((r) => { if (r.update && r.update.available) updateNow(); }).catch(() => {}); }
   if (!localStorage.getItem('kcoder.layout') && !localStorage.getItem('kcoder.order')) {
     // a fresh browser profile: pick up the layout the daemon kept for us
     try { const r = await request('ui_state'); if (r.state) { if (r.state.layout) { state.layout = r.state.layout; localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); } if (Array.isArray(r.state.order)) { state.order = r.state.order; localStorage.setItem('kcoder.order', JSON.stringify(state.order)); } } } catch {}
@@ -494,7 +495,7 @@ function renderHeader() {
   $('#btn-broadcast').classList.toggle('active', !!state.broadcast);
   const up = st.update || {};
   if (st.restarting) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn"><b>restarting</b><span>kcoderd</span></div>`);
-  else if (up.ready || (up.available && up.dev)) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat ${up.failed ? 'bad' : 'warn'}" data-upd="1" title="${up.failed ? 'this version failed its health check and was rolled back: ' + esc(up.failed) + ' (click to force it anyway)' : up.dev ? 'git pull --ff-only in your checkout, then restart' : 'downloaded and verified; installs when every session is idle, or click'}"><b>${esc(up.latest)}</b><span>${up.failed ? 'update failed · click' : 'update ready · click'}</span></div>`);
+  else if (up.available) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn" data-upd="1" title="${esc((up.commits || []).join('\n'))}"><b>${up.behind}</b><span>new commit${up.behind === 1 ? '' : 's'} · click</span></div>`);
   const n = (st.pending_approvals || []).length;
   const c = $('#inbox-count'); c.hidden = !n; c.textContent = n;
   const tk = (st.tasks || {}).counts || {}; const openTasks = (tk.queued || 0) + (tk.running || 0);
@@ -1444,7 +1445,7 @@ function paletteItems() {
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
     ['toggle fallback from your Claude plan to a paid API key', async () => { const on = !!(state.config && state.config.fallback && state.config.fallback.to_api); const r = await request('config', { fallback_to_api: !on }); state.config = r.config; toast('fallback to paid API keys: ' + (!on ? 'ON' : 'off'), !on ? 'warn' : 'ok'); }],
     ['set review policy (when the changes view must approve)', async () => { const v = await chooseDialog('Review required before…', [['push', 'push - PRs, pushes and merges need an approved review (default)'], ['commit', 'commit - every commit needs an approved review'], ['none', 'none - review is optional']]); if (v) { const r = await request('config', { review_required: v }); state.config = r.config; toast('review required before: ' + v, 'ok'); } }],
-    ['check for updates', checkUpdates], ['update now (install + restart kcoderd)', updateNow], ['restart kcoderd', restartDaemon],
+    ['check for new commits', checkUpdates], ['pull + rebuild + restart kcoderd', updateNow], ['restart kcoderd', restartDaemon],
     ['uninstall kcoder…', uninstallDialog],
   );
   for (const s of state.sessions.values()) {
@@ -1819,22 +1820,21 @@ async function remoteDialog() {
 
 // ---- updates, restart, uninstall ----
 async function checkUpdates() {
-  toast('checking for updates…');
+  toast('checking for new commits…');
   try {
     const up = (await request('update', { action: 'check' })).update || {};
     if (up.error) toast('update check: ' + up.error, 'warn');
-    else if (up.available) toast(`kcoder ${up.latest} is available` + (up.ready ? ' (downloaded + verified)' : up.dev ? ' (git pull in your checkout)' : ''), 'ok');
-    else toast(`kcoder ${up.running} is up to date`, 'ok');
+    else if (up.available) updateNow(); else toast('kcoder is up to date', 'ok');
     renderHeader();
   } catch (e) { toast(e.message, 'err'); }
 }
 async function updateNow() {
   const up = (state.stats || {}).update || {};
-  if (!up.available) { toast('no update available', 'warn'); return; }
+  if (!up.available) { toast('no new commits', 'warn'); return; }
   const busy = Array.from(state.sessions.values()).filter((s) => s.status === 'working' || s.status === 'waiting');
-  const ok = await confirmDialog(`Install kcoder ${up.latest} now?`, (up.dev ? 'Your developer checkout is pulled (git pull --ff-only) and kcoderd restarts.' : 'The verified release is installed and kcoderd restarts. If it fails its health check the previous version is restored.') + (busy.length ? ` ${busy.length} working session(s) will be interrupted and come back paused.` : ''));
+  const ok = await confirmDialog(`Pull ${up.behind} new commit${up.behind === 1 ? '' : 's'}, rebuild and restart kcoderd?`, (up.commits || []).slice(0, 8).join(' · ') + (busy.length ? `  ·  ${busy.length} working session(s) will be interrupted and come back paused.` : '') + '  If the new code does not start, kcoder rolls back.');
   if (!ok) return;
-  try { await request('update', { action: 'apply', force: true }); toast('installing… kcoderd is restarting', 'warn'); } catch (e) { toast(e.message, 'err'); }
+  try { await request('update', { action: 'apply', force: true }); toast('pulling… kcoderd is restarting', 'warn'); } catch (e) { toast(e.message, 'err'); }
 }
 async function restartDaemon() {
   const busy = Array.from(state.sessions.values()).filter((s) => s.status === 'working' || s.status === 'waiting');

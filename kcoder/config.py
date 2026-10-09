@@ -42,7 +42,6 @@ DEFAULTS = {
     "daily_cap_usd": 0,        # 0 = no cap; sessions pause when today's spend reaches it
     "compact_at": 150000,      # compact history when the last prompt reached this many tokens
     "worktrees": True,         # every session in a git repo gets its own worktree + branch
-    "auto_update": True,       # install verified releases when all sessions are idle
     "review_required": "push", # push | commit | none - when the changes view must have approved the work
     "max_concurrent": 3,       # task queue: how many sessions it keeps running at once
     "routing": {"enabled": True, "tiers": {}},   # model "auto": cheaper model for small turns, stronger for large ones

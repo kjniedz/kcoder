@@ -1156,41 +1156,37 @@ def cmd_update(args) -> int:
     running = already_running()
     if running:
         with DaemonClient.connect(autostart=False, reconcile=False) as client:
+            st = client.request("update", action="check", timeout=180)["update"]
             if args.now:
                 try:
-                    r = client.request("update", action="apply", force=bool(args.force))
+                    client.request("update", action="apply", force=bool(args.force))
                 except ClientError as exc:
                     console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
                     return 1
-                console.print(f"[green]✓[/green] installing kcoder {r.get('version')}; kcoderd is restarting (log: {paths.UPDATE_LOG_PATH})")
+                console.print(f"[green]✓[/green] pulling {st.get('behind')} commit(s); kcoderd rebuilds and restarts (log: {paths.UPDATE_LOG_PATH})")
                 return 0
-            st = client.request("update", action="check")["update"]
     else:
-        st = updater.check_and_download()
-        if args.now and st.get("available") and (st.get("ready") or st.get("dev")):
-            try:
-                if st.get("dev"):
-                    updater.spawn_helper("apply", previous=__version__)
-                else:
-                    updater.spawn_helper("apply", tarball=updater.load_state().get("ready"), expect=st["latest"], previous=__version__)
-            except updater.UpdateError as exc:
-                console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+        st = updater.check()
+        if args.now:
+            why = updater.can_apply()
+            if why:
+                console.print(f"[red]{escape(why)}[/red]", highlight=False)
                 return 1
-            console.print(f"[green]✓[/green] installing kcoder {st['latest']} (log: {paths.UPDATE_LOG_PATH})")
+            updater.spawn_helper("apply", previous=updater.head())
+            console.print(f"[green]✓[/green] pulling {st.get('behind')} commit(s) (log: {paths.UPDATE_LOG_PATH})")
             return 0
-    kind = "developer checkout" if st.get("dev") else "pip install"
-    console.print(f"kcoder {__version__} ({kind}); latest release: {st.get('latest') or 'unknown'}")
+    console.print(f"kcoder {__version__} · checkout {'yes' if st.get('dev') else 'no'} · upstream {st.get('upstream') or '?'}")
     if st.get("error"):
         console.print(f"[yellow]{escape(st['error'])}[/yellow]", highlight=False)
     if st.get("available"):
-        how = "git pull --ff-only in the checkout" if st.get("dev") else ("downloaded and verified" if st.get("ready") else "not downloaded yet")
-        if st.get("failed"):
-            console.print(f"[yellow]{st['latest']} failed its health check and was rolled back:[/yellow] {escape(st['failed'])}\n"
-                          f"[dim]`kcoder update --now --force` retries it anyway[/dim]", highlight=False, soft_wrap=True)
-        else:
-            console.print(f"[green]update available:[/green] {st['latest']} ({how}). Install with `kcoder update --now`.", soft_wrap=True)
+        console.print(f"[green]{st['behind']} new commit(s):[/green]")
+        for c in st.get("commits") or []:
+            console.print(f"  {escape(c)}", highlight=False)
+        console.print("[dim]`kcoder update --now` pulls them, rebuilds and restarts kcoderd (rolls back if it fails)[/dim]")
     elif not st.get("error"):
         console.print("[dim]up to date[/dim]")
+    if st.get("ahead"):
+        console.print(f"[dim]{st['ahead']} local commit(s) not pushed yet[/dim]")
     return 0
 
 
@@ -1539,8 +1535,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--foreground", action="store_true", help="keep the native window attached to this terminal (for debugging)")
     p.set_defaults(func=cmd_app)
 
-    p = sub.add_parser("update", help="check for a new kcoder release, or install one")
-    p.add_argument("--now", action="store_true", help="install the verified update and restart kcoderd")
+    p = sub.add_parser("update", help="check your kcoder checkout for new commits, or pull them")
+    p.add_argument("--now", action="store_true", help="pull, rebuild and restart kcoderd")
     p.add_argument("--force", action="store_true", help="with --now: even while sessions are working")
     p.set_defaults(func=cmd_update)
 

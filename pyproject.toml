@@ -7,7 +7,6 @@ name = "kcoder"
 version = "0.6.0"
 description = "kcoder - a terminal coding agent developed by Kyle Niedzwiecki"
 readme = "README.md"
-license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [{ name = "Kyle Niedzwiecki" }]
 dependencies = [

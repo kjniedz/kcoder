@@ -240,25 +240,18 @@ the mismatch.
 
 ## Updates
 
-kcoder checks for a new release when the daemon starts and once a day,
-downloads it in the background, and installs it only when every session is
-idle (or when you choose **update now** from ⌘K or the header). A release is
-a tarball plus `SHA256SUMS` plus an OpenSSH signature of that file made with
-the kcoder release key; nothing is installed unless the signature verifies
-against the key built into kcoder and the tarball's hash matches. The install
-runs in a detached helper: it waits for the daemon to exit, installs, starts
-a fresh daemon and checks its health. If the new version does not come up it
-reinstalls the previous one, and that version is never installed
-automatically again.
+kcoder runs from your git checkout. When the daemon starts (and once a day)
+it fetches the upstream branch and counts new commits; the app offers them
+when it opens, and the header shows "N new commits" until you take them.
+Accepting pulls with `git pull --ff-only`, reinstalls when `pyproject.toml`
+changed, rebuilds kcoder.app when its files changed, checks that the new code
+imports, and restarts kcoderd. If the new daemon does not come up healthy the
+checkout is reset to the previous commit and the daemon restarts on it.
+Working sessions are interrupted and come back paused.
 
-- `kcoder update` checks and reports; `kcoder update --now` installs.
-- `auto_update: false` in the config turns the automatic install off (checks
-  and the header notice stay).
-- A developer checkout (the package imported from a git repo) is never
-  pip-installed over; "update" means `git pull --ff-only` there.
-- Maintainers cut a release with `python -m kcoder.release`: it tags
-  `v<version>`, builds the tarball from the tag, signs `SHA256SUMS` with
-  `~/.config/kcoder/release_key` and publishes everything with `gh`.
+- `kcoder update` lists new commits; `kcoder update --now` takes them.
+- Local uncommitted changes or unpushed commits block the pull (nothing is
+  overwritten).
 
 ## Uninstall
 
@@ -648,7 +641,3 @@ lives outside the repo and is gitignored anyway.
 Daemon data lives in `~/.local/share/kcoder/` (override with `KCODER_DATA_DIR`);
 the port defaults to `47321` (`KCODER_PORT`). Every model call is appended to
 `usage.jsonl` for per-session and fleet-wide token accounting.
-
-## License
-
-MIT. See [LICENSE](LICENSE).

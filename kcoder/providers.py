@@ -44,7 +44,8 @@ class ProviderOutage(Exception):
     configured provider."""
 
 
-_OUTAGE_TEXT = ("rate limit", "rate_limit", "usage limit", "overloaded", "capacity", "too many requests", "quota")
+_OUTAGE_TEXT = ("rate limit", "rate_limit", "usage limit", "session limit", "weekly limit", "credit balance", "overloaded",
+                "capacity", "too many requests", "quota")
 
 
 @dataclass

@@ -1367,7 +1367,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t == "update":
         action = req.get("action") or "status"
         if action == "check":
-            await asyncio.get_running_loop().run_in_executor(None, updater.check_and_download)
+            await asyncio.get_running_loop().run_in_executor(None, updater.check)
             manager._upd_at = 0
             manager.broadcast_sessions()
         elif action == "apply":
@@ -2033,35 +2033,27 @@ async def _auto_publish(manager, session, root: str) -> None:
 
 def _begin_restart(manager: Manager, *, apply: bool = False, force: bool = False) -> dict:
     """Hand off to the detached updater helper and stop. The helper waits for
-    this process to exit, installs (apply) and starts a fresh daemon, then
-    health-checks it and rolls back if that fails."""
+    this process to exit, pulls + rebuilds (apply), starts a fresh daemon,
+    health-checks it and rolls the checkout back if that fails."""
     busy = manager.busy_names()
     if busy and not force:
         raise RequestError(f"{len(busy)} session(s) are working ({', '.join(busy[:3])}); "
-                           "they would be interrupted - wait, or choose update now")
-    st = updater.status_summary()
-    if apply and st.get("failed") and not force:
-        raise RequestError(f"{st.get('latest')} failed its health check earlier ({st['failed']}); use update now / --force to retry it")
+                           "they would be interrupted and come back paused - wait, or confirm")
     try:
         if apply:
-            if st.get("dev"):
-                updater.spawn_helper("apply", previous=__version__)          # git pull --ff-only
-                target = st.get("latest") or "latest"
-            else:
-                if not st.get("ready"):
-                    raise RequestError("no verified update has been downloaded yet")
-                updater.spawn_helper("apply", tarball=updater.load_state().get("ready"), expect=st["latest"], previous=__version__)
-                target = st["latest"]
+            why = updater.can_apply()
+            if why:
+                raise RequestError(why)
+            updater.spawn_helper("apply", previous=updater.head())
         else:
             updater.spawn_helper("restart")
-            target = st.get("installed")
     except updater.UpdateError as exc:
         raise RequestError(str(exc))
     manager.restarting = True
-    log.info("restarting kcoderd (%s -> %s)", "apply" if apply else "restart", target)
+    log.info("restarting kcoderd (%s)", "pull + rebuild" if apply else "restart")
     manager.broadcast_sessions()
     manager.loop.call_later(0.5, manager.stop.set)
-    return {"restarting": True, "version": target, "apply": apply}
+    return {"restarting": True, "apply": apply}
 
 
 # every static response: never framed, never sniffed, never shared cross-origin
@@ -2379,28 +2371,21 @@ async def _pr_loop(manager: Manager) -> None:
 
 
 async def _update_loop(manager: Manager) -> None:
-    """Check for releases on start and daily; download + verify in the
-    background; install when everything is idle (config auto_update)."""
+    """On start and once a day: fetch the checkout's upstream and count new
+    commits. Nothing is installed here; the app offers the pull."""
     loop = asyncio.get_running_loop()
-    await asyncio.sleep(float(os.environ.get("KCODER_UPDATE_DELAY", "20")))
+    await asyncio.sleep(float(os.environ.get("KCODER_UPDATE_DELAY", "5")))
     while not manager.stop.is_set():
-        delay = updater.CHECK_INTERVAL
         try:
             before = updater.status_summary()
-            summary = await loop.run_in_executor(None, updater.check_and_download)
+            summary = await loop.run_in_executor(None, updater.check)
             if summary != before:
                 manager._upd_at = 0
                 manager.broadcast_sessions()
-            if summary.get("ready") and not summary.get("dev") and not summary.get("failed"):
-                if manager.cfg.get("auto_update", True) and manager.all_idle() and manager.clients_idle():
-                    log.info("update %s is verified and everything is idle: installing", summary.get("latest"))
-                    _begin_restart(manager, apply=True)
-                    return
-                delay = 600   # waiting for an idle moment
         except Exception as exc:  # noqa: BLE001
             log.warning("update check failed: %s", exc)
         try:
-            await asyncio.wait_for(manager.stop.wait(), timeout=delay)
+            await asyncio.wait_for(manager.stop.wait(), timeout=updater.CHECK_INTERVAL)
             return
         except asyncio.TimeoutError:
             pass

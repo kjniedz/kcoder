@@ -417,7 +417,13 @@ class Engine:
         except (anthropic.RateLimitError, openai.RateLimitError, ProviderOutage) as exc:
             result = "error"
             del self.messages[min(turn_start, len(self.messages)):]
-            self.emit("error", text=f"Rate limited or provider unavailable ({exc}) - no other provider could take over. Wait a moment and try again.")
+            msg = str(exc)
+            if "credit balance" in msg.lower() or "limit" in msg.lower():
+                msg = (f"{msg}. Your Claude plan limit is used up; nothing was billed and the session is paused. "
+                       "Try again after the limit resets (or turn extra usage on in claude.ai settings if you want to pay).")
+            else:
+                msg = f"Rate limited or provider unavailable ({msg}) - no other provider could take over. Wait a moment and try again."
+            self.emit("error", text=msg)
         except (anthropic.APIConnectionError, openai.APIConnectionError):
             result = "error"
             del self.messages[turn_start:]
