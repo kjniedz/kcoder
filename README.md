@@ -20,6 +20,16 @@ kcoder app (`kcoder app`, or `kcoder ui` for a browser tab) is the other: a
 wall of live session panes, a Claude-style chat view with project history,
 and a terminal view.
 
+![Three chats side by side in the kcoder app](docs/chat-3-panes.png)
+
+<table>
+<tr>
+<td width="33%"><img src="docs/wall.png" alt="The wall: every live session as a pane"><br><sub><b>Wall</b>: every live session as a pane</sub></td>
+<td width="33%"><img src="docs/changes.png" alt="Diff review: accept, edit or reject each hunk, then approve, merge or open a draft PR"><br><sub><b>Diff review</b>: accept, edit or reject each hunk, then approve, merge or open a PR</sub></td>
+<td width="33%"><img src="docs/stats.png" alt="Stats: tokens, commits, sessions and agent time by day, model, provider and project"><br><sub><b>Stats</b>: tokens, commits, sessions and agent time</sub></td>
+</tr>
+</table>
+
 ## Features
 
 - Interactive REPL with streamed, markdown-rendered responses

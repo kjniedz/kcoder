@@ -178,11 +178,11 @@ async function onConnected() {
   renderAll();
   if (!state._setupShown && (((state.providers || []).length && !state.providers.some((p) => p.configured)) || (state.github && !state.github.connected))) { state._setupShown = true; setupDialog(); }
   const open = new URLSearchParams(location.search).get('open');
-  if (open && !state._openedOnce) { state._openedOnce = true; ({ new: openNewSession, inbox: openInbox, palette: openPalette, help: helpDialog }[open] || (() => {}))(); }
+  if (open && !state._openedOnce) { state._openedOnce = true; ({ new: openNewSession, inbox: openInbox, palette: openPalette, help: helpDialog, changes: () => state.sid && changesDialog(state.sid) }[open] || (() => {}))(); }
 }
 
 function applyUrlParams() {
-  // ?view=wall|chat|terminal  ?sid=<id or name>  ?focus=1  ?pin=<id,id>  ?open=new|inbox|palette|help
+  // ?view=wall|chat|terminal  ?sid=<id or name>  ?focus=1  ?pin=<id,id>  ?open=new|inbox|palette|help|changes (of ?sid)
   const q = new URLSearchParams(location.search);
   if (state._urlApplied) return; state._urlApplied = true;
   if (q.get('view')) { state.view = q.get('view'); localStorage.setItem('kcoder.view', state.view); }
@@ -1569,7 +1569,7 @@ function paneChips(s) {
 // ---- changes view: file list + diff, accept / reject / edit per hunk, approve ----
 function hunkNewSide(h) { return h.text.split('\n').slice(1).filter((l) => l && (l[0] === '+' || l[0] === ' ')).map((l) => l.slice(1)).join('\n'); }
 function hunkHtml(h, i, accepted) {
-  const body = h.text.split('\n').slice(1).map((l) => `<span class="l ${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : l.startsWith('\\') ? 'meta' : ''}">${esc(l)}</span>`).join('\n');
+  const body = h.text.split('\n').slice(1).map((l) => `<span class="l ${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : l.startsWith('\\') ? 'meta' : ''}">${esc(l) || ' '}</span>`).join('');
   return `<div class="hunk${accepted ? ' accepted' : ''}" data-h="${i}" id="hunk-${i}"><div class="hunk-head"><code>${esc(h.path)}</code><span class="hdr">${esc(h.header)}</span><span class="spacer"></span>` +
     (h.binary ? '<span class="help">binary</span>' : `<button data-h-act="accept" title="keep this change">${accepted ? 'accepted' : 'accept'}</button><button data-h-act="edit" title="edit the resulting lines">edit</button><button data-h-act="reject" class="danger" title="undo this change in the worktree">reject</button>`) +
     `</div><pre class="hunk-body">${body}</pre></div>`;
