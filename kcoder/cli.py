@@ -175,7 +175,9 @@ def pick_provider_model(current_pid: str, current_model: str):
         for m in models:
             cur = p.id == current_pid and m == current_model
             rows.append((p.id, m))
-            labels.append(f"[dim]{escape(p.label)} ·[/dim] {escape(m)}" + (f"  [dim {ACCENT}](current)[/]" if cur else ""))
+            credits = p.id == "claude" and "fable" in m
+            labels.append(f"[dim]{escape(p.label)} ·[/dim] {escape(m)}" + ("  [yellow](bills extra credits)[/yellow]" if credits else "")
+                          + (f"  [dim {ACCENT}](current)[/]" if cur else ""))
         rows.append((p.id, None))
         labels.append(f"[dim]{escape(p.label)} · type another model name…[/dim]")
     start = next((i for i, r in enumerate(rows) if r == (current_pid, current_model)), 0)

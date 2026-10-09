@@ -637,7 +637,7 @@ function fillModelSelect(sel, s) {
   const models = prov ? prov.models.slice() : [];
   if (prov && prov.auto && !models.includes('auto')) models.unshift('auto');
   if (s.model && !models.includes(s.model)) models.unshift(s.model);
-  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
+  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : billsCredits(s.provider, m) ? esc(m) + ' (credits)' : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
   sel.value = s.model;
 }
 
@@ -1701,6 +1701,8 @@ async function renderTasksView(force) {
 }
 
 // ---- /model: every provider and its models in one list ----
+// on Kyle's Max plan Fable turns are billed as overage credits, not plan usage
+const billsCredits = (pid, m) => pid === 'claude' && /fable/i.test(m || '');
 async function switchModel(sid, pid, model) {
   const s = state.sessions.get(sid) || {};
   if (pid === s.provider) { await request('set', { sid, model }); toast(`model → ${model}`, 'ok'); return; }
@@ -1717,7 +1719,7 @@ async function modelPicker(sid) {
   for (const p of state.providers || []) {
     const models = (p.auto ? ['auto'] : []).concat(p.models || []);
     if (!p.configured) { rows.push({ pid: p.id, model: p.default_model, label: p.label, meta: 'not set up · connect', off: true }); continue; }
-    for (const m of models) rows.push({ pid: p.id, model: m, label: p.label, meta: m === 'auto' ? `auto (${(p.tiers || {}).small || ''} / ${(p.tiers || {}).large || ''})` : m, cur: p.id === s.provider && m === s.model });
+    for (const m of models) rows.push({ pid: p.id, model: m, label: p.label, meta: m === 'auto' ? `auto (${(p.tiers || {}).small || ''} / ${(p.tiers || {}).large || ''})` : billsCredits(p.id, m) ? `${m} · bills extra credits` : m, cur: p.id === s.provider && m === s.model });
   }
   let sel = Math.max(0, rows.findIndex((r) => r.cur)), shown = rows;
   const d = openDialog(`<div class="palette"><input id="mp-in" placeholder="model or provider… (provider/model to type any model)"><div class="list" id="mp-list"></div></div>`, 'palette');

@@ -19,7 +19,7 @@ import re
 AUTO = "auto"
 
 TIERS = {
-    "claude": {"small": "sonnet", "large": "fable"},
+    "claude": {"small": "sonnet", "large": "opus"},   # stays on the plan (Fable bills credits)
     "anthropic": {"small": "claude-haiku-4-5-20251001", "large": "claude-opus-4-8"},
 }
 

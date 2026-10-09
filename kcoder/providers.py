@@ -67,10 +67,10 @@ PROVIDERS = {
         key_env="",
         key_url="https://claude.com/product/claude-code",
         base_url=None,
-        # Claude Code aliases resolve to the plan's current models
-        models=["fable", "opus", "sonnet", "haiku", "claude-fable-5-1", "claude-fable-5",
-                "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"],
-        default_model="fable",
+        # Claude Code aliases resolve to the plan's current models. Fable is listed last:
+        # on Kyle's Max plan Fable turns are billed as overage credits, so it is never a default.
+        models=["opus", "sonnet", "haiku", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5", "fable", "claude-fable-5-1"],
+        default_model="opus",
     ),
     "anthropic": Provider(
         id="anthropic",
