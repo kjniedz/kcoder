@@ -465,6 +465,7 @@ button.badge.error { border: none; cursor: pointer; font: inherit; font-size: 10
 .note.job button { margin-left: 6px; font-size: 10.5px; padding: 0 6px; }
 .note.job.failed, .note.job.lost { color: var(--yellow); }
 .chip.job { color: var(--running); border-color: var(--running); cursor: pointer; }
+.chip.dry { color: var(--warn, #e0b341); border-color: var(--warn, #e0b341); cursor: pointer; }
 .joblog { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; background: var(--code-bg); padding: 8px 10px; border-radius: 4px; max-height: 60vh; overflow: auto; }
 .badge.pushed { color: var(--green); border: 1px solid rgba(74,222,128,.4); }
 .badge.local { color: var(--yellow); border: 1px solid rgba(251,191,36,.5); }

@@ -46,7 +46,7 @@ import openai
 
 from . import projects, routing
 from .providers import NotOnPlan, PlanLimitReached, ProviderOutage
-from .tools import DANGEROUS_TOOLS, READ_ONLY_TOOLS, describe_tool_call, execute_tool
+from .tools import DANGEROUS_TOOLS, DRY_RUN_NOTE, READ_ONLY_TOOLS, describe_tool_call, dry_run_allowed, execute_tool
 
 # after a fallback, keep using the fallback provider this long before trying the primary again
 FALLBACK_STICKY_SECONDS = 600
@@ -99,7 +99,19 @@ TRUST_AUTO = "auto"     # everything
 TRUST_WRITE = "write"   # reads + file writes/edits; shell is gated
 TRUST_READ = "read"     # reads only; writes, edits and shell are gated (default)
 TRUST_NONE = "none"     # everything is gated
-TRUST_LEVELS = (TRUST_AUTO, TRUST_WRITE, TRUST_READ, TRUST_NONE)
+TRUST_DRY = "dry"       # dry run: reads only, writes come back unexecuted; the reply carries the plan and the diff
+TRUST_LEVELS = (TRUST_AUTO, TRUST_WRITE, TRUST_READ, TRUST_NONE, TRUST_DRY)
+
+DRY_RUN_PROMPT = """\
+# Dry run
+
+This session is a dry run. You may read files and run commands that only
+read (ls, cat, grep, git status / log / diff and the like). Do not change
+anything: no file writes or edits, no commands that build, install, commit,
+push or otherwise change state; such calls come back unexecuted. Instead,
+investigate, then reply with (1) a short plan and (2) the exact change as
+unified diffs in ```diff blocks, one per file, plus the commands you would
+run. The user reads the plan and turns it into a real run when ready."""
 
 MAX_RETRIES = 5
 RETRY_BASE_SECONDS = 2.0
@@ -294,6 +306,8 @@ class Engine:
             return tool_name == "run_bash"
         if self.trust == TRUST_NONE:
             return True
+        if self.trust == TRUST_DRY:
+            return False                    # nothing to approve: writes are refused outright
         return tool_name in DANGEROUS_TOOLS  # TRUST_READ
 
     def session_env(self) -> dict:
@@ -310,6 +324,8 @@ class Engine:
         extra = projects.load_instructions(self.project_root, self.cwd, skip=skip)
         if extra:
             base += "\n\n# Project instructions\n\n" + extra
+        if self.trust == TRUST_DRY:
+            base += "\n\n" + DRY_RUN_PROMPT
         return base
 
     def truncate(self, index: int) -> None:
@@ -669,6 +685,10 @@ class Engine:
         call_id = call_id or uuid.uuid4().hex[:12]
         description = describe_tool_call(name, tool_input)
         self.emit("tool_call", id=call_id, name=name, input=tool_input, description=description)
+
+        if self.trust == TRUST_DRY and not dry_run_allowed(name, tool_input):
+            self.emit("tool_result", id=call_id, name=name, content=DRY_RUN_NOTE, truncated=False, is_error=True, elapsed=0.0, dry_run=True)
+            return DRY_RUN_NOTE, True
 
         if self.needs_approval(name):
             if not self._request_approval(call_id, name, description, tool_input):

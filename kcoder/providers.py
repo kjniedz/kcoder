@@ -665,6 +665,8 @@ class ClaudeCodeBackend:
             args += ["--dangerously-skip-permissions"]
         elif trust == "write":
             args += ["--permission-mode", "acceptEdits"]
+        elif trust == "dry":
+            args += ["--permission-mode", "plan"]     # dry run: Claude Code reads and plans, edits are off
         else:
             args += ["--permission-mode", "default"]   # headless: anything needing approval is denied
         if self.session_id:

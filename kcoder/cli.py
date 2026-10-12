@@ -131,7 +131,7 @@ def print_help() -> None:
         "                    kimi, glm, minimax, xiaokai); no arg: pick interactively\n"
         "  /model [name]     show/switch model; no arg: pick interactively\n"
         "  /auto             toggle auto-approve (trust auto <-> read)\n"
-        "  /trust [level]    auto | write | read | none - what runs without asking\n"
+        "  /trust [level]    auto | write | read | none | dry - what runs without asking (dry: plan + diff only)\n"
         "  /name [name]      rename this session (short name)\n"
         "  /title [text]     set the chat title\n"
         "  /queue [task]     add a follow-up task (no arg: show the queue; /queue clear)\n"

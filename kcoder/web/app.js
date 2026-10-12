@@ -12,7 +12,7 @@ const BANNER = [
 
 const SLASH = [
   ['/help', 'show commands'], ['/clear', 'reset conversation history'], ['/cd', 'change working directory'],
-  ['/model', 'switch model or provider (all providers)'], ['/provider', 'same picker as /model'], ['/trust', 'auto | write | read | none'], ['/auto', 'toggle auto-approve'],
+  ['/model', 'switch model or provider (all providers)'], ['/provider', 'same picker as /model'], ['/trust', 'auto | write | read | none | dry'], ['/auto', 'toggle auto-approve'],
   ['/title', 'set the chat title'], ['/name', 'rename the session'], ['/queue', 'add a follow-up task'],
   ['/fork', 'fork this chat'], ['/compact', 'summarise history to free context'], ['/export', 'download as markdown'],
   ['/archive', 'archive this chat'], ['/shell', 'toggle the shell pane'], ['/grid', 'sessions: the grid'],
@@ -583,7 +583,7 @@ function buildTermHtml(store, sid, opts = {}) {
         break;
       }
       case 'approval_result': out.push(`<span class="t-dim">  ${e.approved ? '✓ approved' : '✗ declined'}</span>\n`); break;
-      case 'tool_result': if (e.is_error) out.push(`<span class="t-dim">  ✗ ${esc(stripAnsi(e.content || '').split('\n')[0])}</span>\n`); break;
+      case 'tool_result': if (e.is_error) out.push(`<span class="t-dim">  ${e.dry_run ? '◌ dry run: not executed' : '✗ ' + esc(stripAnsi(e.content || '').split('\n')[0])}</span>\n`); break;
       case 'error': case 'notice': out.push(`<span class="t-err">${esc(e.text)}</span>\n`); break;
       case 'retry': out.push(`<span class="t-warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</span>\n`); break;
       case 'info': case 'system': case 'git': case 'job': out.push(`<span class="t-dim">${esc(e.text || '')}</span>\n`); break;
@@ -775,7 +775,7 @@ function renderPaneChrome(pane, s, num) {
     acts.innerHTML =
       `<button data-act="interrupt" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■ interrupt</button>` +
       `<button data-act="queue">+ task</button>` +
-      `<select data-act="trust" title="trust level"><option value="auto">trust: auto</option><option value="write">trust: write</option><option value="read">trust: read</option><option value="none">trust: none</option></select>` +
+      `<select data-act="trust" title="trust level"><option value="auto">trust: auto</option><option value="write">trust: write</option><option value="read">trust: read</option><option value="none">trust: none</option><option value="dry">trust: dry run</option></select>` +
       `<select data-act="model" title="model"></select>` +
       (s.project && s.project.git ? `<button data-act="git">git status</button><button data-act="pull" title="git pull --ff-only from the remote">⇣ pull</button>` : '') +
       (s.worktree ? `<button data-act="merge" title="merge this session's branch into the project">⇤ merge</button><button data-act="pr">open PR</button><button data-act="discard" class="danger">discard</button>` : '') +
@@ -1047,6 +1047,13 @@ async function handleAction(el, sid) {
       case 'resume': await request('resume_turn', { sid }); break;
       case 'dismiss': await request('resume_turn', { sid, discard: true }); break;
       case 'changes': changesDialog(sid); break;
+      case 'doit': {
+        const to = (state.config && state.config.default_trust && state.config.default_trust !== 'dry') ? state.config.default_trust : 'auto';
+        if (!(await confirmDialog('Carry out the plan?', `The session leaves dry run (trust becomes ${to}) and is asked to make the changes it proposed.`))) break;
+        await request('set', { sid, trust: to });
+        await request('send', { sid, text: 'Go ahead: carry out the plan you proposed above, exactly as described. Say so if anything in it no longer applies.', images: [], queue_if_busy: true });
+        toast('plan is being carried out', 'ok'); break;
+      }
       case 'preview': { if (state.view !== 'wall') setView('wall'); setPaneView(sid, 'preview'); focusPane(sid); break; }
       case 'preview-start': { toast('starting the dev server…'); const r = await request('preview', { sid, action: 'start' }); toast(`preview on ${r.preview.url}`, 'ok'); renderSession(sid); break; }
       case 'preview-stop': await request('preview', { sid, action: 'stop' }); renderSession(sid); break;
@@ -1200,7 +1207,7 @@ function _renderTitlebarsLegacy() {
   const html = !s ? '<span class="meta">pick a chat on the left, or press n for a new one</span>' :
     `<span class="dot ${s.archived ? 'archived' : s.status}"></span><span class="title">${esc(s.title || s.name)}</span><span class="meta">${esc((s.project || {}).name || '')}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} · ${esc(shortHome(s.cwd))}</span><span class="spacer"></span>` +
     `<span class="meta">ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? 'on your plan' : fmtUsd((s.usage || {}).cost || 0)}</span>` +
-    `<select data-act="trust" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option></select>` +
+    `<select data-act="trust" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select>` +
     `<select data-act="model" title="model"></select>` +
     `<button data-act="interrupt" title="Esc" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■</button>` +
     `<button data-act="export" title="export markdown">⤓</button><button data-act="menu" title="more">⋯</button>`;
@@ -1586,7 +1593,7 @@ async function openNewSession(pre = {}) {
     <div class="row">
       <label>provider<select id="ns-provider">${provs.map((p) => `<option value="${p.id}"${p === def ? ' selected' : ''}${p.configured ? '' : ' disabled'}>${esc(p.label)}${p.configured ? '' : ' (not set up)'}</option>`).join('')}</select></label>
       <label>model<select id="ns-model"></select></label>
-      <label>trust<select id="ns-trust"><option value="auto">auto (never ask)</option><option value="write">write (gate shell)</option><option value="read">read (gate writes + shell)</option><option value="none">none (ask for everything)</option></select></label>
+      <label>trust<select id="ns-trust"><option value="auto">auto (never ask)</option><option value="write">write (gate shell)</option><option value="read">read (gate writes + shell)</option><option value="none">none (ask for everything)</option><option value="dry">dry run (plan + diff only, changes nothing)</option></select></label>
     </div>
     <label>session name (optional)<input id="ns-name" placeholder="defaults to the folder name"></label>
     <label>initial task<textarea id="ns-task" placeholder="what should it do first?"></textarea></label>
@@ -1920,6 +1927,7 @@ function paneChips(s) {
     const ck = s.pr.checks || 'none'; const icon = ck === 'success' ? '✓' : ck === 'failure' ? '✗' : ck === 'pending' ? '◐' : '';
     h += `<a class="chip pr ${esc(ck)}" href="${esc(s.pr.url)}" target="_blank" rel="noopener" title="${esc(s.pr.title || '')} · ${esc((s.pr.state || '').toLowerCase())}${s.pr.draft ? ' · draft' : ''} · checks: ${esc(ck)}">PR #${esc(s.pr.number)}${s.pr.draft ? ' draft' : ''} ${icon}</a>`;
   }
+  if (s.trust === 'dry') h += `<span class="chip dry" data-act="doit" title="dry run: the agent reads and plans, every change comes back unexecuted. Click to carry out the plan for real.">◌ dry run · do it</span>`;
   if (s.needs_review) h += `<span class="chip warn" data-act="changes" title="a task finished; its changes wait for your review">⚑ review</span>`;
   if (s.fallback && s.fallback.provider) h += `<span class="chip warn" title="running on a fallback provider since ${esc(new Date((s.fallback.since || 0) * 1000).toLocaleTimeString())}: ${esc(s.fallback.reason || '')}">⇄ ${esc(s.fallback.provider)}/${esc(s.fallback.model)} · ${age(s.fallback.since)}</span>`;
   if (s.preview && s.preview.running) h += `<span class="chip ok" data-act="preview" title="dev server ${esc(s.preview.label)} on port ${esc(s.preview.port)} (click to show)">▶ :${esc(s.preview.port)}</span>`;
@@ -2026,7 +2034,7 @@ async function renderTasksView(force) {
       <div class="row"><label>repo / folder<input name="repo" list="tq-repos" placeholder="/path/to/project or owner/name" required autocomplete="off"><datalist id="tq-repos">${(state.projects || []).map((p) => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join('')}</datalist></label>
         <label>provider<select name="provider">${provs.map((p) => `<option value="${esc(p.id)}" ${p.id === def.id ? 'selected' : ''} ${p.configured ? '' : 'disabled'}>${esc(p.label)}</option>`).join('')}</select></label>
         <label>model<select name="model"><option value="">provider default</option>${(def.models || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
-        <label>trust<select name="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option></select></label></div>
+        <label>trust<select name="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select></label></div>
       <label>task<textarea name="text" placeholder="what should it do? It runs in its own worktree as soon as a slot is free, and lands in review when done." required></textarea></label>
       <div class="row"><span class="help">finished tasks wait in review; nothing is pushed on its own</span><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add to queue</button></div>
     </form>
@@ -2593,7 +2601,7 @@ async function paneMenu(pane) {
       case 'close': splitClose(i); break;
       case 'fullscreen': toggleFullscreen(); break;
       case 'model': modelPicker(sid); break;
-      case 'trust': { const t = await chooseDialog('Trust', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']]); if (t) await request('set', { sid, trust: t }); break; }
+      case 'trust': { const t = await chooseDialog('Trust', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything'], ['dry', 'dry run - plan and diff only, changes nothing']]); if (t) await request('set', { sid, trust: t }); break; }
       case 'rename': { const t = await promptDialog('Chat title', '', s.title || ''); if (t) await request('title', { sid, title: t }); break; }
       default: handleAction({ dataset: { act: v } }, sid);
     }

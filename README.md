@@ -209,8 +209,16 @@ that window; a window with pins shows only those sessions.
 
 **Trust levels** per session: `auto` (never ask; the default, change it in
 Settings), `write` (shell commands ask), `read` (writes and shell ask), `none`
-(everything asks). Approvals appear on the pane, in the inbox, and on your
-phone if you set that up.
+(everything asks), `dry` (dry run). Approvals appear on the pane, in the
+inbox, and on your phone if you set that up.
+
+**Dry runs.** With trust `dry` the agent reads the repo and runs read-only
+commands, but every write, edit or state-changing command comes back
+unexecuted, and its reply carries the plan and the exact change as `diff`
+blocks. Claude sessions run in Claude Code's plan mode. The pane shows a
+**dry run · do it** chip: click it when the plan looks right and the session
+switches to your default trust and carries the plan out. Pick dry run in the
+new-session dialog, the trust control on the pane, or `/trust dry`.
 
 **Worktrees.** Every session in a git repo works on its own `kcoder/<name>`
 branch in its own worktree, so parallel sessions on one repo never touch each

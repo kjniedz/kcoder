@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 
 DEFAULT_BASH_TIMEOUT = int(os.environ.get("KCODER_BASH_TIMEOUT", "600"))
@@ -11,6 +12,46 @@ DEFAULT_BASH_TIMEOUT = int(os.environ.get("KCODER_BASH_TIMEOUT", "600"))
 # (unless auto-approve mode is on).
 DANGEROUS_TOOLS = {"write_file", "edit_file", "run_bash"}
 READ_ONLY_TOOLS = {"read_file", "list_dir"}
+
+# Dry run: the only shell commands that run (each simple command's first word;
+# pipelines, && and ; are split and every part must qualify; redirections to a
+# file are refused). Everything else comes back as "dry run: not executed".
+DRY_RUN_COMMANDS = {
+    "cat", "head", "tail", "less", "more", "ls", "tree", "find", "grep", "rg", "ag", "wc", "sort", "uniq", "cut", "tr",
+    "awk", "diff", "stat", "file", "which", "type", "pwd", "echo", "printf", "env", "printenv", "date", "whoami", "uname",
+    "du", "df", "basename", "dirname", "realpath", "readlink", "xargs", "jq", "yq", "column", "nl", "strings", "md5sum", "shasum",
+}
+DRY_RUN_GIT = {"status", "log", "diff", "show", "blame", "grep", "ls-files", "rev-parse", "branch", "remote", "describe", "shortlog", "stash list", "tag", "cat-file", "ls-tree"}
+DRY_RUN_NOTE = ("dry run: not executed. This session only reads and plans. Describe this change in your reply instead, "
+                "as a unified diff in a ```diff block; the user turns the plan into a real run when they are ready.")
+
+
+def dry_run_allowed(name: str, tool_input: dict) -> bool:
+    """True when a tool call cannot change anything: reads, and shell commands made only of read-only programs."""
+    if name in READ_ONLY_TOOLS:
+        return True
+    if name != "run_bash":
+        return False
+    cmd = str((tool_input or {}).get("command") or "")
+    if re.search(r"(^|[^<>])>(?!&)|>>|\btee\b", cmd):       # writes a file
+        return False
+    for part in re.split(r"\|\|?|&&|;|\n", cmd):
+        words = part.strip().split()
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words = words[1:]                                  # leading VAR=value
+        if not words:
+            continue
+        prog = os.path.basename(words[0])
+        if prog == "git":
+            sub = " ".join(words[1:3]) if len(words) > 2 and words[1] == "stash" else (words[1] if len(words) > 1 else "")
+            if sub not in DRY_RUN_GIT or (sub == "branch" and any(w in ("-d", "-D", "-m", "-M", "--delete") for w in words)):
+                return False
+        elif prog == "sed":
+            if "-i" in words or any(w.startswith("-i") for w in words[1:]):
+                return False
+        elif prog not in DRY_RUN_COMMANDS and prog != "sed":
+            return False
+    return True
 
 TOOLS = [
     {
