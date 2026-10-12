@@ -78,9 +78,27 @@ function applyTheme() {
   for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
 }
 function setTheme(c) { localStorage.setItem('kcoder.theme', c); applyTheme(); }
+// ---- text font: any installed family (falls back to the system monospace) and a size ----
+const FONT_PRESETS = [['', 'system monospace (default)'], ['JetBrains Mono', 'JetBrains Mono'], ['Fira Code', 'Fira Code'], ['Cascadia Code', 'Cascadia Code'], ['SF Mono', 'SF Mono'], ['Menlo', 'Menlo'], ['Consolas', 'Consolas'], ['IBM Plex Mono', 'IBM Plex Mono'], ['Source Code Pro', 'Source Code Pro'], ['Monaco', 'Monaco'], ['Courier New', 'Courier New'], ['system-ui', 'system sans (not monospace)']];
+const FONT_SIZES = [11, 12, 12.5, 13, 14, 15, 16, 18];
+function fontChoice() { return { family: localStorage.getItem('kcoder.font') || '', size: Number(localStorage.getItem('kcoder.fontSize')) || 12.5 }; }
+function fontStack(family) { return family ? `"${family.replace(/"/g, '')}", ${cssVar('--mono') || 'monospace'}` : ''; }
+function applyFont() {
+  const f = fontChoice();
+  const root = document.documentElement.style;
+  if (f.family) root.setProperty('--font', fontStack(f.family)); else root.removeProperty('--font');
+  root.setProperty('--font-size', f.size + 'px');
+  for (const sh of state.shells.values()) { try { sh.term.options.fontFamily = f.family ? fontStack(f.family) : 'ui-monospace, Menlo, monospace'; sh.term.options.fontSize = Math.round(f.size); sh.fit.fit(); } catch {} }
+}
+function setFont(family, size) {
+  if (family != null) { if (family) localStorage.setItem('kcoder.font', family); else localStorage.removeItem('kcoder.font'); }
+  if (size != null) localStorage.setItem('kcoder.fontSize', String(size));
+  applyFont();
+}
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function xtermTheme() { return { background: cssVar('--code-bg'), foreground: cssVar('--fg'), cursor: cssVar('--accent'), selectionBackground: cssVar('--accent-soft') }; }
 applyTheme();
+applyFont();
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice() === 'system') applyTheme(); });
 
 // ----------------------------------------------------------------------
@@ -1280,7 +1298,7 @@ function ensureShell(sid, box) {
   if (sh && sh.box === box) return;
   if (sh) { sh.term.dispose(); state.shells.delete(sid); }
   box.innerHTML = '';
-  const term = new Terminal({ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12, theme: xtermTheme(), cursorBlink: true, scrollback: 5000, allowProposedApi: true });
+  const term = new Terminal({ fontFamily: fontChoice().family ? fontStack(fontChoice().family) : 'ui-monospace, Menlo, monospace', fontSize: Math.round(fontChoice().size), theme: xtermTheme(), cursorBlink: true, scrollback: 5000, allowProposedApi: true });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(box); fit.fit();
   sh = { term, fit, box, open: false };
   state.shells.set(sid, sh);
@@ -1465,6 +1483,7 @@ function paletteItems() {
     ['toggle auto-publish of local folders to GitHub', async () => { const on = !(state.config && state.config.auto_publish === true); const r = await request('config', { auto_publish: on }); state.config = r.config; toast('auto-publish to GitHub: ' + (on ? 'on' : 'off'), 'ok'); }],
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
+    ['text font and size (settings)', () => settingsDialog()],
     ['theme: dark / light / system', async () => { const v = await chooseDialog('Theme', [['dark', 'dark (default)'], ['light', 'light'], ['system', 'follow the system setting']]); if (v) { setTheme(v); toast('theme: ' + v, 'ok'); } }],
     ['phone approvals (pair, revoke, enable)', remoteDialog],
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
@@ -1535,6 +1554,10 @@ async function settingsDialog() {
   const sel = (id, val, label, opts) => `<label class="setting"><span>${label}</span><select data-set="${id}">${opts.map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
   const d = openDialog(`<h2>settings<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">
     ${sel('theme', themeChoice(), 'Theme', [['dark', 'dark'], ['light', 'light'], ['system', 'follow the system']])}
+    ${(() => { const f = fontChoice(); const known = FONT_PRESETS.some(([k]) => k === f.family); return `<label class="setting"><span>Text font <span class="help">any font installed on this computer; the system monospace is used if it is missing</span></span><select data-set="font">${FONT_PRESETS.map(([k, l]) => `<option value="${esc(k)}"${k === f.family ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="__custom"${known ? '' : ' selected'}>other…</option></select></label>
+    <label class="setting" id="font-custom"${known ? ' hidden' : ''}><span>Font name <span class="help">exactly as it is installed, for example "Victor Mono"</span></span><input type="text" data-set="font_custom" value="${esc(known ? '' : f.family)}" placeholder="font family"></label>
+    <label class="setting"><span>Text size</span><select data-set="font_size">${FONT_SIZES.map((n) => `<option value="${n}"${n === f.size ? ' selected' : ''}>${n} px</option>`).join('')}</select></label>
+    <div class="sample" id="font-sample">kcoder> the quick brown fox jumps over the lazy dog  0O 1lI {} =&gt; -&gt;</div>`; })()}
     ${chk('sound', state.sound, 'Sound', 'a ping when a session needs you')}
     ${sel('default_trust', cfg.default_trust || 'auto', 'Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']])}
     ${chk('routing_enabled', !(cfg.routing && cfg.routing.enabled === false), 'Model routing', 'auto picks a cheap model for small turns, a strong one for large')}
@@ -1552,6 +1575,9 @@ async function settingsDialog() {
     const k = el.dataset.set;
     try {
       if (k === 'theme') { setTheme(el.value); toast('theme: ' + el.value, 'ok'); return; }
+      if (k === 'font') { const custom = el.value === '__custom'; $('#font-custom', d).hidden = !custom; if (custom) { $('[data-set="font_custom"]', d).focus(); return; } setFont(el.value, null); toast('font: ' + (el.value || 'system monospace'), 'ok'); return; }
+      if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
+      if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
       if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
       const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
       const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');

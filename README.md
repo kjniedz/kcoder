@@ -474,7 +474,9 @@ waiting on you, and **+ new**. Everything informational sits in a one-line
 status bar at the bottom: daemon status, active sessions, tokens and commits
 today, the 7-day sparkline, your Claude plan status and the version; each
 item clicks through to the sessions, stats, the plan dialog or settings
-(<kbd>⌘,</kbd>). Settings also carries the version and copyright, and the
+(<kbd>⌘,</kbd>). Settings has the theme, the text font (any installed
+family, or the system monospace) and text size, sound, trust, routing,
+review policy, auto-publish and the spend cap, and carries the version and copyright; the
 macOS menu's About kcoder opens the same About panel. Rule: every header
 control has a label or a tooltip, and nothing new goes in the header without
 something coming out.

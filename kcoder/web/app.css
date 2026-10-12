@@ -49,7 +49,7 @@ html[data-theme="light"] {
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
-  margin: 0; background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 12.5px;
+  margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font, var(--mono)); font-size: var(--font-size, 12.5px);
   line-height: 1.45; display: flex; flex-direction: column; overflow: hidden;
 }
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -181,7 +181,7 @@ a { color: var(--accent-text); }
 .pane-actions { display: flex; gap: 4px; padding: 3px 6px; border-top: 1px solid var(--line); flex: 0 0 auto; flex-wrap: wrap; }
 .pane-actions button { padding: 1px 7px; font-size: 11px; }
 .pane .composer-slot { flex: 0 0 auto; border-top: 1px solid var(--line); }
-.pane.focused .pane-body { font-size: 12.5px; }
+.pane.focused .pane-body { font-size: var(--font-size, 12.5px); }
 .approval-bar { background: var(--accent-soft); border-top: 1px solid var(--waiting); padding: 4px 8px; display: flex; gap: 8px; align-items: center; font-size: 11.5px; flex: 0 0 auto; }
 .approval-bar code { color: var(--accent-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .git-line { display: flex; gap: 8px; align-items: center; }
@@ -296,7 +296,7 @@ a { color: var(--accent-text); }
 
 /* ---- terminal view ---- */
 .termview { flex-direction: column; }
-.term-log { flex: 1; overflow: auto; padding: 8px 14px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+.term-log { flex: 1; overflow: auto; padding: 8px 14px; white-space: pre-wrap; word-break: break-word; font-size: var(--font-size, 12.5px); }
 .term-log .t-you { color: var(--green); font-weight: 700; }
 .term-log .t-k { color: var(--accent-text); font-weight: 700; }
 .term-log .t-dim { color: var(--fg-dim); }
@@ -343,7 +343,8 @@ a { color: var(--accent-text); }
 .settings .setting { display: flex; flex-direction: row; align-items: center; gap: 10px; font-size: 12.5px; color: var(--fg); text-transform: none; letter-spacing: 0; }
 .settings .setting > span:first-child { flex: 1; }
 .settings .setting .help { flex: 1; }
-.settings .setting select, .settings .setting input[type="number"] { width: 170px; }
+.settings .setting select, .settings .setting input[type="number"], .settings .setting input[type="text"] { width: 170px; }
+.settings .sample { font-size: var(--font-size, 12.5px); color: var(--fg-dim); padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; white-space: pre; overflow: hidden; }
 .settings .foot .help { flex: 1; align-self: center; }
 .settings .links { display: flex; gap: 6px; flex-wrap: wrap; }
 .palette input { width: 100%; border: none; border-bottom: 1px solid var(--line); background: transparent; padding: 10px 14px; font-size: 14px; }
@@ -442,7 +443,7 @@ select:hover { border-color: var(--accent); }
 
 /* ---- flush: nothing clips at the edges ---- */
 .chat-log, .term-log { min-height: 0; }
-.cpane .chat-log.term-log { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+.cpane .chat-log.term-log { white-space: pre-wrap; word-break: break-word; font-size: var(--font-size, 12.5px); }
 .cpane-bar .view-toggle { min-width: 26px; }
 .msg { overflow-wrap: anywhere; }
 .md ol, .md ul { padding-left: 1.9em; margin: 4px 0 8px 2px; list-style-position: outside; }
