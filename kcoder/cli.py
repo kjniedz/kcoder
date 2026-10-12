@@ -1124,6 +1124,18 @@ def cmd_ui(args) -> int:
 
 def cmd_app(args) -> int:
     """`kcoder app`: the web app in its own window, not a browser tab."""
+    if args.install and os.name == "nt":
+        try:
+            path = appmod.install_windows_app()
+        except RuntimeError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+            return 1
+        console.print(f"[green]✓[/green] kcoder is in the Start Menu and on the Desktop ({escape(path)})", highlight=False)
+        console.print("[dim]Pin it: right-click kcoder in the Start Menu → Pin to taskbar.[/dim]")
+        return 0
+    if args.uninstall and os.name == "nt":
+        console.print("[dim]removed the kcoder shortcuts[/dim]" if appmod.uninstall_windows_app() else "[dim]no kcoder shortcuts found[/dim]")
+        return 0
     if args.install:
         try:
             path = appmod.install_mac_app()
@@ -1160,7 +1172,10 @@ def cmd_app(args) -> int:
 
 def _when_short(ts) -> str:
     import datetime
-    return datetime.datetime.fromtimestamp(float(ts)).strftime("%a %-I:%M %p") if ts else "later"
+    if not ts:
+        return "later"
+    d = datetime.datetime.fromtimestamp(float(ts))
+    return f"{d:%a} {d.hour % 12 or 12}:{d:%M %p}"   # no %-I: Windows strftime rejects it
 
 
 def _print_plan(st: dict) -> None:

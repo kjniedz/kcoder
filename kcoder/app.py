@@ -27,7 +27,7 @@ import sys
 import tempfile
 import webbrowser
 
-from . import __version__, paths
+from . import __version__, compat, paths
 
 APP_NAME = "kcoder"
 BUNDLE_ID = "com.kyersreserve.kcoder"
@@ -46,6 +46,10 @@ _CHROMIUM_MAC = [
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/Applications/Vivaldi.app/Contents/MacOS/Vivaldi",
 ]
+_CHROMIUM_WIN = [os.path.join(base, *rel) for base in filter(None, (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"),
+                                                                 os.environ.get("LOCALAPPDATA")))
+                 for rel in (("Microsoft", "Edge", "Application", "msedge.exe"), ("Google", "Chrome", "Application", "chrome.exe"),
+                             ("BraveSoftware", "Brave-Browser", "Application", "brave.exe"))] if os.name == "nt" else []
 _CHROMIUM_BIN = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
                  "brave-browser", "microsoft-edge", "vivaldi"]
 
@@ -72,7 +76,7 @@ def full_path() -> str:
 
 def chromium_binary() -> str | None:
     """A Chromium-family browser that supports --app mode, or None."""
-    for p in _CHROMIUM_MAC + [os.path.expanduser("~" + p) for p in _CHROMIUM_MAC]:
+    for p in _CHROMIUM_MAC + [os.path.expanduser("~" + p) for p in _CHROMIUM_MAC] + _CHROMIUM_WIN:
         if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
     for b in _CHROMIUM_BIN:
@@ -259,9 +263,9 @@ def open_window(url: str, mode: str = "auto", foreground: bool = False) -> str:
                 paths.ensure_data_dir()
                 with open(APP_LOG_PATH, "a", encoding="utf-8") as log:
                     subprocess.Popen(
-                        [sys.executable, "-P", "-m", "kcoder.app", url],
+                        [_gui_python(), "-P", "-m", "kcoder.app", url],
                         stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                        start_new_session=True, close_fds=True, cwd=os.path.expanduser("~"),
+                        close_fds=True, cwd=os.path.expanduser("~"), **compat.detached(),
                     )
             return "native"
         if mode == "native":
@@ -275,7 +279,7 @@ def open_window(url: str, mode: str = "auto", foreground: bool = False) -> str:
                 [exe, f"--app={url}", f"--user-data-dir={PROFILE_DIR}", "--no-first-run",
                  "--no-default-browser-check", "--window-size=1440,900", f"--class={APP_NAME}"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True, close_fds=True,
+                close_fds=True, **compat.detached(),
             )
             return "chromium"
         if mode == "chromium":
@@ -288,6 +292,57 @@ def open_window(url: str, mode: str = "auto", foreground: bool = False) -> str:
 # ----------------------------------------------------------------------
 # macOS app bundle: ~/Applications/kcoder.app
 # ----------------------------------------------------------------------
+
+def _gui_python() -> str:
+    """pythonw.exe next to python.exe on Windows (no console window), else sys.executable."""
+    if os.name == "nt":
+        w = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if os.path.isfile(w):
+            return w
+    return sys.executable
+
+
+# ----------------------------------------------------------------------
+# Windows: Start Menu and Desktop shortcuts
+# ----------------------------------------------------------------------
+
+def windows_shortcuts() -> list:
+    start = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Microsoft", "Windows", "Start Menu", "Programs", "kcoder.lnk")
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop", "kcoder.lnk")
+    return [start, desktop]
+
+
+def install_windows_app() -> str:
+    """Start Menu + Desktop shortcuts that open the kcoder app (no console window)."""
+    if os.name != "nt":
+        raise RuntimeError("Windows shortcuts can only be made on Windows")
+    icon = os.path.join(WEB_DIR, "icon.ico")
+    made = []
+    for lnk in windows_shortcuts():
+        os.makedirs(os.path.dirname(lnk), exist_ok=True)
+        ps = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:KC_LNK); "
+              "$s.TargetPath = $env:KC_TARGET; $s.Arguments = '-m kcoder.cli app'; "
+              "$s.WorkingDirectory = $env:USERPROFILE; $s.IconLocation = $env:KC_ICON; "
+              "$s.Description = 'kcoder'; $s.Save()")
+        env = dict(os.environ, KC_LNK=lnk, KC_TARGET=_gui_python(), KC_ICON=icon)
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                           capture_output=True, text=True, timeout=60, env=env)
+        if r.returncode != 0:
+            raise RuntimeError("could not create the shortcut: " + (r.stderr or r.stdout).strip()[-300:])
+        made.append(lnk)
+    return made[0]
+
+
+def uninstall_windows_app() -> bool:
+    removed = False
+    for lnk in windows_shortcuts():
+        try:
+            os.remove(lnk)
+            removed = True
+        except OSError:
+            pass
+    return removed
+
 
 def _require_mac(what: str) -> None:
     if sys.platform != "darwin":

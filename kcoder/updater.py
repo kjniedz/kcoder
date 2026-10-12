@@ -22,7 +22,7 @@ import subprocess
 import sys
 import time
 
-from . import __version__, paths
+from . import __version__, compat, paths
 
 STATE_PATH = os.path.join(paths.UPDATES_DIR, "state.json")
 LOCK_PATH = os.path.join(paths.UPDATES_DIR, "helper.lock")
@@ -181,15 +181,15 @@ def can_apply() -> str | None:
 
 def _try_lock():
     """Only one helper (pull / restart / rollback) at a time. The open lock file, or None."""
-    import fcntl
     os.makedirs(paths.UPDATES_DIR, exist_ok=True)
     f = open(LOCK_PATH, "a+")
-    try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    if not compat.try_lock(f):
         f.close()
         return None
-    f.seek(0); f.truncate(); f.write(str(os.getpid())); f.flush()
+    try:
+        f.seek(0); f.truncate(); f.write(str(os.getpid())); f.flush()   # informational only
+    except OSError:
+        pass
     return f
 
 
@@ -211,7 +211,7 @@ def spawn_helper(action: str, *, previous: str | None = None, wait_pid: int | No
         args += ["--previous", previous]
     log = open(paths.UPDATE_LOG_PATH, "a")
     subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                     start_new_session=True, close_fds=True, cwd=os.path.expanduser("~"))
+                     close_fds=True, cwd=os.path.expanduser("~"), **compat.detached())
 
 
 def _log(msg: str) -> None:
@@ -219,13 +219,7 @@ def _log(msg: str) -> None:
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+    return compat.pid_alive(pid)
 
 
 def _wait_for_exit(pid: int, timeout: float = 60.0) -> None:
@@ -236,10 +230,7 @@ def _wait_for_exit(pid: int, timeout: float = 60.0) -> None:
             raise UpdateError(f"kcoderd (pid {pid}) did not exit")
         if not nudged and time.monotonic() > deadline - 30:
             _log(f"kcoderd {pid} still running; sending SIGTERM")
-            try:
-                os.kill(pid, 15)
-            except OSError:
-                pass
+            compat.terminate(pid)
             nudged = True
         time.sleep(0.2)
 
@@ -376,7 +367,7 @@ def helper_main(argv: list) -> int:
             try:
                 info = _running_daemon()
                 if info:
-                    os.kill(int(info["pid"]), 15)
+                    compat.terminate(int(info["pid"]))
                     _wait_for_exit(int(info["pid"]), 30)
                 new = head(root)
                 result["tried"] = new

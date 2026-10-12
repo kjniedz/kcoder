@@ -137,8 +137,11 @@ def reduce_motion() -> bool:
 def _animate(lines: list[str], console: Console) -> bool:
     """Sweep the letters in with a shimmer band. Any keypress skips to the
     end. Returns True if the final frame was drawn by the animation."""
-    import termios
-    import tty
+    try:
+        import termios
+        import tty
+    except ImportError:   # Windows: no animation, the static banner is drawn instead
+        return False
     from rich.live import Live
 
     fd = sys.stdin.fileno()

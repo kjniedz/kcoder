@@ -17,13 +17,19 @@ from __future__ import annotations
 
 import os
 
+_WINDOWS = os.name == "nt"
+
 CONFIG_DIR = os.path.join(
-    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "kcoder"
+    os.environ.get("XDG_CONFIG_HOME")
+    or (os.environ.get("APPDATA") if _WINDOWS else None)
+    or os.path.expanduser("~/.config"), "kcoder"
 )
 CREDENTIALS_PATH = os.path.join(CONFIG_DIR, "credentials.json")
 
 DATA_DIR = os.environ.get("KCODER_DATA_DIR") or os.path.join(
-    os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "kcoder"
+    os.environ.get("XDG_DATA_HOME")
+    or (os.environ.get("LOCALAPPDATA") if _WINDOWS else None)
+    or os.path.expanduser("~/.local/share"), "kcoder"
 )
 SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
 TOKEN_PATH = os.path.join(DATA_DIR, "token")

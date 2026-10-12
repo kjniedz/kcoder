@@ -24,6 +24,8 @@ Homepage = "https://github.com/kjniedz/kcoder"
 
 [project.optional-dependencies]
 app = ["pywebview>=5.0"]
+# Windows extras, installed best-effort by install.ps1: the terminal view (ConPTY)
+windows = ["pywinpty>=2.0"]
 
 [project.scripts]
 kcoder = "kcoder.cli:main"
@@ -33,4 +35,4 @@ kcoderd = "kcoder.daemon:main"
 include = ["kcoder*"]
 
 [tool.setuptools.package-data]
-kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.webmanifest", "web/vendor/*", "data/*.txt"]
+kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.webmanifest", "web/*.ico", "web/vendor/*", "data/*.txt"]

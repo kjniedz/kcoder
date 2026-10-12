@@ -6,19 +6,133 @@ from __future__ import annotations
 
 import base64
 import collections
-import fcntl
 import json
 import os
-import pty
 import signal
 import struct
-import termios
+import threading
 import time
+
+if os.name != "nt":
+    import fcntl
+    import pty
+    import termios
 
 SCROLLBACK_BYTES = 200_000
 
 
-class Shell:
+class _ShellBase:
+    """Scrollback and broadcasting shared by the POSIX pty and Windows ConPTY shells."""
+
+    def _on_data(self, data: bytes) -> None:
+        if not data:
+            self._exited()
+            return
+        self.buffer.append(data)
+        self.buffer_len += len(data)
+        while self.buffer_len > SCROLLBACK_BYTES and len(self.buffer) > 1:
+            self.buffer_len -= len(self.buffer.popleft())
+        self.manager.broadcast_raw(json.dumps({
+            "type": "shell", "sid": self.session.id, "data": base64.b64encode(data).decode(),
+        }), sid=self.session.id)
+
+    def _broadcast_exit(self) -> None:
+        self.manager.broadcast_raw(json.dumps({"type": "shell", "sid": self.session.id, "data": "", "exit": self.exit_code}),
+                                   sid=self.session.id)
+        if self.session.shell is self:
+            self.session.shell = None
+        self.manager.broadcast_sessions()
+
+    def scrollback(self) -> str:
+        return base64.b64encode(b"".join(self.buffer)).decode()
+
+    def detach(self) -> None:
+        self.owner = None
+
+
+class WindowsShell(_ShellBase):
+    """PowerShell in a ConPTY (pywinpty), read on a thread: the Windows event
+    loop has no add_reader for pipes."""
+
+    def __init__(self, manager, session, cols: int, rows: int, owner):
+        try:
+            from winpty import PtyProcess  # type: ignore
+        except ImportError:
+            raise RuntimeError("the terminal view needs pywinpty on Windows: pip install pywinpty")
+        self.manager = manager
+        self.session = session
+        self.owner = owner
+        self.buffer: collections.deque = collections.deque()
+        self.buffer_len = 0
+        self.exit_code = None
+        self._closed = False
+        env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", KCODER_SESSION=session.id)
+        env.pop("KCODER_DATA_DIR", None)
+        shell = "pwsh.exe" if _which("pwsh.exe") else "powershell.exe"
+        self.proc = PtyProcess.spawn([shell, "-NoLogo"], cwd=session.engine.cwd, env=env,
+                                     dimensions=(max(2, int(rows)), max(2, int(cols))))
+        self.pid = self.proc.pid
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self) -> None:
+        loop = self.manager.loop
+        while True:
+            try:
+                text = self.proc.read(65536)
+            except EOFError:
+                text = ""
+            except Exception:  # noqa: BLE001
+                text = ""
+            data = text.encode("utf-8", "replace") if isinstance(text, str) else (text or b"")
+            if self._closed:
+                return
+            loop.call_soon_threadsafe(self._on_data, data)
+            if not data and not self.proc.isalive():
+                return
+            if not data:
+                time.sleep(0.05)
+
+    def _exited(self) -> None:
+        if self._closed:
+            return
+        if self.proc.isalive():
+            return   # an empty read while still running; keep going
+        self._closed = True
+        self.exit_code = self.proc.exitstatus or 0
+        self._broadcast_exit()
+
+    def write(self, data: bytes) -> None:
+        try:
+            self.proc.write(data.decode("utf-8", "replace"))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def resize(self, cols: int, rows: int) -> None:
+        try:
+            self.proc.setwinsize(max(2, int(rows)), max(2, int(cols)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def close(self) -> None:
+        self._closed = True
+        try:
+            self.proc.terminate(force=True)
+        except Exception:  # noqa: BLE001
+            pass
+        if self.session.shell is self:
+            self.session.shell = None
+
+
+def _which(name: str) -> str | None:
+    import shutil
+    return shutil.which(name)
+
+
+def make_shell(manager, session, cols: int, rows: int, owner):
+    return (WindowsShell if os.name == "nt" else Shell)(manager, session, cols, rows, owner)
+
+
+class Shell(_ShellBase):
     def __init__(self, manager, session, cols: int, rows: int, owner):
         self.manager = manager
         self.session = session
@@ -54,16 +168,7 @@ class Shell:
             data = os.read(self.fd, 65536)
         except OSError:
             data = b""
-        if not data:
-            self._exited()
-            return
-        self.buffer.append(data)
-        self.buffer_len += len(data)
-        while self.buffer_len > SCROLLBACK_BYTES and len(self.buffer) > 1:
-            self.buffer_len -= len(self.buffer.popleft())
-        self.manager.broadcast_raw(json.dumps({
-            "type": "shell", "sid": self.session.id, "data": base64.b64encode(data).decode(),
-        }), sid=self.session.id)
+        self._on_data(data)
 
     def _exited(self) -> None:
         try:
@@ -79,11 +184,7 @@ class Shell:
             os.close(self.fd)
         except OSError:
             pass
-        self.manager.broadcast_raw(json.dumps({"type": "shell", "sid": self.session.id, "data": "", "exit": self.exit_code}),
-                                   sid=self.session.id)
-        if self.session.shell is self:
-            self.session.shell = None
-        self.manager.broadcast_sessions()
+        self._broadcast_exit()
 
     def write(self, data: bytes) -> None:
         try:
@@ -96,12 +197,6 @@ class Shell:
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", max(2, int(rows)), max(2, int(cols)), 0, 0))
         except OSError:
             pass
-
-    def scrollback(self) -> str:
-        return base64.b64encode(b"".join(self.buffer)).decode()
-
-    def detach(self) -> None:
-        self.owner = None
 
     def close(self) -> None:
         try:
@@ -132,7 +227,7 @@ def handle_request(manager, session, t: str, req: dict) -> dict:
     if t == "shell_open":
         cols, rows = int(req.get("cols") or 100), int(req.get("rows") or 30)
         if session.shell is None:
-            session.shell = Shell(manager, session, cols, rows, req.get("_client"))
+            session.shell = make_shell(manager, session, cols, rows, req.get("_client"))
             manager.broadcast_sessions()
             return {"opened": True}
         session.shell.resize(cols, rows)

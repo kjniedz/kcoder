@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 import anthropic
 import openai
 
+from . import compat
 from .tools import TOOLS
 
 ANTHROPIC_MAX_TOKENS = 64000
@@ -399,6 +400,7 @@ class OpenAIBackend:
 
 CLAUDE_BIN = "claude"
 _CLAUDE_FALLBACKS = [
+    "~/.local/bin/claude.exe", "~/AppData/Roaming/npm/claude.cmd",   # Windows: native installer, npm
     "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "~/.claude/local/claude",
     "~/.local/bin/claude", "~/.bun/bin/claude", "~/.npm-global/bin/claude",
 ]
@@ -433,7 +435,7 @@ def _spawn_claude(args: list, cwd: str, attempts: int = 4):
         try:
             return subprocess.Popen(
                 args, cwd=cwd, env=_claude_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, start_new_session=True,
+                stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **compat.own_group(),
             )
         except FileNotFoundError as exc:
             last = exc
@@ -575,8 +577,8 @@ def _when(ts: float | None) -> str:
     import datetime
     d = datetime.datetime.fromtimestamp(ts)
     today = datetime.date.today()
-    day = "today" if d.date() == today else ("tomorrow" if (d.date() - today).days == 1 else d.strftime("%a %b %-d"))
-    return f"{day} at {d.strftime('%-I:%M %p').lower()}"
+    day = "today" if d.date() == today else ("tomorrow" if (d.date() - today).days == 1 else f"{d:%a %b} {d.day}")
+    return f"{day} at " + f"{d.hour % 12 or 12}:{d:%M %p}".lower()   # no %-I: Windows strftime rejects it
 
 
 def plan_limit_message(scope: str, limit: str | None, resets_at: float | None, *, credits: bool) -> str:
@@ -837,9 +839,9 @@ def _prompt_text(msg: dict) -> str:
 
 
 def _kill(proc) -> None:
-    import signal
+    from . import compat
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
+        compat.kill_tree(proc.pid)
     except (ProcessLookupError, PermissionError, AttributeError):
         try:
             proc.terminate()

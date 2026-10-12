@@ -13,13 +13,13 @@ import hashlib
 import json
 import os
 import shlex
-import signal
 import socket
 import subprocess
 import tempfile
 import time
 
 from . import app as appmod
+from . import compat
 
 PORT_RANGE = (4300, 4399)
 IGNORED = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", ".nuxt", ".cache", ".kcoder", "target"}
@@ -117,7 +117,7 @@ class Preview:
         log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} kcoder preview: {cmd} (port {self.port})\n")
         log.flush()
         self.proc = subprocess.Popen(cmd, shell=True, cwd=self.spec.get("cwd") or self.cwd, env=env,
-                                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+                                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, **compat.own_group())
         self.started = time.time()
 
     def wait_ready(self, timeout: float = 60.0) -> bool:
@@ -136,19 +136,13 @@ class Preview:
     def stop(self) -> None:
         if self.proc is None:
             return
-        try:
-            os.killpg(self.proc.pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        compat.kill_tree(self.proc.pid)
         for _ in range(30):
             if self.proc.poll() is not None:
                 break
             time.sleep(0.1)
         if self.proc.poll() is None:
-            try:
-                os.killpg(self.proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+            compat.kill_tree(self.proc.pid, force=True)
         self.proc = None
 
     def info(self) -> dict:
@@ -200,7 +194,7 @@ def screenshot(url: str, path: str, width: int, height: int, timeout: int = 60, 
     # headless Chrome writes the file within seconds and then may linger (or
     # exit non-zero): wait for a stable file, then kill the whole process group
     try:
-        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **compat.own_group())
     except OSError:
         return False
     deadline = time.monotonic() + timeout
@@ -220,8 +214,5 @@ def screenshot(url: str, path: str, width: int, height: int, timeout: int = 60, 
                 break
             time.sleep(0.5)
     finally:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        compat.kill_tree(proc.pid, force=True)
     return os.path.isfile(path) and os.path.getsize(path) > 0

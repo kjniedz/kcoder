@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from . import auth, identity
+from . import auth, compat, identity
 from . import providers as _prov
 from .providers import PROVIDERS, claude_path, make_backend
 
@@ -105,13 +105,21 @@ def open_terminal(command: str, title: str = "kcoder setup") -> bool:
         script = f'tell application "Terminal"\n  activate\n  do script {_as_quote(command)}\nend tell'
         r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=20)
         return r.returncode == 0
+    if sys.platform == "win32":
+        # a new PowerShell window (the command strings are PowerShell on Windows)
+        try:
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", command],
+                             creationflags=0x00000010, close_fds=True)   # CREATE_NEW_CONSOLE
+            return True
+        except OSError:
+            return False
     for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
         exe = shutil.which(term)
         if exe:
             try:
                 subprocess.Popen([exe, "-e", f"bash -lc {shlex.quote(command + '; exec bash')}"],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 start_new_session=True)
+                                 **compat.detached())
                 return True
             except OSError:
                 continue
@@ -122,8 +130,21 @@ def _as_quote(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _ps(text: str) -> str:
+    """A PowerShell single-quoted string."""
+    return "'" + text.replace("'", "''") + "'"
+
+
+_PS_DONE = "Write-Host ''; Write-Host 'Done. You can close this window; kcoder picks it up by itself.'"
+
+
 def claude_install_command() -> str:
     """Install Claude Code with Anthropic's installer, then sign in."""
+    if compat.WINDOWS:
+        claude = os.path.expanduser(r"~\.local\bin\claude.exe")
+        return ("Clear-Host; Write-Host 'Installing Claude Code...'; irm https://claude.ai/install.ps1 | iex; "
+                "Write-Host ''; Write-Host 'Claude Code is installed. Signing you in: a browser window will open.'; "
+                f"Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue; & {_ps(claude)} auth login --claudeai; {_PS_DONE}")
     claude = os.path.expanduser("~/.local/bin/claude")
     return (f"clear; echo 'Installing Claude Code...'; curl -fsSL {CLAUDE_INSTALL_URL} | bash && "
             f"echo && echo 'Claude Code is installed. Signing you in: a browser window will open.' && "
@@ -137,7 +158,14 @@ def github_status(refresh: bool = False) -> dict:
 def gh_login_command() -> str:
     """Install gh if needed (Homebrew, else the release zip), sign in with the
     browser, and point git's https credentials at that account."""
-    arch = "arm64" if os.uname().machine == "arm64" else "amd64"
+    if compat.WINDOWS:
+        return ("Clear-Host; Write-Host 'Connecting GitHub: your browser will open to sign in.'; "
+                "if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Write-Host 'Installing the GitHub CLI...'; "
+                "winget install --id GitHub.cli -e --accept-source-agreements --accept-package-agreements; "
+                "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') }; "
+                "gh auth login --hostname github.com --git-protocol https --web --scopes user:email; gh auth setup-git --hostname github.com; "
+                "Write-Host ''; Write-Host 'GitHub connected. Go back to the kcoder app and click Check again.'")
+    arch = "arm64" if compat.machine() in ("arm64", "aarch64") else "amd64"
     install = (
         "if ! command -v gh >/dev/null 2>&1 && [ ! -x /opt/homebrew/bin/gh ] && [ ! -x \"$HOME/.local/bin/gh\" ]; then "
         "echo 'Installing the GitHub CLI...'; "
@@ -154,6 +182,10 @@ def gh_login_command() -> str:
 
 
 def gh_switch_command() -> str:
+    if compat.WINDOWS:
+        return ("Clear-Host; Write-Host 'Switching GitHub account: your browser will open to sign in.'; "
+                "gh auth login --hostname github.com --git-protocol https --web --scopes user:email; gh auth setup-git --hostname github.com; "
+                "Write-Host ''; Write-Host 'Done. Go back to the kcoder app and click Check again.'")
     return ("clear; echo 'Switching GitHub account: your browser will open to sign in.'; "
             "gh auth login --hostname github.com --git-protocol https --web --scopes user:email && gh auth setup-git --hostname github.com && "
             "echo && echo 'Done. Go back to the kcoder app and click Check again.'")
@@ -162,6 +194,10 @@ def gh_switch_command() -> str:
 def claude_login_command() -> str:
     """Sign in (or back in) with the Claude subscription, never an API key."""
     path = claude_path() or "claude"
+    if compat.WINDOWS:
+        return ("Clear-Host; Write-Host 'Connecting your Claude plan: a browser window will open. Sign in with your Claude account.'; "
+                "Remove-Item Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue; "
+                f"& {_ps(path)} auth login --claudeai; {_PS_DONE}")
     return (f"clear; echo 'Connecting your Claude plan: a browser window will open. Sign in with your Claude account.'; "
             f"env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN {shlex.quote(path)} auth login --claudeai; "
             f"echo; echo 'Done. You can close this window; kcoder picks it up by itself.'")

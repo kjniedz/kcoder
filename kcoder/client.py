@@ -21,7 +21,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect as ws_connect
 from websockets.sync.client import unix_connect
 
-from . import __version__, paths
+from . import __version__, compat, paths
 from .daemon import already_running, read_daemon_info
 
 
@@ -52,8 +52,8 @@ def spawn_daemon() -> None:
         stdin=subprocess.DEVNULL,
         stdout=log,
         stderr=log,
-        start_new_session=True,
         close_fds=True,
+        **compat.detached(),
         cwd=os.path.expanduser("~"),
     )
 

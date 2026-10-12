@@ -60,11 +60,17 @@ and a terminal view.
 
 ## Get kcoder (no terminal experience needed)
 
-On a Mac, open the Terminal app (press Cmd+Space, type Terminal, press
-Enter), paste this one line and press Enter:
+kcoder is a private repo, so you need a GitHub account that can see it.
+First get a copy: on the repo page click the green **Code** button, then
+**Download ZIP**, and unzip it (or clone it if you use git). The installer
+then sets everything up, including a git checkout in your home folder so
+`kcoder update` can pull new commits later.
+
+**Mac:** open the Terminal app (Cmd+Space, type Terminal, Enter) and run the
+installer from the folder you unzipped, for example:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kjniedz/kcoder/main/install.sh | bash
+bash ~/Downloads/kcoder-main/install.sh
 ```
 
 It installs Python if your Mac does not have it (your Mac asks for your
@@ -73,18 +79,46 @@ folder and opens it. Pin it: right-click the kcoder icon in the Dock, choose
 Options, then Keep in Dock. From then on you launch kcoder like any other
 app, and you can close the Terminal.
 
+**Windows 10 / 11:** open the unzipped folder, click the address bar, type
+`powershell` and press Enter, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+It installs Git and Python with winget if they are missing, clones kcoder to
+`%USERPROFILE%\kcoder` (a GitHub sign-in window opens the first time),
+installs kcoder into its own Python environment, adds the `kcoder` command
+to your PATH, puts **kcoder** in the Start Menu and on the Desktop, and opens
+it. Pin it: right-click kcoder in the Start Menu, Pin to taskbar. kcoder's
+files live in `%LOCALAPPDATA%\kcoder` and its settings and keys in
+`%APPDATA%\kcoder`.
+
+**"kcoder is not recognized as the name of a cmdlet..."** (or `command not
+found`) means the `kcoder` command was never installed or the terminal was
+opened before the installer added it to your PATH. Downloading the repo by
+itself does not install anything: run the installer above, then open a
+**new** terminal window. If PATH still does not pick it up, the full path
+works from any terminal: `%LOCALAPPDATA%\Programs\kcoder\venv\Scripts\kcoder.exe app`
+on Windows, `python3 -m kcoder app` on a Mac.
+
+On Linux, `bash install.sh` works the same way (kcoder goes into its own
+environment in `~/.local/share/kcoder-venv` and the command into
+`~/.local/bin`).
+
 The first time the app opens it asks you to **connect your AI**. Pick where
 your model lives and sign in once:
 
 - **Claude (your claude.ai subscription):** click "Install Claude Code and
-  sign in". A Terminal window opens and does the install, then your browser
+  sign in". A Terminal (on Windows, PowerShell) window opens and does the install, then your browser
   opens so you can sign in to your Claude account. Come back to the app and
   click "Check again". No API key and no per-token billing.
 - **Any other provider (Anthropic API, DeepSeek, Qwen, Kimi, GLM, MiniMax,
   Xiaomi MiMo):** click the "Get a key" link, copy the key from your account
   page, paste it into the app and click Connect. The key is checked against
-  the provider and saved on your Mac only, in
-  `~/.config/kcoder/credentials.json` (permissions `600`).
+  the provider and saved on your computer only, in
+  `~/.config/kcoder/credentials.json` (permissions `600`; on Windows
+  `%APPDATA%\kcoder\credentials.json`).
 
 You can connect more providers at any time from the command palette
 (Cmd+K, "connect your AI") and choose one per session. Then click **+ new**,
@@ -129,9 +163,14 @@ GitHub each commit shows your avatar.
 ```bash
 git clone https://github.com/kjniedz/kcoder.git
 cd kcoder
-pip install -e .
+pip install -e .            # Windows: pip install -e .[windows] (adds the terminal view)
 kcoder app        # or: kcoder (terminal), kcoder ui (browser tab)
 ```
+
+On Windows the Claude Code CLI uses Git for Windows' bash for its tools, and
+kcoder's own `run_bash` tool does too when it is installed (otherwise
+`cmd.exe`). The app opens in an Edge (or Chrome) app window, and the
+terminal view runs PowerShell.
 
 ## Setup
 

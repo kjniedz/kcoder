@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import paths
+from . import compat, paths
 
 STATE_PATH = os.path.join(paths.DATA_DIR, "remote.json")
 
@@ -96,7 +96,7 @@ class Remote:
         if self.state.get("relay") == relay and self.enabled():
             self.start()
             return self.status()
-        r = _call(relay, "POST", "/v1/installs", body={"name": os.uname().nodename})
+        r = _call(relay, "POST", "/v1/installs", body={"name": compat.hostname()})
         self.state = {"relay": relay, "install_id": r["install_id"], "install_token": r["install_token"]}
         save_state(self.state)
         self.start()

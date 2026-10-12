@@ -46,7 +46,7 @@ from websockets.asyncio.server import serve, unix_serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, chatlog, config, identity, paths, pricing, projects, repos, setup, stats, updater
+from . import __version__, auth, chatlog, compat, config, identity, paths, pricing, projects, repos, setup, stats, updater
 from . import checkpoints, hooks, review, routing
 from . import pr as prmod
 from . import preview as previewmod
@@ -401,21 +401,19 @@ class Manager:
         if not _pid_alive(pid):
             return
         try:
-            cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout
+            if compat.WINDOWS:
+                cmd = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True,
+                                     text=True, timeout=5).stdout.lower()
+            else:
+                cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout
         except (OSError, subprocess.TimeoutExpired):
             cmd = ""
-        if not any(k in cmd for k in ("claude", "kcoder", "/bin/sh", "bash", "zsh")):
+        if not any(k in cmd for k in ("claude", "kcoder", "/bin/sh", "bash", "zsh", "node.exe", "python")):
             log.warning("pid %d (noted for %s) is now %r; not touching it", pid, name, cmd.strip()[:60])
             return
         log.warning("killing orphaned turn process %d of %s: %s", pid, name, cmd.strip()[:80])
-        for sig_ in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(pid, sig_)
-            except (ProcessLookupError, PermissionError, OSError):
-                try:
-                    os.kill(pid, sig_)
-                except OSError:
-                    return
+        for force in (False, True):
+            compat.kill_tree(pid, force=force)
             for _ in range(20):
                 if not _pid_alive(pid):
                     return
@@ -2219,13 +2217,7 @@ def read_daemon_info() -> dict | None:
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+    return compat.pid_alive(pid)
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -2262,23 +2254,26 @@ async def _serve(host: str, port: int) -> None:
             pass  # not the main thread (embedded/tests) or Windows
 
     origins = [None] + sorted(allowed_origins(port))
-    sock_path = paths.SOCKET_PATH
-    try:
-        os.remove(sock_path)
-    except FileNotFoundError:
-        pass
-    old_umask = os.umask(0o177)   # the socket is created user-only
-    try:
-        unix_server = await unix_serve(
-            lambda ws: _handle(ws, manager, token), path=sock_path,
-            process_request=_unix_process_request, max_size=64 * 1024 * 1024, server_header=None,
-        ).__aenter__()
-    finally:
-        os.umask(old_umask)
-    try:
-        os.chmod(sock_path, 0o600)
-    except OSError:
-        pass
+    # a user-only Unix socket where the platform has them (not Windows: loopback TCP only)
+    sock_path = paths.SOCKET_PATH if hasattr(socket, "AF_UNIX") and not compat.WINDOWS else None
+    unix_server = None
+    if sock_path:
+        try:
+            os.remove(sock_path)
+        except FileNotFoundError:
+            pass
+        old_umask = os.umask(0o177)   # the socket is created user-only
+        try:
+            unix_server = await unix_serve(
+                lambda ws: _handle(ws, manager, token), path=sock_path,
+                process_request=_unix_process_request, max_size=64 * 1024 * 1024, server_header=None,
+            ).__aenter__()
+        finally:
+            os.umask(old_umask)
+        try:
+            os.chmod(sock_path, 0o600)
+        except OSError:
+            pass
     async with serve(
         lambda ws: _handle(ws, manager, token),
         host, port,
@@ -2291,7 +2286,8 @@ async def _serve(host: str, port: int) -> None:
                 "socket": sock_path}
         _atomic_write(paths.DAEMON_INFO_PATH, json.dumps(info))
         os.chmod(paths.DAEMON_INFO_PATH, 0o600)
-        log.info("kcoderd %s listening on ws://%s:%d/ws and %s (pid %d)", __version__, host, port, sock_path, os.getpid())
+        log.info("kcoderd %s listening on ws://%s:%d/ws%s (pid %d)", __version__, host, port,
+                 f" and {sock_path}" if sock_path else "", os.getpid())
         updates = asyncio.create_task(_update_loop(manager))
         prs = asyncio.create_task(_pr_loop(manager))
         sched = asyncio.create_task(_schedule_loop(manager))
@@ -2302,10 +2298,12 @@ async def _serve(host: str, port: int) -> None:
             task.cancel()
         manager.shutdown()
         server.close()
-        unix_server.close()
+        if unix_server is not None:
+            unix_server.close()
     for p in (paths.DAEMON_INFO_PATH, sock_path):
         try:
-            os.remove(p)
+            if p:
+                os.remove(p)
         except FileNotFoundError:
             pass
 

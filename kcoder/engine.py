@@ -349,9 +349,8 @@ class Engine:
             return False
         self.kill_requested = True
         try:
-            import os
-            import signal
-            os.killpg(proc.pid, signal.SIGKILL)
+            from . import compat
+            compat.kill_tree(proc.pid, force=True)
         except (ProcessLookupError, PermissionError, AttributeError):
             try:
                 proc.kill()

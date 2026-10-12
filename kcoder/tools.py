@@ -188,6 +188,29 @@ def list_dir(path: str = ".", cwd: str = ".") -> str:
 MAX_OUTPUT = 200_000
 
 
+def _windows_bash() -> str | None:
+    """Git for Windows' bash (what Claude Code uses on Windows). Not
+    System32\\bash.exe, which is WSL and sees a different filesystem."""
+    import shutil
+    for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramFiles(x86)", ""),
+                 os.path.expandvars(r"%LOCALAPPDATA%\Programs")):
+        p = os.path.join(base, "Git", "bin", "bash.exe") if base else ""
+        if p and os.path.isfile(p):
+            return p
+    found = shutil.which("bash")
+    return found if found and "system32" not in found.lower() else None
+
+
+def _shell_popen(command: str, cwd: str, env: dict):
+    from . import compat
+    common = dict(cwd=cwd, stdin=subprocess.DEVNULL, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **compat.own_group())
+    if compat.WINDOWS:
+        bash = _windows_bash()
+        if bash:
+            return subprocess.Popen([bash, "-lc", command], **common)
+    return subprocess.Popen(command, shell=True, **common)
+
+
 def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
              on_output=None, proc_slot=None, env: dict | None = None) -> str:
     """Run a shell command, streaming combined output through `on_output`
@@ -199,10 +222,7 @@ def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
         if env is None:
             from . import identity
             env = identity.git_env()
-        proc = subprocess.Popen(
-            command, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
-        )
+        proc = _shell_popen(command, cwd, env)
     except OSError as exc:
         return f"Error: {exc}"
     if proc_slot is not None:
@@ -212,17 +232,40 @@ def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
     deadline = time.monotonic() + (timeout or DEFAULT_BASH_TIMEOUT)
     timed_out = False
     killed = False
-    import select as _select
     fd = proc.stdout
+    if os.name == "nt":
+        # select() only works on sockets on Windows: read the pipe on a thread
+        import queue as _queue
+        import threading as _threading
+        q: _queue.Queue = _queue.Queue()
+
+        def _pump():
+            while True:
+                b = fd.read1(65536) if hasattr(fd, "read1") else fd.read(65536)
+                q.put(b)
+                if not b:
+                    return
+        _threading.Thread(target=_pump, daemon=True).start()
+
+        def _ready(wait):
+            try:
+                return q.get(timeout=wait)
+            except _queue.Empty:
+                return None
+    else:
+        import select as _select
+
+        def _ready(wait):
+            ready, _, _ = _select.select([fd], [], [], wait)
+            return os.read(fd.fileno(), 65536) if ready else None
     try:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
                 break
-            ready, _, _ = _select.select([fd], [], [], min(0.5, remaining))
-            if ready:
-                data = os.read(fd.fileno(), 65536)
+            data = _ready(min(0.5, remaining))
+            if data is not None:
                 if not data:
                     break
                 total += len(data)
@@ -235,7 +278,7 @@ def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
                         pass
             elif proc.poll() is not None:
                 # drain anything left
-                rest = fd.read()
+                rest = b"".join(iter(lambda: _ready(0.2) or b"", b"")) if os.name == "nt" else fd.read()
                 if rest:
                     chunks.append(rest)
                 break
@@ -244,8 +287,9 @@ def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
                 break
     finally:
         if timed_out or killed:
+            from . import compat
             try:
-                os.killpg(proc.pid, 9)
+                compat.kill_tree(proc.pid, force=True)
             except (ProcessLookupError, PermissionError):
                 proc.kill()
         try:

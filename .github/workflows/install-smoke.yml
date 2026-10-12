@@ -1,0 +1,67 @@
+name: install + smoke test
+
+# Windows and Linux: run the real installer from this checkout, prove `kcoder`
+# is on PATH in a fresh shell, then run scripts/smoke_test.py (isolated daemon,
+# fake claude CLI, no API keys). macOS is tested locally (runners cost 10x).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - install.ps1
+      - install.sh
+      - pyproject.toml
+      - scripts/smoke_test.py
+      - kcoder/compat.py
+      - kcoder/shell.py
+      - kcoder/tools.py
+      - kcoder/paths.py
+      - .github/workflows/install-smoke.yml
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install.ps1 (from this checkout, no app launch)
+        shell: powershell
+        env:
+          KCODER_NO_LAUNCH: "1"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+      - name: kcoder is recognized in a new shell (PATH from the registry)
+        shell: powershell
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          Get-Command kcoder | Format-List Source
+          kcoder --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Start Menu and Desktop shortcuts exist
+        shell: powershell
+        run: |
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\kcoder.lnk")) { Write-Error 'no Start Menu shortcut'; exit 1 }
+          if (-not (Test-Path "$HOME\Desktop\kcoder.lnk")) { Write-Error 'no Desktop shortcut'; exit 1 }
+      - name: Smoke test
+        shell: powershell
+        run: |
+          & "$env:LOCALAPPDATA\Programs\kcoder\venv\Scripts\python.exe" scripts\smoke_test.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run install.sh (from this checkout, no app launch)
+        env:
+          KCODER_NO_LAUNCH: "1"
+        run: bash install.sh
+      - name: kcoder is on PATH
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          kcoder --version
+      - name: Smoke test
+        run: ~/.local/share/kcoder-venv/bin/python scripts/smoke_test.py
