@@ -453,6 +453,11 @@ select:hover { border-color: var(--accent); }
 .badge.waiting { background: var(--accent-soft); color: var(--accent-text); }
 .badge.idle { color: var(--fg-mute); }
 .badge.error { background: rgba(248,113,113,.18); color: var(--red); }
+button.badge.error { border: none; cursor: pointer; font: inherit; font-size: 10px; } button.badge.error:hover { background: rgba(248,113,113,.32); }
+.pane-status .errlabel { color: var(--red); }
+.err-chip { background: rgba(248,113,113,.18); color: var(--red); border: none; border-radius: 8px; padding: 0 7px; font-size: 10.5px; }
+.errdlg .trail { margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; font-size: 11px; color: var(--fg-dim); background: var(--code-bg); padding: 6px 8px; border-radius: 4px; max-height: 240px; overflow: auto; }
+.note.err button { margin-left: 6px; font-size: 10.5px; padding: 0 6px; }
 .badge.pushed { color: var(--green); border: 1px solid rgba(74,222,128,.4); }
 .badge.local { color: var(--yellow); border: 1px solid rgba(251,191,36,.5); }
 .badge.archived { color: var(--fg-mute); border: 1px solid var(--line-2); }

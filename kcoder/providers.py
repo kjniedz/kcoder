@@ -825,6 +825,9 @@ class ClaudeCodeBackend:
             if "not logged in" in err.lower() or "login" in err.lower():
                 forget_claude_auth()
                 raise NotOnPlan("Claude Code is not signed in to your Claude account.")
+            if code in (143, -15, 137, -9):
+                raise RuntimeError(f"Claude Code was stopped from outside this turn ({'SIGKILL' if code in (137, -9) else 'SIGTERM'}, exit {code}): "
+                                   "another kcoderd instance, a kill command, or the system ended it. Nothing was re-run; send the message again.")
             raise RuntimeError(f"claude exited with {code}: {err[-600:] or 'no output'}")
 
 

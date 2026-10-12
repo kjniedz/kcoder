@@ -261,7 +261,12 @@ class Manager:
                     resume_text = chatlog.user_text(messages.pop())
                     was_busy = True
                 orphan = meta.pop("turn_pid", None)
-                if orphan:
+                owner = meta.pop("turn_daemon", None)
+                if orphan and _turn_owner_alive(owner):
+                    # another kcoderd (a test instance, or one we are replacing) is still running
+                    # that turn: it is not an orphan, leave it alone
+                    log.info("turn process %d of %s belongs to running kcoderd %s; not touching it", int(orphan), meta.get("name"), owner)
+                elif orphan:
                     self._kill_orphan(int(orphan), meta.get("name"))
                 info = meta.get("worktree")
                 if info and not wt.is_attached(info):
@@ -426,8 +431,10 @@ class Manager:
             return
         if pid:
             session.meta["turn_pid"] = pid
+            session.meta["turn_daemon"] = os.getpid()     # so a later daemon can tell an orphan from a live turn
         else:
             session.meta.pop("turn_pid", None)
+            session.meta.pop("turn_daemon", None)
         session.save_meta()
 
     def fallbacks(self, sid: str, tier: str) -> list:
@@ -2219,6 +2226,15 @@ def read_daemon_info() -> dict | None:
 
 def _pid_alive(pid: int) -> bool:
     return compat.pid_alive(pid)
+
+
+def _turn_owner_alive(owner) -> bool:
+    """True when the kcoderd that recorded a turn pid is still running and is not us."""
+    try:
+        owner = int(owner or 0)
+    except (TypeError, ValueError):
+        return False
+    return owner > 0 and owner != os.getpid() and _pid_alive(owner)
 
 
 def _port_open(host: str, port: int) -> bool:

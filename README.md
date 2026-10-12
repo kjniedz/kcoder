@@ -9,65 +9,52 @@
 ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝
 ```
 
-A terminal coding agent developed by Kyle Niedzwiecki. kcoder chats with you
-in your terminal and can actually **read/write files and run shell commands**
-in your current working directory - not just talk about it.
+**kcoder runs several coding agents at once on your own computer**, on your
+Claude subscription, each in its own copy of a project, and shows you all of
+them in one window. Developed by Kyle Niedzwiecki.
 
-Sessions live in a local daemon (`kcoderd`), so you can run many agents at
-once, detach and re-attach from any terminal, and nothing is lost if a
-terminal closes. The terminal client is one view onto the daemon; the
-kcoder app (`kcoder app`, or `kcoder ui` for a browser tab) is the other: a
-grid of live session panes, or 1 to 3 sessions side by side with project
-history, each pane switchable between a chat and a terminal rendering.
+- Every session reads and writes files and runs commands in a real folder on
+  your machine; nothing is simulated.
+- Sessions live in a small background service (`kcoderd`), so they keep
+  working when you close the window, and you can watch them from the app or
+  from a terminal.
+- Claude sessions run on your Claude plan only. kcoder never uses an API key
+  or extra-usage credits for them: at a plan limit the turn stops.
+- Each session works on its own git branch in its own worktree, with a diff
+  review, secret scanning, checkpoints you can undo to, and one-click
+  draft PRs, all as your own GitHub account.
 
-![Three chats side by side in the kcoder app](docs/chat-3-panes.png)
+![Three sessions side by side: one working with the live status line, one in terminal view](docs/chat-3-panes.png)
 
 <table>
 <tr>
-<td width="33%"><img src="docs/wall.png" alt="The wall: every live session as a pane"><br><sub><b>Wall</b>: every live session as a pane</sub></td>
+<td width="33%"><img src="docs/sessions.png" alt="The sessions grid: every live session as a pane"><br><sub><b>Sessions</b>: every live session as a pane, or 1 to 3 side by side</sub></td>
 <td width="33%"><img src="docs/changes.png" alt="Diff review: accept, edit or reject each hunk, then approve, merge or open a draft PR"><br><sub><b>Diff review</b>: accept, edit or reject each hunk, then approve, merge or open a PR</sub></td>
-<td width="33%"><img src="docs/stats.png" alt="Stats: tokens, commits, sessions and agent time by day, model, provider and project"><br><sub><b>Stats</b>: tokens, commits, sessions and agent time</sub></td>
+<td width="33%"><img src="docs/stats.png" alt="Stats: tokens, lines of code, commits, sessions, cache use and more"><br><sub><b>Stats</b>: tokens, lines of code, commits, cache use, activity</sub></td>
 </tr>
 </table>
 
-## Features
+## Contents
 
-- Interactive REPL with streamed, markdown-rendered responses
-- **Many sessions at once** - each session runs in the `kcoderd` daemon;
-  `kcoder ls` / `kcoder attach <id>` to move between them, and sessions
-  survive terminal closes, daemon restarts, and crashes (history is persisted)
-- **Live progress wheel** while the model works, showing elapsed time and a
-  running token estimate, then exact `in → out` token counts when it finishes
-- **Claude Code-style input** - bracketed paste means a paste never submits
-  by itself; big pastes collapse into a `[Pasted #1 · 142 lines]` chip
-  (Alt+E expands it for editing); Enter sends, Option+Enter inserts a
-  newline; Up recalls earlier prompts; `/` opens a command menu; anything
-  typed while the agent is busy lands in the next prompt
-- **Esc interrupts** the agent mid-turn without losing the session, so you can
-  redirect it; Ctrl+C once interrupts, twice detaches
-- **Headless one-shot mode** - `kcoder "task"` or `echo task | kcoder` runs a
-  single turn with no banner or prompts and exits 0 on success
-- **Image input** - drag an image file onto the prompt and it's sent to the
-  model as `[Image #1]` (works with vision-capable models)
-- Works on **any folder you can reach** - your current directory, or projects
-  in `~/Desktop`, `~/Downloads`, etc. (no sandbox)
-- **Multiple providers**: Anthropic (Claude), Xiaomi MiMo, DeepSeek, Qwen,
-  Kimi (Moonshot), GLM (Zhipu), MiniMax, and XiaoKai
-- Agentic tool use: `read_file`, `write_file`, `edit_file`, `list_dir`, `run_bash`
-- Safety prompts before any write, edit, or shell command (y/n approval)
-- Auto-approve mode via `--yes` / `-y` flag or the `/auto` command
-- Provider and model switching mid-session with `/provider` and `/model`
+1. [Get kcoder](#get-kcoder) (Mac, Windows, Linux)
+2. [First run](#first-run) (connect your Claude plan and GitHub)
+3. [The app](#the-app) (sessions, panes, inbox, tasks, stats, settings)
+4. [Working safely](#working-safely) (trust levels, review, checkpoints, secrets, plan-only billing)
+5. [Automation](#automation) (task queue, schedules, model routing, previews, phone approvals)
+6. [The terminal client](#the-terminal-client)
+7. [Updates, uninstall, troubleshooting](#updates-uninstall-troubleshooting)
+8. [For developers](#for-developers)
 
-## Get kcoder (no terminal experience needed)
+## Get kcoder
 
-kcoder is a private repo, so you need a GitHub account that can see it.
-First get a copy: on the repo page click the green **Code** button, then
-**Download ZIP**, and unzip it (or clone it if you use git). The installer
-then sets everything up, including a git checkout in your home folder so
-`kcoder update` can pull new commits later.
+kcoder is a private repo, so you need a GitHub account that can see it. Get a
+copy first: on the repo page click the green **Code** button, then **Download
+ZIP**, and unzip it (or clone it if you use git). The installer sets everything
+up, including a git checkout in your home folder so `kcoder update` can pull
+new commits later.
 
-**Mac:** open the Terminal app (Cmd+Space, type Terminal, Enter) and run the
-installer from the folder you unzipped, for example:
+**Mac.** Open the Terminal app (Cmd+Space, type Terminal, Enter) and run the
+installer from the folder you unzipped:
 
 ```bash
 bash ~/Downloads/kcoder-main/install.sh
@@ -76,11 +63,10 @@ bash ~/Downloads/kcoder-main/install.sh
 It installs Python if your Mac does not have it (your Mac asks for your
 password once), installs kcoder, puts **kcoder.app** in your Applications
 folder and opens it. Pin it: right-click the kcoder icon in the Dock, choose
-Options, then Keep in Dock. From then on you launch kcoder like any other
-app, and you can close the Terminal.
+Options, then Keep in Dock. From then on you launch kcoder like any other app.
 
-**Windows 10 / 11:** open the unzipped folder, click the address bar, type
-`powershell` and press Enter, then run:
+**Windows 10 / 11.** Open the unzipped folder, click the address bar, type
+`powershell`, press Enter, then run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
@@ -88,133 +74,259 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 It installs Git and Python with winget if they are missing, clones kcoder to
 `%USERPROFILE%\kcoder` (a GitHub sign-in window opens the first time),
-installs kcoder into its own Python environment, adds the `kcoder` command
-to your PATH, puts **kcoder** in the Start Menu and on the Desktop, and opens
-it. Pin it: right-click kcoder in the Start Menu, Pin to taskbar. kcoder's
-files live in `%LOCALAPPDATA%\kcoder` and its settings and keys in
-`%APPDATA%\kcoder`.
+installs kcoder into its own Python environment, adds the `kcoder` command to
+your PATH, puts **kcoder** in the Start Menu and on the Desktop, and opens it.
+Pin it: right-click kcoder in the Start Menu, Pin to taskbar. Files live in
+`%LOCALAPPDATA%\kcoder`, settings and keys in `%APPDATA%\kcoder`.
 
-**"kcoder is not recognized as the name of a cmdlet..."** (or `command not
-found`) means the `kcoder` command was never installed or the terminal was
-opened before the installer added it to your PATH. Downloading the repo by
-itself does not install anything: run the installer above, then open a
-**new** terminal window. If PATH still does not pick it up, the full path
-works from any terminal: `%LOCALAPPDATA%\Programs\kcoder\venv\Scripts\kcoder.exe app`
-on Windows, `python3 -m kcoder app` on a Mac.
-
-On Linux, `bash install.sh` works the same way (kcoder goes into its own
+**Linux.** `bash install.sh` works the same way: kcoder goes into its own
 environment in `~/.local/share/kcoder-venv` and the command into
-`~/.local/bin`).
+`~/.local/bin`.
 
-The first time the app opens it asks you to **connect your AI**. Pick where
-your model lives and sign in once:
+**"kcoder is not recognized as the name of a cmdlet"** (or `command not
+found`) means the `kcoder` command was never installed, or the terminal was
+opened before the installer added it to your PATH. Downloading the repo by
+itself installs nothing: run the installer, then open a **new** terminal
+window. The full path works from anywhere:
+`%LOCALAPPDATA%\Programs\kcoder\venv\Scripts\kcoder.exe app` on Windows,
+`python3 -m kcoder app` on a Mac.
 
-- **Claude (your claude.ai subscription):** click "Install Claude Code and
-  sign in". A Terminal (on Windows, PowerShell) window opens and does the install, then your browser
-  opens so you can sign in to your Claude account. Come back to the app and
-  click "Check again". No API key and no per-token billing.
-- **Any other provider (Anthropic API, DeepSeek, Qwen, Kimi, GLM, MiniMax,
-  Xiaomi MiMo):** click the "Get a key" link, copy the key from your account
-  page, paste it into the app and click Connect. The key is checked against
-  the provider and saved on your computer only, in
-  `~/.config/kcoder/credentials.json` (permissions `600`; on Windows
+## First run
+
+The first time the app opens it asks you to **connect your AI**:
+
+- **Claude, on your claude.ai subscription (recommended).** Click "Install
+  Claude Code and sign in". A Terminal (PowerShell on Windows) window installs
+  Claude Code, then your browser opens so you can sign in to your Claude
+  account. Come back to the app; it notices by itself. No API key, no
+  per-token billing.
+- **An API key instead** (Anthropic API, DeepSeek, Qwen, Kimi, GLM, MiniMax,
+  Xiaomi MiMo). Click the "Get a key" link, paste the key, click Connect. The
+  key is checked against the provider and saved on your computer only
+  (`~/.config/kcoder/credentials.json`, mode 600; on Windows
   `%APPDATA%\kcoder\credentials.json`).
 
-You can connect more providers at any time from the command palette
-(Cmd+K, "connect your AI") and choose one per session. Then click **+ new**,
-pick a folder or one of your GitHub repos, type what you want built, and
-watch it work.
+Then **connect GitHub** in the same dialog. Every commit kcoder makes,
+including commits Claude Code makes, is authored as the GitHub account signed
+into `gh` on that machine: never as kcoder, never as an AI, never as whatever
+your global git config says. Until GitHub is connected, commits are refused
+with a plain message rather than made under a fallback identity. The email
+defaults to your GitHub noreply address; a public email can be chosen in the
+dialog. No AI co-author trailers unless you set `ai_trailer`.
 
-## Commit identity
+Now click **+ new**, pick a folder or one of your GitHub repos, type what you
+want built, and watch it work.
 
-Every commit kcoder makes, including commits an agent makes inside a session
-and commits Claude Code makes on your Claude plan, is authored and committed
-as **the GitHub account signed into `gh` on that machine**. Never as kcoder,
-never as an AI, never as whatever the machine's global git config says. On
-GitHub each commit shows your avatar.
+## The app
 
-- The identity comes from `gh auth` (the active account in
-  `~/.config/gh/hosts.yml`), resolved to your id, name and public email and
-  cached so it works offline. Author and committer are set per commit through
-  `GIT_AUTHOR_*` / `GIT_COMMITTER_*`.
-- The email defaults to your GitHub noreply address
-  (`id+login@users.noreply.github.com`), which links commits to your profile
-  without exposing a personal address. If you have a public email on GitHub
-  you can pick it instead in the connect dialog (`commit_email: "public"`).
-- No AI co-author or "generated by" trailers by default. Set `ai_trailer` in
-  the connect dialog (or `~/.config/kcoder/config.json`) if you want one.
-- Not signed in? The first-launch "connect your AI" dialog has a **Connect
-  GitHub** button (installs the GitHub CLI if needed, signs in with the
-  browser, points git's https credentials at that account). Until then
-  commits are refused with a plain message rather than made under a
-  fallback identity. The same dialog is in the command palette (⌘K,
-  "connect GitHub").
-- Pushes use the same account's credentials (`gh auth setup-git`). Switch
-  accounts with `gh auth switch` or the dialog's Switch account, and the next
-  commit follows the new account.
-- Stats count commits for the signed-in account only, matched by author
-  email (noreply, public, or any verified email when the gh token has the
-  `user:email` scope, which the connect step requests). On an existing login
-  run `gh auth refresh -h github.com -s user:email` once to let kcoder see
-  your verified emails.
+`kcoder app` opens kcoder in its own window (the Dock icon does the same);
+`kcoder ui` opens it in a browser tab instead.
 
-## Install for developers
+**Header**, left to right: the KCODER banner (click it for About), the
+**sessions / tasks / stats** tabs (alt+1/2/3), a **search or run a command**
+field (the command palette, ⌘K), the **inbox** with a badge for everything
+waiting on you, and **+ new**. That is all the header ever holds. Everything
+informational sits in the one-line **status bar** at the bottom: daemon
+status, active sessions, tokens and commits today, the 7-day sparkline, your
+Claude plan status and the version. Each item clicks through to the right
+place.
+
+### Sessions
+
+The sessions tab shows every live session as a **grid** of panes, or **1, 2 or
+3 sessions side by side** with the project sidebar. The `grid / 1 / 2 / 3`
+picker above the sessions switches layouts (alt+g, ⌥⇧1/2/3). Drag a chat from
+the sidebar onto a pane, or click the pane's name to pick one. The layout is
+remembered.
+
+Every pane has its own input, model and trust pickers, and a **chat /
+terminal** toggle (v) that renders the same session as a plain transcript.
+Grid panes also cycle through a real **shell** (xterm.js in the session's
+folder) and the **live preview** of a web project. Broadcast (⇶, with 2 or 3
+panes) sends one prompt to every pane, handy for comparing models.
+
+While a session works, a **live status line** shows what is going on:
+`◐ Woobling… 4m 12s · ↑ 384k in · ↓ 4.8k out · thinking 12s · ctx 40% · esc
+to interrupt`. The verb rotates (with a "long haul" set after ten minutes),
+the time and token counts tick, the phase says whether it is thinking,
+running Bash, writing or compacting, and the context figure turns
+accent-coloured past 80%. Compacting, retries and approvals use plain wording.
+Runs of three or more tool calls fold into one row ("▸ 15 tool calls (reading
+files)") that expands on click and opens itself while a command is running.
+
+Status is readable from across the room: working, **waiting on you**
+(pulsing border), done, **error**. An error shows a red note with a
+**details** button (also on the sidebar badge, the pane status and the inbox)
+that explains what happened, lets you **send the prompt again**, and copies a
+report you can paste into a kcoder session to get it fixed.
+
+The sidebar lists live chats only; projects with nothing running and archived
+chats sit behind a "show N archived" link. Right-click a chat to rename, pin,
+archive, export or delete it. Transcripts are real text: select across
+messages, ⌘C copies clean markdown, ⌘F finds in a session, ⌘⇧F searches all
+of them, and files dropped on a pane attach to the prompt.
+
+Keys: <kbd>n</kbd> new session, <kbd>a</kbd> inbox, <kbd>w</kbd> next session
+waiting on you, <kbd>1</kbd> to <kbd>9</kbd> focus a grid pane, <kbd>esc</kbd>
+back to the grid or interrupt the focused session, <kbd>⌘K</kbd> palette,
+<kbd>⌘,</kbd> settings, <kbd>⌘/</kbd> the full shortcut sheet.
+
+### Inbox, tasks, stats, settings
+
+- **Inbox** (a): every pending tool approval and every session waiting for an
+  answer, from all sessions, in one list. <kbd>y</kbd> / <kbd>n</kbd> answer,
+  <kbd>a</kbd> approves all. Sessions in error show here too, with details.
+- **Tasks** (alt+2): a fleet-wide queue. Add a task with its repo, model and
+  trust level and it starts as soon as a slot is free, in its own worktree.
+  Finished tasks land in **review**; nothing is pushed on its own. Schedules
+  live here too (see [Automation](#automation)).
+- **Stats** (alt+3): today / 7-day / 30-day / all-time tokens, lines of code
+  (added, removed, net, files), commits, sessions, active agent time and an
+  API-equivalent estimate of what plan usage would have cost; daily token and
+  lines charts; breakdowns by model (aliases merged, with fresh input, cache
+  reads and writes, hit rate, lines and tokens per line), provider and
+  project; top sessions; an activity calendar with streaks; an hour-of-day
+  heatmap; parallelism, time waiting on you, tool usage with failure rates,
+  session health, records; and every commit made from a session with a GitHub
+  link. Every table sorts by column; the daily table exports CSV. Commits are
+  detected from local git, so it works offline and for private repos.
+- **Settings** (⌘,): theme, text font and size, sound, default trust, model
+  routing, review policy, auto-publish, daily spend cap, plus links to your
+  Claude plan, providers, GitHub and phone approvals, updates, restart,
+  shortcuts and uninstall. About (banner click, or the macOS menu) shows the
+  version and credits.
+
+### Multi-monitor
+
+Open the app in several windows and press <kbd>p</kbd> on panes to pin them to
+that window; a window with pins shows only those sessions.
+`?pin=name1,name2&view=wall` in the URL does the same for bookmarks.
+
+## Working safely
+
+**Trust levels** per session: `auto` (never ask; the default, change it in
+Settings), `write` (shell commands ask), `read` (writes and shell ask), `none`
+(everything asks). Approvals appear on the pane, in the inbox, and on your
+phone if you set that up.
+
+**Worktrees.** Every session in a git repo works on its own `kcoder/<name>`
+branch in its own worktree, so parallel sessions on one repo never touch each
+other's files (uncheck "worktree" in the new-session dialog or pass
+`--no-worktree` to work in place). A folder that is not a repo yet gets
+`git init` and an initial commit. Work gets back to the main branch through
+**merge** (`--no-ff`, aborts cleanly on conflict) or **open PR** (pushes and
+creates a **draft** PR with a description written from the session's work);
+**discard** deletes the worktree and branch. Archiving a session commits its
+work as a checkpoint on the branch; resuming recreates the worktree.
+
+**Diff review.** The **changes** view shows everything the session changed:
+accept, reject (undone in the worktree) or edit each hunk, then **approve**.
+The review policy (Settings) says when approval is required: before `push`
+(default; covers merges and PRs even with trust `auto`), before every
+`commit`, or `none`. It is enforced by git hooks in every worktree, so it
+applies to the agent's own `git push` too.
+
+**Checkpoints and undo.** Before every turn the worktree is snapshotted
+together with the conversation position. **↶ undo to here** on any of your
+messages restores both: files go back, later commits on the branch are
+undone, the conversation is cut there.
+
+**Secrets.** Every commit and push in a worktree is scanned for API keys and
+tokens, private keys, wallet seed phrases, `.env` and credential files. A hit
+blocks with a message naming the file and line, secret redacted. False
+positives go in `.kcoder/allowlist`. Detected secrets are masked in
+transcripts and exports too.
+
+**Plan only, never credits.** Claude sessions run on your Claude subscription
+and nothing else. Before every turn kcoder checks that Claude Code is signed
+in with your Claude account (not an API key or a cloud account) and strips
+`ANTHROPIC_API_KEY` and friends from its environment. When Claude Code
+reports a reached limit, or a turn switching to extra-usage credits, kcoder
+stops the turn at once and remembers that limit until it resets (per model,
+so Opus keeps working when the weekly Fable limit is used up). It never
+retries onto an API key. The status bar shows `plan ✓`, `plan limit` or
+`connect Claude`; click it to see the account and limits, reconnect, or
+clear a limit you reset yourself. In a terminal: `kcoder login` and `kcoder
+plan [--clear]`.
+
+**Daemon security.** `kcoderd` can run shell commands, so it treats every
+other app and web page on the machine as hostile: the CLI talks to it over a
+user-only Unix socket, the app over `127.0.0.1` only, with Host and Origin
+checks, `frame-ancestors 'none'`, and a per-install token
+(`~/.local/share/kcoder/token`, mode 600) on every connection. API keys are
+never written to logs or history.
+
+**Per-repo instructions.** Every turn loads the repo's `KCODER.md`, plus
+`AGENTS.md` and `CLAUDE.md` when present. The pane header shows which file is
+active; click it to edit or create one.
+
+## Automation
+
+- **Task queue**: described above. `max_concurrent` caps how many sessions
+  run at once; drag to reorder, pause, cancel.
+- **Schedules** (tasks tab): recurring jobs per repo (hourly, daily, weekly)
+  feed the queue. A job missed while the Mac slept runs once on wake. A run
+  that changed nothing just logs; one that did opens a draft PR or lands in
+  review.
+- **Model routing**: a session or task on **auto** (the default) gets a
+  cheaper model for small turns and a stronger one for large work (`sonnet` /
+  `opus` on your plan). Pick a concrete model to turn routing off.
+- **Fallback**: on a rate limit or outage the turn moves to the next
+  configured provider, never from your Claude plan to a paid API key, never
+  to a paid provider once the daily cap is reached.
+- **Live preview**: for web projects the pane's ▶ view starts the dev server
+  inside the session's worktree on its own port and shows it in the pane;
+  PRs of web projects get desktop and mobile screenshots.
+- **Phone approvals**: opt-in. Your Mac opens no port; `kcoderd` keeps one
+  outbound connection to a small relay you host (`relay/`, a Cloudflare
+  Worker with Web Push). Pair a phone by scanning a QR code; approvals expire
+  after ten minutes; revoking a device is one click.
+- **Daily spend cap**: sessions on paid API keys pause when today's spend
+  reaches it. **Context compaction**: when a prompt reaches `compact_at`
+  tokens (150k) the history is summarised before the next turn; `/compact`
+  does it on demand.
+- **Resilience**: sessions, queues and the window layout survive app crashes,
+  daemon restarts and reboots. A session that was mid-turn comes back
+  **paused** with its prompt behind a **resume** button; nothing is re-run
+  without you.
+
+## The terminal client
+
+Everything above also works from a terminal, against the same daemon:
 
 ```bash
-git clone https://github.com/kjniedz/kcoder.git
-cd kcoder
-pip install -e .            # Windows: pip install -e .[windows] (adds the terminal view)
-kcoder app        # or: kcoder (terminal), kcoder ui (browser tab)
+kcoder                      # new session in this directory (offers to attach if one exists here)
+kcoder "add tests for foo"  # one-shot: run one task, print the result, exit
+echo "task" | kcoder -y     # headless one-shot (tools allowed with -y; declined otherwise)
+kcoder --yes                # auto-approve mode
+kcoder --provider deepseek  # start with a specific provider; --model NAME for a model
+kcoder --name api-work      # name the session (default: directory name)
+kcoder ls                   # list every session; kcoder attach api-work; kcoder rm api-work
+kcoder app                  # open the app window; kcoder ui for a browser tab
+kcoder login                # connect or reconnect your Claude plan; kcoder plan shows limits
+kcoder daemon status        # start | stop | restart | status | install | uninstall
 ```
 
-On Windows the Claude Code CLI uses Git for Windows' bash for its tools, and
-kcoder's own `run_bash` tool does too when it is installed (otherwise
-`cmd.exe`). The app opens in an Edge (or Chrome) app window, and the
-terminal view runs PowerShell.
+The prompt behaves like Claude Code's: Enter sends, Option+Enter inserts a
+newline, pastes never submit by themselves (big ones become a chip, Alt+E
+expands it), Up recalls earlier prompts, `/` opens the command menu, Esc
+interrupts (Ctrl+C twice detaches). Drag an image onto the prompt to send it
+to the model; drag a folder to work there, or use `/cd`. Leaving with `/exit`
+detaches; the session keeps running and `kcoder attach` brings it back.
+`/close` ends it. Slash commands: `/model`, `/provider`, `/trust`, `/auto`,
+`/queue`, `/fork`, `/compact`, `/export`, `/archive`, `/name`, `/title`,
+`/grid`, `/panes N`, `/terminal`, `/shell`, `/help`.
 
-## Setup
-
-**Using your Claude plan (default):** if the Claude Code CLI (`claude`) is
-installed and signed in, kcoder uses it as its default provider. Turns run
-through `claude -p` on your Claude subscription, with no API keys and no
-per-token billing, and Claude Code runs the tools itself (its own
-Read/Write/Edit/Bash, with your trust level mapped onto its permission
-modes). The "cost" shown for these sessions is what the calls would have
-cost on the API, for reference.
-
-**Plan only, never credits:** Claude sessions only ever run on your Claude
-subscription. Before every turn kcoder checks that Claude Code is signed in
-with your Claude account (not an API key, Console key or cloud account), and
-it strips `ANTHROPIC_API_KEY` and similar variables from Claude Code's
-environment. When Claude Code reports that a limit is reached, or that a
-turn has switched to extra usage credits, kcoder stops the turn at once,
-records the limit until it resets (only that model's limit, so Opus keeps
-working when the weekly Fable limit is used up) and never retries, falls
-back to an API key or spends credits. The status bar shows `plan ✓`,
-`plan limit` or `connect Claude`; click it to see the account and limits,
-reconnect with one click, or clear a limit you reset yourself. In a
-terminal: `kcoder login` (connect or reconnect) and `kcoder plan`
-(`--clear` after a reset).
-
-**Using API keys instead:** sign in from the app (command palette, "connect
-your AI"), or run `kcoder --provider anthropic` (or any other provider) once
-in a terminal. The terminal flow shows a provider picker and walks you
-through a one-time connection: it opens the provider's API-key page in your
-browser, you paste the key, it is validated and saved to
-`~/.config/kcoder/credentials.json` (permissions `600`). For Anthropic you
-can alternatively sign in with your browser. If the Anthropic CLI (`ant`)
-is not installed yet, kcoder offers to install it for you via
-`brew install anthropics/tap/ant` and then launches the sign-in.
-
-After that, `kcoder` starts straight into the chat with your last-used
-provider. Keys for each provider are remembered separately, so switching
-back and forth never re-asks. To wipe everything, run `kcoder --logout`.
+While it works, a spinner shows the elapsed time and a live token estimate;
+when the turn finishes kcoder prints the exact counts (`✓ 4.2s · 12,043 in →
+587 out tokens`). The banner animation respects "reduce motion" and
+`KCODER_NO_ANIMATION=1`; `NO_COLOR` turns colour off.
 
 ### Providers
 
 | Provider | id | Default model | Env var (optional) |
 |---|---|---|---|
-| Claude Code (your Claude plan) | `claude` | `opus` | - (uses the `claude` CLI login) |
+| Claude Code (your Claude plan) | `claude` | `opus` | - (uses the `claude` login) |
 | Anthropic (Claude) | `anthropic` | `claude-opus-4-8` | `ANTHROPIC_API_KEY` |
 | Xiaomi MiMo | `xiaomi` | `MiMo-V2.5-Pro` | `XIAOMI_MIMO_API_KEY` |
 | DeepSeek | `deepseek` | `deepseek-chat` | `DEEPSEEK_API_KEY` |
@@ -224,504 +336,59 @@ back and forth never re-asks. To wipe everything, run `kcoder --logout`.
 | MiniMax | `minimax` | `MiniMax-M2` | `MINIMAX_API_KEY` |
 | XiaoKai | `xiaokai` | `xiaokai` | `XIAOKAI_API_KEY` |
 
-Anthropic models include `claude-fable-5` (Anthropic's most capable model),
-`claude-opus-4-8`, `claude-sonnet-4-6`, and `claude-haiku-4-5-20251001`.
-Switch with `/model`. When using Fable, kcoder automatically enables a
-server-side fallback to Opus 4.8, so if Fable's safety classifiers decline
-a benign request the answer is re-served by Opus inside the same call
-(kcoder prints a dim note when that happens).
+If a provider's env var is set it takes priority over saved credentials.
+`KCODER_MODEL` picks the startup model, `KCODER_BASH_TIMEOUT` (120) the shell
+tool's timeout.
 
-If a provider's env var is set, it takes priority over saved credentials.
+## Updates, uninstall, troubleshooting
 
-Optional environment variables:
+**Updates.** kcoder runs from your git checkout. When the daemon starts (and
+once a day) it fetches the upstream branch; the app offers new commits and
+the status bar shows "N new commits" until you take them. Accepting pulls,
+reinstalls or rebuilds what changed, checks that the new code imports, and
+restarts kcoderd; if the new daemon does not come up healthy the checkout is
+reset to the previous commit. `kcoder update` lists, `kcoder update --now`
+takes. Local changes block the pull; nothing is overwritten.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `KCODER_MODEL` | provider default | Model used at startup |
-| `KCODER_BASH_TIMEOUT` | `120` | Default `run_bash` timeout (seconds) |
-| `KCODER_NO_ANIMATION` | unset | Disable the banner reveal animation |
-| `NO_COLOR` | unset | Disable all colour output |
+**Keep the daemon alive.** `kcoder daemon install` registers kcoderd as a
+login item, so it is up when you open the app and comes back after a crash.
+Without it the daemon starts on demand and a stopped daemon stays stopped
+until the app or the CLI starts it.
 
-## Usage
+**Uninstall.** `kcoder uninstall` removes the app, the login item, the daemon,
+caches and the package; it keeps session history and keys unless told
+otherwise. `--dry-run` prints what it would do.
 
-```bash
-kcoder                      # new session in this directory (offers to attach if one exists here)
-kcoder "add tests for foo"  # one-shot: run one task, print the result, exit
-echo "task" | kcoder -y     # headless one-shot (tools allowed with -y; declined otherwise)
-kcoder --yes                # auto-approve mode: runs tools without asking
-kcoder --no-banner          # skip the startup banner (NO_COLOR is respected too)
-kcoder --provider deepseek  # start with a specific provider
-kcoder --model NAME         # start with a specific model
-kcoder --name api-work      # name the session (default: directory name)
-kcoder --new                # always start fresh, don't offer to attach
-kcoder --logout             # forget all saved credentials
+**"kcoderd not running"** in the status bar: the app's window starts it again
+by itself; a browser tab cannot, so run `kcoder app`. The Claude plan button
+shows `plan ?` meanwhile; Claude is fine, the app just cannot reach kcoderd.
 
-kcoder ls                   # list every session in the daemon
-kcoder attach api-work      # attach to a session by name or id prefix
-kcoder rm api-work          # close and delete a session
-kcoder app                  # open the app in its own window
-kcoder app --install        # macOS: install kcoder.app (Spotlight, Launchpad, Dock)
-kcoder ui                   # open the app in a browser tab instead
-kcoder daemon status        # start | stop | restart | status | run | install | uninstall
-```
+**A session shows ERROR.** Click **details** (on the red note, the sidebar
+badge, the pane status or in the inbox). It shows the error, the last things
+the turn did, a **send again** button, and **copy report** for a bug report.
+Logs: `~/.local/share/kcoder/daemon.log` and
+`~/.local/share/kcoder/sessions/<id>/events.jsonl`.
 
-## The app
+**"Claude Code was stopped from outside this turn (SIGTERM)"** means something
+ended the `claude` process while it worked: a kill command, the system, or
+another kcoderd instance. Nothing was re-run; send the message again.
 
-`kcoder app` opens the web app in its own window instead of a browser tab.
-It starts `kcoderd` if it isn't running, attaches the daemon token, and picks
-the best window it can:
-
-1. a native window with the kcoder icon and name in the Dock and menu bar
-   (`pywebview`, installed by default on macOS; `pip install pywebview`
-   elsewhere). It runs as its own process, so the terminal is free;
-2. otherwise Chrome, Brave, Edge, Chromium or Vivaldi in app mode: a
-   chromeless window with its own profile (`kcoder app --chrome` forces this);
-3. otherwise your default browser (`kcoder app --browser` forces this).
-
-On macOS, `kcoder app` always goes through `~/Applications/kcoder.app`
-(installed or refreshed automatically; `kcoder app --install` does it by
-hand). The bundle carries its own copy of the Python interpreter, so the
-window belongs to kcoder.app rather than to Python: the Dock shows the kcoder
-icon and name, right-click → Options → **Keep in Dock** pins it, and
-Spotlight and Launchpad find it. Launching it from the Dock does exactly what
-`kcoder app` does: it starts `kcoderd` if needed and opens the window.
-`kcoder app --uninstall` removes it.
-
-`kcoder daemon install` registers `kcoderd` as a login item (launchd), so the
-daemon is already up when you open the app and comes back after a crash.
-`kcoder daemon stop` / `start` / `restart` keep working either way, and
-`kcoder daemon uninstall` goes back to starting the daemon on demand.
-
-The page is also an installable web app (it ships a manifest and icons), so
-"Install app" in Chrome or "Add to Dock" in Safari works too.
-
-The app and the daemon exchange versions when they connect. When they differ
-(a new version was installed under a running daemon) the app restarts the
-daemon itself as soon as no session is mid-turn, instead of surfacing
-protocol errors; the CLI does the same. `kcoder daemon status` just reports
-the mismatch.
-
-## Updates
-
-kcoder runs from your git checkout. When the daemon starts (and once a day)
-it fetches the upstream branch and counts new commits; the app offers them
-when it opens, and the status bar shows "N new commits" until you take them.
-Accepting pulls with `git pull --ff-only`, reinstalls when `pyproject.toml`
-changed, rebuilds kcoder.app when its files changed, checks that the new code
-imports, and restarts kcoderd. If the new daemon does not come up healthy the
-checkout is reset to the previous commit and the daemon restarts on it.
-Working sessions are interrupted and come back paused.
-
-- `kcoder update` lists new commits; `kcoder update --now` takes them.
-- Local uncommitted changes or unpushed commits block the pull (nothing is
-  overwritten).
-
-## Uninstall
-
-`kcoder uninstall` (or ⌘K → **uninstall kcoder…**) removes the app, the
-login item, the daemon, caches and the Python package. It asks before
-deleting session history and saved keys and keeps both by default, so a
-reinstall picks up where you left off. `kcoder uninstall --dry-run` prints
-the script it would run.
-
-## Working from GitHub
-
-In the app's "new session" dialog the repo field accepts a local path,
-`owner/name`, or a GitHub URL, and lists your local repos plus your GitHub
-repos via the `gh` CLI. A GitHub repo is cloned into `projects_dir`
-(`~/kcoder-projects` by default) the first time; after that the existing
-clone is reused and fast-forwarded from its remote before the session starts
-(skipped, with a note in the session log, if the tree is dirty or offline).
-Every session in a git repo also has a `⇣ pull` button (and a "pull from
-remote" palette entry) for a fast-forward pull while it is idle. Local
-folders with no remote get a private GitHub repo created and pushed only if
-you turn `auto_publish` on (it is off by default; ⌘K → toggle auto-publish).
-
-The first `kcoder` command starts `kcoderd` in the background automatically.
-Leaving a session with `/exit` or Ctrl+D **detaches** - the session keeps
-running in the daemon and you can come back to it with `kcoder attach`. Use
-`/close` to end a session for good.
-
-Then just talk to it:
-
-```
-you> add a --verbose flag to scripts/deploy.py and run the tests
-```
-
-kcoder will read files, make edits (asking for approval first), run commands,
-and keep going until the task is done.
-
-While it works, a spinner shows the elapsed time and a live token estimate for
-the current turn; when the turn finishes, kcoder prints the exact prompt and
-response token counts (e.g. `✓ 4.2s · 12,043 in → 587 out tokens`). Press
-**Esc** (or Ctrl+C) to interrupt the agent mid-turn - the session and its
-history survive, so you can just tell it what to do differently. Ctrl+C a
-second time detaches.
-
-### The prompt
-
-| Key | Action |
-|---|---|
-| Enter | send |
-| Option+Enter | insert a newline (for Shift+Enter, set your terminal to send Option+Enter for it, as Claude Code's `/terminal-setup` does) |
-| Up / Down | recall earlier prompts (on the first / last line) |
-| paste | never submits by itself; 3+ lines or 400+ chars become a `[Pasted #N · L lines]` chip |
-| Alt+E | expand the paste chip under the cursor so you can edit it |
-| `/` | slash-command menu with autocomplete (Tab / arrows to pick) |
-| Ctrl+C | clear the line; twice on an empty line to detach |
-
-### Headless / one-shot
-
-When stdout isn't a terminal (another program's shell tool, a pipe, CI) kcoder
-prints nothing decorative. Give it a task and it runs one turn, streams the
-answer to stdout, sends tool activity and errors to stderr, and exits 0 on
-success:
+## For developers
 
 ```bash
-kcoder "summarize what this repo does"
-echo "run the tests and fix the failures" | kcoder -y
+git clone https://github.com/kjniedz/kcoder.git
+cd kcoder
+pip install -e .            # Windows: pip install -e .[windows] (adds the terminal view)
+kcoder app                  # or: kcoder (terminal), kcoder ui (browser tab)
+python scripts/smoke_test.py   # isolated daemon, fake claude, no plan usage
 ```
 
-Tool approvals are declined unless `-y` is given (nobody is there to answer).
-The one-shot session is deleted afterwards; pass `--keep` to keep it. With no
-task at all, kcoder prints a one-line usage hint and exits 0.
-
-### Banner
-
-The KCODER banner fades from kcoder's light blue into deep violet (truecolor,
-with 256- and 16-colour fallbacks), sweeps in over ~300ms on launch (any key
-skips it; it's off when not a TTY, when the OS "reduce motion" setting is on,
-or with `KCODER_NO_ANIMATION=1`), and shows a rotating tagline plus a live
-line from the daemon like `4 sessions, 2 running · 1 waiting on you · $3.12
-today`. Under 80 columns, or when re-attaching, it's a one-line wordmark.
-Edit `~/.config/kcoder/config.json` to change the taglines or turn the banner
-or animation off. The banner colour is brand, not state - errors and statuses
-are coloured elsewhere.
-
-**Images:** drag an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) onto
-the prompt - optionally with a question - and kcoder attaches it to your
-message as `[Image #1]` and sends it to the model. You can include several
-images in one message; they're numbered in order. Other dragged file or folder
-paths are kept as clean text in your message (escaped spaces and brackets are
-tidied up automatically), so the agent can read them with its tools.
-
-### Working on a folder
-
-kcoder isn't sandboxed to the directory you start it in - it can read and write
-anywhere your user account can, including projects in `~/Desktop` and
-`~/Downloads`. There are two easy ways to point it at a project:
-
-- **Start kcoder inside the project** (recommended - the agent treats it as home):
-
-  ```bash
-  cd ~/Downloads/my-project && kcoder
-  ```
-
-- **Switch directories from inside a session** with `/cd`:
-
-  ```
-  you> /cd ~/Downloads/my-project   # change the working directory
-  you> /cd                          # back to your home directory
-  ```
-
-- **Drag and drop the folder onto the prompt.** Most terminals paste the
-  folder's absolute path. If you drop a folder on its own line, kcoder offers
-  to switch the working directory to it; otherwise just reference the path in
-  your message:
-
-  ```
-  you> set up tests for the project at /Users/you/Downloads/my-project
-  ```
-
-  Quoted paths and backslash-escaped spaces (how terminals encode folders with
-  spaces in the name) are handled automatically, and because kcoder captures
-  full multi-line pastes, dropping a path mid-sentence won't break your prompt.
-
-After a `/cd`, every new request runs against the new directory - the agent's
-tools and shell commands all operate from there.
-
-### Commands
-
-| Command | Action |
-|---|---|
-| `/exit`, `/quit` | Detach; the session keeps running in kcoderd |
-| `/close` | End this session and detach |
-| `/clear` | Reset conversation history |
-| `/cd [path]` | Change working directory (no arg → home; or drag a folder in) |
-| `/provider` | List providers and pick one interactively |
-| `/provider deepseek` | Switch provider immediately (asks for a key the first time) |
-| `/model` | List the active provider's models and pick one |
-| `/model deepseek-reasoner` | Switch model immediately (any name accepted) |
-| `/auto` | Toggle auto-approve for tool execution |
-| `/name [name]` | Rename this session |
-| `/sessions` | List all sessions in the daemon |
-| `/help` | List commands |
-
-Switching providers clears the conversation history (the two API families
-store history in different formats).
-
-## The web app
-
-```bash
-kcoder ui        # opens http://127.0.0.1:47321/ with the daemon token attached
-```
-
-The header holds navigation and the things you act on, nothing else: the
-compact KCODER banner (click it for About), the **Sessions / Tasks / Stats**
-tabs (<kbd>alt+1/2/3</kbd>), a **search or run a command** field (the
-command palette, <kbd>⌘K</kbd>), the **inbox** with a badge for everything
-waiting on you, and **+ new**. Everything informational sits in a one-line
-status bar at the bottom: daemon status, active sessions, tokens and commits
-today, the 7-day sparkline, your Claude plan status and the version; each
-item clicks through to the sessions, stats, the plan dialog or settings
-(<kbd>⌘,</kbd>). Settings has the theme, the text font (any installed
-family, or the system monospace) and text size, sound, trust, routing,
-review policy, auto-publish and the spend cap, and carries the version and copyright; the
-macOS menu's About kcoder opens the same About panel. Rule: every header
-control has a label or a tooltip, and nothing new goes in the header without
-something coming out.
-
-- **Sessions** is the grid of every live session, or **1, 2 or 3 sessions
-  side by side** in equal panes: the `grid / 1 / 2 / 3` picker above the
-  sessions switches layouts (`alt+g`, `⌥⇧1/2/3`, `/panes 2`), `⌘\` adds a
-  pane, `⌘1/2/3` focuses one, `⌘⇧W` closes it, `⌘⇧↩` pops the focused pane
-  out to fill the window and back, and `⌃⌘F` is native full screen. Put a
-  session in a pane by dragging it from the sidebar or clicking the pane's
-  name. Every pane has its own input, model, trust, toolbar (which collapses
-  into the `⋯` menu when the pane is narrow), streaming, and a **chat /
-  terminal** toggle in its header (<kbd>v</kbd>, or `/terminal`) that renders
-  the same session as a transcript instead of chat bubbles (grid panes also
-  cycle through the shell and the live preview). The layout is remembered
-  across restarts. Broadcast (`⇶` next to the picker, shown with 2 or 3
-  panes) sends one prompt to every open pane, handy for comparing models.
-- **A live status line while a turn runs**: `◐ Woobling… 4m 12s · ↑ 384k in ·
-  ↓ 4.8k out · thinking 12s · ctx 40% · esc to interrupt`, with a playful
-  verb that rotates every few seconds (a "long haul" set after ten minutes),
-  the turn's elapsed time and token counts ticking live, the current phase
-  (thinking, running Bash, writing, compacting), and context usage that turns
-  accent-coloured past 80%. Compacting, retries and approvals use plain
-  wording instead of a verb; the spinner is static under reduced motion. The
-  sidebar shows a compact version for each running session. The verb lists
-  are `WORK_VERBS` and `LONG_HAUL_VERBS` at the top of the indicator code in
-  `kcoder/web/app.js`.
-- **Tool calls stay out of the way**: three or more consecutive tool calls
-  fold into one row ("▸ 15 tool calls (reading files)") that expands on
-  click, opens itself while a command is still running, and flags failures.
-  The sidebar lists only live chats; projects with nothing running and
-  archived chats sit behind a "show N archived" link at the bottom.
-- **Transcripts are real text**: drag-select across messages, `⌘A` selects
-  the focused pane's transcript, `⌘C` copies clean text (whole messages copy
-  as their markdown source, code fences included), and every message has a
-  hover copy button. Selections survive streaming; if you scroll up while the
-  agent is writing, a "jump to latest" button appears instead of yanking you
-  down. `⌘F` finds inside a session, `⌘⇧F` searches across sessions, and you
-  can drop files onto a pane to attach them to the prompt.
-- **If kcoderd stops** (a restart that did not come back, a crash), the
-  status bar says "kcoderd not running"; the kcoder.app window starts it
-  again by itself, a browser tab tells you to run `kcoder app`. The Claude
-  plan button shows `plan ?` meanwhile rather than claiming Claude is
-  disconnected. `kcoder daemon install` keeps kcoderd alive from login so
-  this rarely matters.
-- **Stats** (the status bar numbers, or `alt+3`): today / 7-day / 30-day / all-time
-  tokens, lines of code (added, removed, net, files changed), commits,
-  sessions, active agent time and an API-equivalent estimate; a sortable daily
-  table
-  with CSV export; daily token and lines-added-vs-removed charts over 7 / 30 /
-  90 days; breakdowns by model (aliases and full ids merged into one row, with
-  fresh input, cache reads and writes, hit rate, lines and tokens per line),
-  provider (subscription vs API key) and project; top sessions by tokens; an
-  activity calendar for the last year with streaks; an hour-of-day heatmap;
-  parallelism, time waiting on you, tool usage with failure rates, session
-  health, records and the most-shown working verb; every table sortable; and
-  every commit made from a kcoder session with its repo, session, lines
-  changed, files, pushed-or-local state and a
-  GitHub link. Commits are detected from local git at turn boundaries, so it
-  works offline and for private repos. History lives in
-  `~/.local/share/kcoder/usage.jsonl` and `commits.jsonl`, survives daemon
-  restarts and updates, is backfilled from session logs, and rolls over at
-  local midnight. Sessions that are not in the focused pane raise a macOS
-  notification when they finish or need you.
-- **Wall** - a dense tiled grid of live panes, one per session, auto-reflowing
-  as sessions come and go. Each pane has a title bar (name, repo @ branch,
-  model, status dot), a live feed, and a status line (context used, tokens,
-  cost, last activity). Status is readable from across the room: working,
-  **waiting on you** (bright pulsing border), done, error, paused. Click a
-  pane (or press its number) to focus it full-size with its composer and
-  actions; <kbd>esc</kbd> goes back to the grid; <kbd>w</kbd> cycles through
-  sessions waiting on you; <kbd>v</kbd> flips a pane between chat, terminal,
-  and a real shell (xterm.js) in that session's working directory.
-- **Chat** - project sidebar on the left with every chat (active and
-  archived), full-text search, rendered markdown, syntax-highlighted code
-  with copy buttons, collapsible tool call / result blocks, inline diffs for
-  edits, live output for running commands (with a kill button), and per-message
-  edit-and-resend / fork. Right-click a chat to rename, pin, archive, export,
-  or delete it.
-- **Terminal** - the same session rendered exactly like the CLI.
-
-Everywhere: <kbd>n</kbd> new session - pick a repo from the list of local
-git repos and your GitHub repos (via `gh`), or type `owner/name` / a GitHub
-URL and it's cloned into `~/kcoder-projects` on first use - plus model,
-trust level, initial task, follow-up tasks, worktree on/off; <kbd>a</kbd> the approval
-inbox aggregating pending tool approvals and sessions waiting for an answer
-from every session (<kbd>y</kbd> / <kbd>n</kbd> / <kbd>a</kbd> for all),
-<kbd>⌘K</kbd> the command palette,
-<kbd>?</kbd> keyboard help. The composer behaves like the CLI: Enter sends,
-Shift+Enter newlines, pastes never submit (big ones become chips), images can
-be pasted or dropped, `/` opens the command menu, `@` fuzzy-completes project
-files, <kbd>↑</kbd> recalls prompts, <kbd>esc</kbd> interrupts. A browser
-notification and a soft sound fire when a session blocks on you or finishes.
-
-**Multi-monitor:** open the app in several windows and press <kbd>p</kbd>
-(or the pin icon) on panes to pin them to that window; a window with pins
-shows only those sessions. `?pin=name1,name2&view=wall` in the URL does the
-same for bookmarks.
-
-### Worktrees, merge, PR, discard
-
-Every session in a git repo works in its own git worktree on its own
-`kcoder/<name>` branch, so parallel sessions on the same repo never touch
-each other's files. This is the default from the app and the CLI alike
-(uncheck "worktree" in the new-session dialog or pass `--no-worktree` to work
-in place; `worktrees: false` in the config changes the default). One-shot
-`kcoder "task"` runs in place, because its session is deleted afterwards.
-A local folder that is not a repo yet gets `git init` and an initial commit
-first. Forks branch from the parent session's branch.
-
-Work gets back to the main branch through **merge** (commits the worktree,
-merges `--no-ff` into the main checkout, aborts cleanly on conflict) or
-**open PR** (pushes the branch and runs `gh pr create`); **discard** deletes
-the worktree and branch. Archiving a session commits any uncommitted work as
-a checkpoint on its branch and removes the worktree directory; resuming the
-session recreates it from the branch. Deleting a session removes both.
-
-### Review, checkpoints, secrets
-
-- **Changes view** (a focused pane's **changes** button, or ⌘K → changes):
-  everything the session changed relative to the branch it started from, as
-  a file list plus diff. Each hunk can be accepted, rejected (undone in the
-  worktree) or edited. **Approve** records the resulting tree. The setting
-  `review_required` (⌘K → set review policy) says when that approval is
-  needed: before `push` (the default, and it also covers merges and PRs,
-  even with trust `auto`), before every `commit`, or `none`. Enforcement is
-  by git hooks in every worktree, so it applies to the agent's own
-  `git push` too.
-- **Checkpoints + undo**: before every turn the worktree is snapshotted (a
-  git tree kept under `refs/kcoder/<session>/`) together with the
-  conversation position. **↶ undo to here** on any of your messages restores
-  both: files go back, the agent's later commits on the branch are undone,
-  and the conversation is cut there. Restores only ever touch the session's
-  worktree; kcoder's built-in write tools also refuse paths outside it.
-- **Secret scanning**: every commit and push in a worktree is scanned for API
-  keys and tokens, private keys, wallet seed phrases and raw private keys,
-  `.env` files and credential files. A hit blocks with a plain message that
-  names the file and line with the secret redacted. False positives go in
-  `.kcoder/allowlist` in the repo (`secret:<fingerprint>`, `path:<glob>` or
-  `kind:<kind>`; the changes view has an **allowlist…** button). Detected
-  secrets are also masked in session transcripts and exports.
-- **One-click PR**: **open PR** commits, checks the review policy, pushes
-  (the hooks run) and opens a **draft** PR as the signed-in GitHub user. The
-  description is written from the session's work and diff (what changed,
-  why, how it was tested; the model drafts it when the session is idle,
-  with a deterministic fallback). The pane header then shows the PR number,
-  draft state and CI status, refreshed every 90 seconds.
-- **Per-repo instructions**: every turn loads the repo's `KCODER.md` plus
-  `AGENTS.md` and `CLAUDE.md` when present (Claude Code reads `CLAUDE.md`
-  itself, so it is not appended twice). The pane header shows which file is
-  active; click it to edit, or to create `KCODER.md`.
-
-### Task queue
-
-The **tasks** tab (alt+5) is a fleet-wide queue: add a task with its repo
-(a folder or `owner/name`), model and trust level and it starts as soon as a
-slot is free, in its own worktree. `max_concurrent` (the "up to N at once"
-field) caps how many sessions the queue keeps running. Drag queued tasks to
-reorder them, pause the queue, cancel tasks. A finished task lands in
-**review** (its pane shows ⚑ review and the changes view opens from the
-tasks tab); nothing is pushed on its own.
-
-### Model routing, fallback, previews, schedules, phone approvals
-
-- **Model routing**: a session or task whose model is **auto** (the default
-  for Claude Code and the Anthropic API) gets a cheaper model for small
-  turns and a stronger one for large or multi-file work (`sonnet` / `fable`
-  on your Claude plan, Haiku / Opus on the API; `routing.tiers` in the config
-  overrides). Pick a concrete model on a session or task to turn routing off
-  for it. The pane header shows `auto → <model>`.
-- **Fallback**: on a rate limit or outage (after the usual retries) the turn
-  moves to the next configured provider and the pane header shows
-  `⇄ provider/model · since`. kcoder never falls back from your Claude
-  subscription to a pay-per-token API key (there is no setting for it),
-  never to a paid provider once the daily cap is reached, and goes back to the primary
-  provider after ten minutes. Between providers with different message
-  formats the history is carried over as a flattened transcript.
-- **Live preview**: for web projects (npm `dev`/`start` scripts, Django,
-  Flask, a static `index.html`, or `.kcoder/preview.json`) the pane's ▶
-  preview view starts the dev server inside the session's worktree on its
-  own port (4300 to 4399), so parallel sessions never collide, and shows it
-  in the pane; static and server-rendered apps reload when files change,
-  bundlers use their own hot reload. Dev servers stop when the session is
-  idle for `preview_idle_minutes` (20) or archived. PRs of web projects get
-  desktop and mobile screenshots committed under `.kcoder/screenshots/`
-  and shown in the description (`pr_screenshots`).
-- **Scheduled tasks** (tasks tab → schedules): recurring jobs per repo
-  (every hour, day or week) feed the task queue. A job missed while the Mac
-  slept runs once on wake, never as a backlog. A run that changed nothing
-  just logs; one that did opens a draft PR (or lands in review when the
-  schedule says so). Failures and runs waiting for review notify you.
-  Note: a schedule's automatic draft PR push is exempt from the review
-  policy; the draft PR itself is the review.
-- **Phone approvals**: opt-in, off by default (⌘K → phone approvals). Your
-  Mac never opens a port; `kcoderd` keeps one outbound connection to a
-  small relay you host (`relay/`, a Cloudflare Worker with Web Push).
-  Pair a phone once by scanning a QR code; when a session waits for you
-  the phone gets a notification that opens a page showing exactly what is
-  being approved (command, diff summary) with approve / deny. Approvals
-  expire after `remote.ttl_minutes` (10); revoking a device is one click.
-
-### Trust levels, queues, caps, compaction
-
-- Trust per session: `auto` (never ask - the default, change it with
-  `default_trust` in the config or `⌘K → set default trust`), `write` (shell
-  is gated), `read` (writes and shell are gated), `none` (everything is gated).
-- Follow-up task queue: sessions keep working through queued tasks after each
-  turn (`/queue`, the "+ task" button, or the new-session dialog).
-- Daily spend cap (`⌘K → set daily spend cap`, or `daily_cap_usd` in the
-  config): sessions pause when today's spend reaches it.
-- Context compaction: when the last prompt reached `compact_at` tokens
-  (default 150k) the history is summarised before the next turn, with a
-  visible marker in the chat. `/compact` does it on demand.
-- Rate limits and overloads retry with backoff, shown in the pane status.
-- Sessions, their queues and the window layout survive app crashes, daemon
-  restarts and reboots. A session that was mid-turn comes back **paused** with
-  the turn's text ready behind a **resume** button (and a **dismiss** button);
-  nothing is ever re-run without you. Any `claude` or shell process the dead
-  daemon left behind is killed on the next start.
-
-## Safety
-
-By default, kcoder prints every `write_file`, `edit_file`, and `run_bash`
-action and asks for confirmation before executing it. Read-only tools
-(`read_file`, `list_dir`) run without prompting. Use `--yes` or `/auto`
-at your own discretion.
-
-`kcoderd` can run shell commands, so it assumes every other app and web page
-on the machine is hostile. The CLI talks to it over a Unix socket
-(`~/.local/share/kcoder/kcoderd.sock`, user-only). The web app needs HTTP, so
-a second listener stays on `127.0.0.1` only, and every request on it must
-carry a loopback `Host` header (a page that rebinds its DNS name to 127.0.0.1
-gets a 403), WebSocket upgrades from browsers must come from the app's own
-origin, pages are served with `frame-ancestors 'none'` and
-`Cross-Origin-Resource-Policy: same-origin`, and every client must present
-the per-install token stored in `~/.local/share/kcoder/token` (mode `600`) as
-its first message. API keys are read from the environment or the
-credentials file and are never written to logs or chat history; chat history
-lives outside the repo and is gitignored anyway.
-
-## Architecture
+The smoke test also runs in GitHub Actions on Windows and Linux
+(`.github/workflows/install-smoke.yml`) using the real installers.
 
 ```
- terminal(s)            browser (phase 2)
-  kcoder attach  ──┐   ┌── kcoder ui
+ terminal(s)            app / browser
+  kcoder attach  ──┐   ┌── kcoder app · kcoder ui
                    ▼   ▼
              ┌──────────────┐   WebSocket over a user-only Unix socket (CLI) or
              │              │   127.0.0.1 with Host/Origin checks (app); token-authenticated
@@ -736,16 +403,18 @@ lives outside the repo and is gitignored anyway.
 
 | Module | Role |
 |---|---|
-| `kcoder/engine.py` | Headless agent loop. No terminal I/O: emits events (`text`, `tool_call`, `approval_request`, `usage`, `turn_end`, …) and takes `send()`, `approve()`, `interrupt()`. |
-| `kcoder/providers.py` | Anthropic and OpenAI-compatible backends; drive the tool loop through the engine's hooks. |
+| `kcoder/engine.py` | Headless agent loop: emits events (`text`, `tool_call`, `approval_request`, `usage`, `progress`, `turn_end`, …), takes `send()`, `approve()`, `interrupt()`. |
+| `kcoder/providers.py` | Claude Code, Anthropic and OpenAI-compatible backends; the plan-only guard. |
 | `kcoder/daemon.py` | `kcoderd`: owns sessions, runs them concurrently, persists them, streams events over WebSocket. |
-| `kcoder/client.py` | Small synchronous client used by the CLI (auto-starts the daemon). |
-| `kcoder/cli.py` | The terminal UI: a thin client that renders events and answers approvals. |
-| `kcoder/tools.py` | Tool definitions and executors, scoped to each session's working directory; `run_bash` streams output and is killable. |
-| `kcoder/projects.py`, `kcoder/chatlog.py` | Projects, KCODER.md, file listing; history helpers (forks, export, search). |
-| `kcoder/worktree.py`, `kcoder/shell.py` | Git worktrees + merge/PR/discard; pty shells for the browser. |
+| `kcoder/client.py`, `kcoder/cli.py` | The terminal client. |
+| `kcoder/tools.py`, `kcoder/compat.py` | Tool executors scoped to the session folder; process control that works on macOS, Linux and Windows. |
+| `kcoder/worktree.py`, `kcoder/review.py`, `kcoder/checkpoints.py`, `kcoder/secrets.py`, `kcoder/hooks.py` | Worktrees, diff review, undo, secret scanning, git hooks. |
+| `kcoder/stats.py`, `kcoder/pricing.py` | Usage history, commit tracking, the stats view's numbers, API-equivalent estimates. |
+| `kcoder/updater.py`, `kcoder/setup.py`, `kcoder/app.py` | Git-based updates with rollback; first-run setup; the native window, Start Menu and macOS bundle. |
 | `kcoder/web/` | The browser app (vanilla JS; marked, highlight.js, xterm.js vendored). |
+| `relay/` | The phone-approval relay (Cloudflare Worker). |
 
-Daemon data lives in `~/.local/share/kcoder/` (override with `KCODER_DATA_DIR`);
-the port defaults to `47321` (`KCODER_PORT`). Every model call is appended to
-`usage.jsonl` for per-session and fleet-wide token accounting.
+Daemon data lives in `~/.local/share/kcoder/` (`KCODER_DATA_DIR` overrides),
+config in `~/.config/kcoder/config.json`, the port defaults to `47321`
+(`KCODER_PORT`). Every model call is appended to `usage.jsonl`, every commit
+made from a session to `commits.jsonl`.

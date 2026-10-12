@@ -449,7 +449,7 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'usage':
         if (!opts.compact) out.push(`<div class="note usage">✓ ${e.elapsed != null ? e.elapsed.toFixed ? e.elapsed.toFixed(1) + 's · ' : e.elapsed + 's · ' : ''}${fmtInt(e.input)} in → ${fmtInt(e.output)} out tokens${e.plan ? ' · on your plan' : e.cost ? ' · ' + fmtUsd(e.cost) : ''}</div>`);
         break;
-      case 'error': out.push(`<div class="note err">${esc(e.text)}${e.fix === 'claude-login' ? ' <button class="primary" data-fix="claude">Reconnect Claude</button>' : e.fix === 'plan-limit' ? ' <button data-fix="claude">Claude plan</button>' : ''}</div>`); break;
+      case 'error': out.push(`<div class="note err">${esc(e.text)}${e.fix === 'claude-login' ? ' <button class="primary" data-fix="claude">Reconnect Claude</button>' : e.fix === 'plan-limit' ? ' <button data-fix="claude">Claude plan</button>' : ` <button data-err="${esc(sid)}" title="what happened, send again, copy a report">details</button>`}</div>`); break;
       case 'notice': out.push(`<div class="note warn">${esc(e.text)}</div>`); break;
       case 'retry': out.push(`<div class="note warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</div>`); break;
       case 'info': out.push(`<div class="note">${esc(e.text)}</div>`); break;
@@ -748,7 +748,7 @@ function renderPaneChrome(pane, s, num) {
     (s.queue && s.queue.length ? `<span title="queued tasks">▶ ${s.queue.length} queued</span>` : '') +
     (git ? `<span class="git-line" title="git">${esc(git.branch || '')}${git.dirty ? ` <span class="dirty">±${git.dirty}</span>` : ''}${git.ahead ? ` ↑${git.ahead}` : ''}</span>` : '') +
     `<span class="spacer"></span>` +
-    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span class="waiting">PAUSED</span><button data-act="resume" class="primary">resume</button><button data-act="dismiss">dismiss</button>` : st === 'capped' ? `<span>paused (cap)</span>` : '') +
+    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span class="waiting">PAUSED</span><button data-act="resume" class="primary">resume</button><button data-act="dismiss">dismiss</button>` : st === 'capped' ? `<span>paused (cap)</span>` : st === 'error' ? `<span class="waiting errlabel">ERROR</span><button data-err="${esc(s.id)}" title="what happened, send again, copy a report">details</button>` : '') +
     `<span>${age(s.last_activity)} ago</span>`;
   // approval bar
   const bar = $('.approval-bar', pane);
@@ -1133,7 +1133,7 @@ function chatItemHtml(c) {
   const st = c.archived ? 'archived' : (live ? live.status : c.status);
   const label = st === 'working' ? 'running' : st === 'waiting' ? (live && live.pending_approval ? 'needs approval' : 'needs you') : st === 'error' ? 'error' : st === 'idle' && live ? 'idle' : '';
   const inPane = state.layout.panes.indexOf(c.id);
-  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${st === 'working' ? `<span class="badge working">${statusLineHtml(c.id, true)}</span>` : label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span></div>`;
+  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${st === 'working' ? `<span class="badge working">${statusLineHtml(c.id, true)}</span>` : st === 'error' ? `<button class="badge error" data-err="${c.id}" title="what happened, send again, copy a report">error · details</button>` : label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span></div>`;
 }
 $('#projects').addEventListener('dragstart', (e) => { const item = e.target.closest('.chat-item[data-sid]'); if (!item) return; state.dragChat = item.dataset.sid; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', item.dataset.sid); });
 $('#projects').addEventListener('dragend', () => { state.dragChat = null; for (const p of $$('.cpane')) p.classList.remove('drop'); });
@@ -1532,11 +1532,13 @@ function renderInbox() {
   }
   pend.sort((a, b) => a.ts - b.ts);
   const asks = Array.from(state.sessions.values()).filter((s) => s.status === 'waiting' && !s.pending_approval);
+  const errs = Array.from(state.sessions.values()).filter((s) => s.status === 'error');
   const sel = Math.min(state.inboxSel || 0, Math.max(0, pend.length - 1)); state.inboxSel = sel;
   const html = `<h2>inbox <span class="help">${pend.length} approval${pend.length === 1 ? '' : 's'}${asks.length ? ` · ${asks.length} question${asks.length === 1 ? '' : 's'}` : ''} · y approve · n decline · a approve all · ↑↓ move · esc close</span><span class="spacer"></span><button data-x="close">✕</button></h2>` +
     `<div class="list">${pend.map((p, i) => `<div class="item${i === sel ? ' sel' : ''}" data-i="${i}"><span class="sess">${esc(p.name)}</span><code>${esc(p.desc)}</code><span class="meta">${age(p.ts)} ago</span><button class="primary" data-ap="1" data-sid="${p.sid}" data-rid="${esc(p.rid)}">yes</button><button class="danger" data-ap="0" data-sid="${p.sid}" data-rid="${esc(p.rid)}">no</button></div>`).join('')}` +
     `${asks.map((s) => `<div class="item" data-open="${s.id}"><span class="sess">${esc(s.name)}</span><code>${esc(s.title || 'waiting for your answer')}</code><span class="meta">${age(s.last_activity)} ago</span><button class="primary" data-open="${s.id}">open</button></div>`).join('')}` +
-    `${!pend.length && !asks.length ? '<div class="empty-row">nothing waiting on you</div>' : ''}</div>`;
+    `${errs.map((s) => `<div class="item" data-err="${s.id}"><span class="sess">${esc(s.name)}</span><code class="warn">${esc(lastErrorText(s.id) || 'the last turn failed')}</code><span class="meta">${age(s.last_activity)} ago</span><button data-err="${s.id}">details</button></div>`).join('')}` +
+    `${!pend.length && !asks.length && !errs.length ? '<div class="empty-row">nothing waiting on you</div>' : ''}</div>`;
   state.inboxItems = pend;
   if (state.dialog === 'inbox') { $('#overlay .dialog').innerHTML = html; }
   else openDialog(html, 'inbox');
@@ -1646,6 +1648,7 @@ function paletteItems() {
     items.push([`focus: ${s.name}${s.title ? ' · ' + s.title : ''}`, () => { if (state.view !== 'wall') setView('wall'); focusPane(s.id); }]);
     items.push([`open: ${s.name}`, () => { state.sid = s.id; if (state.view === 'chat') assignPane(state.layout.focus, s.id); else setView('chat'); }]);
     if (s.status === 'working' || s.status === 'waiting') items.push([`interrupt: ${s.name}`, () => request('interrupt', { sid: s.id })]);
+    if (s.status === 'error') items.push([`error details: ${s.name}`, () => errorDialog(s.id)]);
     items.push([`archive: ${s.name}`, () => request('archive', { sid: s.id })]);
     items.push([`export: ${s.name}`, () => exportChat(s.id)]);
     items.push([`shell: ${s.name}`, () => { if (state.view !== 'wall') setView('wall'); setPaneView(s.id, 'shell'); focusPane(s.id); }]);
@@ -1689,6 +1692,38 @@ function renderClaudeButton() {
   b.textContent = !c.on_plan ? 'connect Claude' : lim.length ? `plan limit${lim.some((l) => l.scope === 'all') ? '' : ' · ' + lim.map((l) => l.scope).join(', ')}` : 'plan ✓';
   b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.`;
 }
+// ---- what went wrong: the last error of a session, with send-again and a copyable report ----
+function lastErrorText(sid) { const st = state.events.get(sid); if (!st) return ''; for (let i = st.list.length - 1; i >= 0; i--) if (st.list[i].t === 'error') return st.list[i].text || ''; return ''; }
+async function errorDialog(sid) {
+  const s = state.sessions.get(sid) || state.chats.find((c) => c.id === sid) || { id: sid, name: sid };
+  const d = openDialog(`<h2>${esc(s.name || sid)} · what went wrong<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body"><div class="help plain" id="err-body">loading…</div></div>
+    <div class="foot"><span class="help plain" id="err-status"></span><span class="spacer" style="flex:1"></span><button data-x="copy">Copy report</button><button data-x="open">Open session</button><button class="primary" data-x="again" hidden>Send again</button></div>`, 'error');
+  d.classList.add('errdlg');
+  let store = state.events.get(sid);
+  if (!store || !store.loaded) { try { await loadEvents(sid, -1); } catch {} store = state.events.get(sid) || { list: [] }; }
+  const list = store.list; let i = list.length - 1; while (i >= 0 && list[i].t !== 'turn_start') i--;
+  const turn = list.slice(Math.max(0, i));
+  const errors = turn.filter((e) => e.t === 'error'); const lastErr = errors[errors.length - 1] || [...list].reverse().find((e) => e.t === 'error');
+  let lastUser = null; for (let k = list.length - 1; k >= 0; k--) if (list[k].t === 'user') { lastUser = list[k]; break; }
+  const when = (e) => new Date(e.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const trail = turn.filter((e) => e.t !== 'text' && e.t !== 'progress').slice(-14).map((e) => `${when(e)}  ${e.t}${e.t === 'tool_call' ? '  ' + (e.description || e.name || '') : e.t === 'tool_result' ? (e.is_error ? '  ✗ failed' : '  ✓') : e.t === 'turn_end' ? '  ' + (e.result || '') : e.t === 'error' || e.t === 'notice' ? '  ' + (e.text || '') : ''}`.slice(0, 160));
+  const v = state.version || {};
+  const report = [`kcoder ${v.running || ''} · session ${s.name || ''} (${sid}) · ${s.provider || ''}/${s.model || ''} · status ${s.status || ''}`, '', 'error:', lastErr ? `${when(lastErr)}  ${lastErr.text}` : '(no error event recorded)', '', 'last prompt:', lastUser ? (lastUser.text || '').slice(0, 500) : '(none)', '', 'last events of the turn:', ...trail, '', `daemon log: ~/.local/share/kcoder/daemon.log · session log: ~/.local/share/kcoder/sessions/${sid}/events.jsonl`].join('\n');
+  $('#err-body', d).innerHTML = `${lastErr ? `<div class="note err" style="margin:0 0 8px">${esc(lastErr.text)}</div>` : '<div class="dim">No error text was recorded for this session; the trail below shows what ran last.</div>'}
+    <div class="label-h">last events of the turn</div><pre class="trail">${esc(trail.join('\n') || '(nothing recorded)')}</pre>
+    <div class="dim">Press <b>Send again</b> to resend your last prompt in this session, or copy the report and paste it into a kcoder session so it can look into the bug.</div>`;
+  const again = $('[data-x="again"]', d); again.hidden = !lastUser || !state.sessions.has(sid);
+  d.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-x]'); if (!b) return;
+    const x = b.dataset.x;
+    if (x === 'close') { closeDialog(); return; }
+    if (x === 'copy') { try { await navigator.clipboard.writeText(report); $('#err-status', d).textContent = 'report copied'; } catch { $('#err-status', d).textContent = 'could not copy; select the text instead'; } return; }
+    if (x === 'open') { closeDialog(); state.sid = sid; if (state.view === 'chat') assignPane(state.layout.focus, sid); else setView('chat'); return; }
+    if (x === 'again') { closeDialog(); try { await request('send', { sid, text: lastUser.text, images: [] }); toast('sent again', 'ok'); } catch (err) { toast(err.message, 'err'); } }
+  });
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-err]'); if (b && !e.target.closest('a')) { e.stopPropagation(); errorDialog(b.dataset.err); } }, true);
+
 function aboutDialog() {
   const v = state.version || {};
   const d = openDialog(`<div class="body"><img class="logo" src="icon-192.png" alt=""><pre class="banner" aria-label="KCODER">${esc(BANNER)}</pre>
@@ -2439,6 +2474,7 @@ function renderCpaneBar(pane) {
   $('.picker', bar).title = s ? `${s.name}${s.title ? ' · ' + s.title : ''}  (click to switch sessions)` : 'Pick a session for this pane';
   $('.meta', bar).innerHTML = s ? `${esc((s.project || {}).name || shortHome(s.cwd))}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} ${paneChips(s)}` : '';
   $('.ctx', bar).textContent = s ? `ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? 'plan' : fmtUsd((s.usage || {}).cost || 0)}` : '';
+  let errChip = $('.err-chip', bar); if (s && s.status === 'error') { if (!errChip) { errChip = document.createElement('button'); errChip.className = 'err-chip'; errChip.dataset.err = s.id; errChip.title = 'what happened, send again, copy a report'; errChip.textContent = 'error · details'; $('.ctx', bar).before(errChip); } } else if (errChip) errChip.remove();
   for (const el of $$('select[data-act], button[data-act]', bar)) el.disabled = !s;
   if (s) {
     const ts = $('select[data-act="trust"]', bar); if (ts.value !== (s.trust || 'read')) ts.value = s.trust || 'read';
@@ -2687,7 +2723,8 @@ async function renderStatsView(force) {
   const lineBars = ser.map((r, i) => { const x = pad + i * slot; const ha = Math.round(r.insertions / ml * (zero - 4)); const hr = Math.round(r.deletions / ml * (H - 20 - zero)); return `<g><title>${r.date}: +${fmtInt(r.insertions)} / -${fmtInt(r.deletions)} (net ${fmtSigned(r.net)}) · ${r.commits} commit${r.commits === 1 ? '' : 's'} · ${fmtInt(r.files)} files</title><rect class="add" x="${x}" y="${zero - ha}" width="${bw}" height="${ha}"></rect><rect class="del" x="${x}" y="${zero}" width="${bw}" height="${hr}"></rect>${label(i, r)}</g>`; }).join('');
   const linesChart = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line class="zero" x1="0" x2="${W}" y1="${zero}" y2="${zero}"></line>${lineBars}</svg><div class="legend"><span><i class="add"></i> lines added</span><span><i class="del"></i> lines removed</span><span class="dim">peak ${fmtInt(ml)} / day</span></div>`;
   // breakdown tables
-  const costCol = { k: 'api_equivalent', label: 'API equiv.', f: (r) => (r.plan ? `<span class="dim" title="estimate: this usage ran on your plan">${fmtUsd(r.api_equivalent)} est.</span>` : fmtUsd(r.cost)) };
+  // what the row's usage would cost at API rates; "est." whenever some of it ran on the plan (so was not billed)
+  const costCol = { k: 'api_equivalent', label: 'API equiv.', f: (r) => (r.api_equivalent > (r.cost || 0) + 0.005 ? `<span class="dim" title="estimate at API rates${r.cost ? '; ' + fmtUsd(r.cost) + ' actually billed on API keys' : '; this usage ran on your plan'}">${fmtUsd(r.api_equivalent)} est.</span>` : fmtUsd(r.cost)) };
   const linesCols = [{ k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'insertions', label: '+', f: (r) => plus(r.insertions) }, { k: 'deletions', label: '-', f: (r) => minus(r.deletions) }, { k: 'net', label: 'net', f: (r) => fmtSigned(r.net) }, { k: 'tokens_per_line', label: 'tokens / line', f: (r) => (r.tokens_per_line == null ? '<span class="dim">-</span>' : fmtTokens(r.tokens_per_line)) }];
   const byModel = sortableTable('model', [{ k: 'key', label: 'model', f: (r) => esc(r.key), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'fresh', label: 'fresh in', f: (r) => fmtTokens(r.fresh) }, { k: 'cache_read', label: 'cache read', f: (r) => fmtTokens(r.cache_read) }, { k: 'cache_write', label: 'cache write', f: (r) => fmtTokens(r.cache_write) }, { k: 'cache_hit', label: 'hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'output', label: 'out', f: (r) => fmtTokens(r.output) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, ...linesCols, costCol], d.by_model, { sort: { key: 'total', dir: -1 } });
   const byProvider = sortableTable('provider', [{ k: 'key', label: 'provider', f: (r) => esc(r.key), cls: 'l' }, { k: 'billing', label: 'billing', f: (r) => esc(r.billing || (r.plan ? 'subscription' : 'api key')), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'cache_hit', label: 'cache hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, { k: 'cost', label: 'cost', f: (r) => (r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost)) }, costCol], d.by_provider, { sort: { key: 'total', dir: -1 } });
