@@ -1009,14 +1009,16 @@ def cmd_search(args) -> int:
 
 
 def cmd_export(args) -> int:
+    html = bool(args.html) or (args.output or "").lower().endswith((".html", ".htm"))
     with DaemonClient.connect() as client:
-        reply = client.request("export", sid=args.session)
+        reply = client.request("export", 120, sid=args.session, format="html" if html else "markdown")
+    text = reply["html"] if html else reply["markdown"]
     if args.output:
         with open(os.path.expanduser(args.output), "w", encoding="utf-8") as f:
-            f.write(reply["markdown"])
+            f.write(text)
         console.print(f"[dim]exported → {escape(args.output)}[/dim]", highlight=False)
     else:
-        sys.stdout.write(reply["markdown"])
+        sys.stdout.write(text)
     return 0
 
 
@@ -1696,9 +1698,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--who", choices=["me", "agent"], help="only your messages, or only kcoder's")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("export", help="print a chat as markdown")
+    p = sub.add_parser("export", help="a chat as markdown, or as a self-contained HTML page to share")
     p.add_argument("session")
-    p.add_argument("-o", "--output", help="write to a file instead of stdout")
+    p.add_argument("-o", "--output", help="write to a file instead of stdout (.html picks the HTML page)")
+    p.add_argument("--html", action="store_true", help="the shareable HTML page")
     p.set_defaults(func=cmd_export)
 
     p = sub.add_parser("attach", help="attach to / resume a chat by id prefix or name")

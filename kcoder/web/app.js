@@ -1113,11 +1113,13 @@ async function gitStatus(sid, show) {
     infoDialog('git status · ' + (g.branch || ''), `<pre>${esc(g.status || '(clean)')}</pre>${g.diffstat ? `<div class="label">diff stat</div><pre>${esc(g.diffstat)}</pre>` : ''}`);
   }
 }
-async function exportChat(sid) {
-  const r = await request('export', { sid });
-  const blob = new Blob([r.markdown], { type: 'text/markdown' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (r.title || 'chat').replace(/[^\w.-]+/g, '_') + '.md'; a.click();
+async function exportChat(sid, format) {
+  if (!format) { format = await chooseDialog('Export this session as…', [['html', 'HTML page - one file that reads well anywhere, secrets masked, tool output folded (share this)'], ['md', 'Markdown']]); if (!format) return; }
+  let r; try { r = await request('export', { sid, format: format === 'html' ? 'html' : 'markdown' }); } catch (e) { toast(e.message, 'err'); return; }
+  const blob = new Blob([format === 'html' ? r.html : r.markdown], { type: format === 'html' ? 'text/html' : 'text/markdown' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (r.title || 'chat').replace(/[^\w.-]+/g, '_') + (format === 'html' ? '.html' : '.md'); a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('exported ' + a.download, 'ok');
 }
 function copyCode(btn) { const code = btn.parentElement.querySelector('code'); navigator.clipboard.writeText(code ? code.textContent : btn.parentElement.textContent); btn.textContent = 'copied'; setTimeout(() => (btn.textContent = 'copy'), 1200); }
 

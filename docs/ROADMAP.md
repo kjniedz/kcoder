@@ -18,8 +18,8 @@ here so any session can pick up where the last one stopped.
 | 10 | **Morning brief**: what every session did, what is waiting, what is in review. | done (`kcoder/brief.py`; request `brief`; dialog opens once a day on the first visit and from ⌘K; `kcoder brief`; copy as markdown) |
 | 14 | **Search across transcripts** with filters (repo, date, free text). | done (`kcoder/search.py`: AND terms, phrases, repo:/since:/until:/date:/who:; search dialog with filter chips, hits jump to the message; sidebar quick results; `kcoder search` flags) |
 | 16 | **Keyboard-only inbox**: next waiting item, approve, next. | done (one waiting list of approvals, questions, reviews, errors; `w` next item, `y` / `⇧N` answer and advance; inbox: j/k, y/n, ↩ open, a all) |
-| 17 | **Export a session as a shareable HTML page**. | next |
-| 11 | **Voice input** on the phone approval page and the composer. | |
+| 17 | **Export a session as a shareable HTML page**. | done (`chatlog.export_html`: single file, inline styles, vendored marked.js, tool calls and results folded, commits, secrets masked; export chooser on the pane, `kcoder export --html`) |
+| 11 | **Voice input** on the phone approval page and the composer. | next |
 | 15 | **Light-theme pass and a compact density setting**. | |
 
 Dropped from the list: 4 (per-session budgets), 6 (plan-then-fan-out).

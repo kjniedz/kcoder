@@ -166,6 +166,13 @@ archive, export or delete it. Transcripts are real text: select across
 messages, ⌘C copies clean markdown, ⌘F finds in a session, ⌘⇧F searches all
 of them, and files dropped on a pane attach to the prompt.
 
+**Share a session.** **export** on a pane (or `kcoder export <session>
+-o chat.html`) writes one self-contained HTML page: title, project, branch,
+model, dates, tokens, the whole conversation with markdown rendered, tool
+calls and their output folded, the commits it made, secrets masked. It
+needs no server and reads well in any browser, light or dark; send the file
+or drop it in a PR. Markdown export is still there.
+
 **Search across transcripts.** The sidebar box finds sessions as you type;
 Enter (or ⌘K → search) opens the full search with filters: repo, date
 (today, yesterday, 7 or 30 days) and who said it (you or kcoder). The query

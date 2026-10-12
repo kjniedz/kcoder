@@ -1888,6 +1888,10 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         meta = manager.find_chat(str(req.get("sid")))
         session = manager.sessions.get(meta["id"])
         messages = session.engine.messages if session else load_messages(session_dir(meta["id"]))
+        if req.get("format") == "html":
+            commits = [c for c in stats.commit_rows() if c.get("sid") == meta["id"]]
+            html = await asyncio.get_running_loop().run_in_executor(None, lambda: chatlog.export_html(manager.chat_summary(meta), messages, commits))
+            return {"html": secretsmod.mask(html), "title": meta.get("title") or meta.get("name")}
         return {"markdown": secretsmod.mask(chatlog.export_markdown(manager.chat_summary(meta), messages)),
                 "title": meta.get("title") or meta.get("name")}
 
