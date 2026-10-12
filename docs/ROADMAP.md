@@ -17,8 +17,8 @@ here so any session can pick up where the last one stopped.
 | 7 | **Auto-fix on CI failure**: a red check on a draft PR opens a session with the failing log; the fix lands in review. | done (PR poll loop: `pr.failure_report` via gh pr checks + gh run view --log-failed, sent to the owning session once per head commit, max three per PR; the push goes through the review gate; Settings toggle `ci_autofix`) |
 | 10 | **Morning brief**: what every session did, what is waiting, what is in review. | done (`kcoder/brief.py`; request `brief`; dialog opens once a day on the first visit and from ⌘K; `kcoder brief`; copy as markdown) |
 | 14 | **Search across transcripts** with filters (repo, date, free text). | done (`kcoder/search.py`: AND terms, phrases, repo:/since:/until:/date:/who:; search dialog with filter chips, hits jump to the message; sidebar quick results; `kcoder search` flags) |
-| 16 | **Keyboard-only inbox**: next waiting item, approve, next. | next |
-| 17 | **Export a session as a shareable HTML page**. | |
+| 16 | **Keyboard-only inbox**: next waiting item, approve, next. | done (one waiting list of approvals, questions, reviews, errors; `w` next item, `y` / `⇧N` answer and advance; inbox: j/k, y/n, ↩ open, a all) |
+| 17 | **Export a session as a shareable HTML page**. | next |
 | 11 | **Voice input** on the phone approval page and the composer. | |
 | 15 | **Light-theme pass and a compact density setting**. | |
 

@@ -173,10 +173,18 @@ takes words, `"phrases"`, `repo:name`, `since:2026-10-01`, `until:…`,
 `date:yesterday` and `who:me`. Every hit opens the session at that message.
 `kcoder search <query> [--repo] [--since] [--who]` in a terminal.
 
-Keys: <kbd>n</kbd> new session, <kbd>a</kbd> inbox, <kbd>w</kbd> next session
+Keys: <kbd>n</kbd> new session, <kbd>a</kbd> inbox, <kbd>w</kbd> next item
 waiting on you, <kbd>1</kbd> to <kbd>9</kbd> focus a grid pane, <kbd>esc</kbd>
 back to the grid or interrupt the focused session, <kbd>⌘K</kbd> palette,
 <kbd>⌘,</kbd> settings, <kbd>⌘/</kbd> the full shortcut sheet.
+
+**Keyboard-only inbox.** Everything waiting on you is one list: approvals,
+questions, changes to review, errors. <kbd>w</kbd> shows the next item;
+<kbd>y</kbd> approves and <kbd>⇧N</kbd> declines the one on screen, and the
+next comes up by itself. In the inbox (<kbd>a</kbd>): <kbd>j</kbd>/<kbd>k</kbd>
+move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
+<kbd>↩</kbd> opens a question, the changes view or the error details,
+<kbd>a</kbd> approves everything.
 
 ### Inbox, tasks, stats, settings
 

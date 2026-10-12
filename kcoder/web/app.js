@@ -771,7 +771,7 @@ function renderPaneChrome(pane, s, num) {
     const store = state.events.get(s.id);
     const req = store && store.list.slice().reverse().find((e) => e.t === 'approval_request' && e.id === s.pending_approval);
     bar.hidden = false;
-    bar.innerHTML = `<span>allow</span><code title="${esc(req ? req.description : '')}">${esc(req ? req.description : 'pending tool call')}</code><button class="primary" data-act="approve" data-rid="${esc(s.pending_approval)}">yes</button><button class="danger" data-act="decline" data-rid="${esc(s.pending_approval)}">no</button>`;
+    bar.innerHTML = `<span>allow</span><code title="${esc(req ? req.description : '')}">${esc(req ? req.description : 'pending tool call')}</code><button class="primary" data-act="approve" data-rid="${esc(s.pending_approval)}">yes</button><button class="danger" data-act="decline" data-rid="${esc(s.pending_approval)}">no</button><span class="keys" title="keyboard: y approves, shift+N declines, then the next waiting item comes up; w jumps to the next one">y · ⇧N · w</span>`;
   } else if (s.status === 'paused') {
     bar.hidden = false;
     bar.innerHTML = `<span>paused</span><code title="${esc(s.resume_text || '')}">${esc(s.resume_text ? 'interrupted by a restart: ' + s.resume_text : 'the last turn was interrupted by a restart')}</code><button class="primary" data-act="resume">resume</button><button data-act="dismiss">dismiss</button>`;
@@ -1591,26 +1591,57 @@ function helpDialog() {
 }
 
 // approval inbox
-function renderInbox() {
-  const pend = [];
+// everything waiting on you, oldest first: approvals, then questions, reviews, errors
+function waitingItems() {
+  const items = [];
   for (const s of state.sessions.values()) {
-    if (!s.pending_approval) continue;
-    const store = state.events.get(s.id);
-    const req = store && store.list.slice().reverse().find((e) => e.t === 'approval_request' && e.id === s.pending_approval);
-    pend.push({ sid: s.id, name: s.name, rid: s.pending_approval, desc: req ? req.description : 'pending tool call', ts: req ? req.ts : 0 });
+    if (s.pending_approval) {
+      const store = state.events.get(s.id);
+      const req = store && store.list.slice().reverse().find((e) => e.t === 'approval_request' && e.id === s.pending_approval);
+      items.push({ kind: 'approval', sid: s.id, name: s.name, rid: s.pending_approval, desc: req ? req.description : 'pending tool call', ts: req ? req.ts : (s.last_activity || 0) });
+    } else if (s.status === 'waiting') items.push({ kind: 'question', sid: s.id, name: s.name, desc: s.title || 'waiting for your answer', ts: s.last_activity || 0 });
+    if (s.needs_review) items.push({ kind: 'review', sid: s.id, name: s.name, desc: 'changes wait for your review', ts: s.last_activity || 0 });
+    if (s.status === 'error') items.push({ kind: 'error', sid: s.id, name: s.name, desc: lastErrorText(s.id) || 'the last turn failed', ts: s.last_activity || 0 });
   }
-  pend.sort((a, b) => a.ts - b.ts);
-  const asks = Array.from(state.sessions.values()).filter((s) => s.status === 'waiting' && !s.pending_approval);
-  const errs = Array.from(state.sessions.values()).filter((s) => s.status === 'error');
-  const sel = Math.min(state.inboxSel || 0, Math.max(0, pend.length - 1)); state.inboxSel = sel;
-  const html = `<h2>inbox <span class="help">${pend.length} approval${pend.length === 1 ? '' : 's'}${asks.length ? ` · ${asks.length} question${asks.length === 1 ? '' : 's'}` : ''} · y approve · n decline · a approve all · ↑↓ move · esc close</span><span class="spacer"></span><button data-x="close">✕</button></h2>` +
-    `<div class="list">${pend.map((p, i) => `<div class="item${i === sel ? ' sel' : ''}" data-i="${i}"><span class="sess">${esc(p.name)}</span><code>${esc(p.desc)}</code><span class="meta">${age(p.ts)} ago</span><button class="primary" data-ap="1" data-sid="${p.sid}" data-rid="${esc(p.rid)}">yes</button><button class="danger" data-ap="0" data-sid="${p.sid}" data-rid="${esc(p.rid)}">no</button></div>`).join('')}` +
-    `${asks.map((s) => `<div class="item" data-open="${s.id}"><span class="sess">${esc(s.name)}</span><code>${esc(s.title || 'waiting for your answer')}</code><span class="meta">${age(s.last_activity)} ago</span><button class="primary" data-open="${s.id}">open</button></div>`).join('')}` +
-    `${errs.map((s) => `<div class="item" data-err="${s.id}"><span class="sess">${esc(s.name)}</span><code class="warn">${esc(lastErrorText(s.id) || 'the last turn failed')}</code><span class="meta">${age(s.last_activity)} ago</span><button data-err="${s.id}">details</button></div>`).join('')}` +
-    `${!pend.length && !asks.length && !errs.length ? '<div class="empty-row">nothing waiting on you</div>' : ''}</div>`;
-  state.inboxItems = pend;
+  const rank = { approval: 0, question: 1, review: 2, error: 3 };
+  return items.sort((a, b) => rank[a.kind] - rank[b.kind] || a.ts - b.ts);
+}
+// show one waiting item: approvals and questions in a pane, reviews in the changes view, errors in their details
+function showWaiting(it) {
+  if (!it) return;
+  if (it.kind === 'review') { changesDialog(it.sid); return; }
+  if (it.kind === 'error') { errorDialog(it.sid); return; }
+  state.sid = it.sid;
+  if (state.view === 'chat') assignPane(state.layout.focus, it.sid);
+  else { if (state.view !== 'wall') setView('wall'); focusPane(it.sid); }
+}
+function currentWaitingSid() { return state.view === 'chat' ? focusedSid() : state.focus; }
+// w: the next item waiting on you (after the one on screen); after y / N the next one comes up by itself
+function cycleWaiting() {
+  const items = waitingItems();
+  if (!items.length) { toast('nothing is waiting on you', 'ok'); return; }
+  const cur = currentWaitingSid();
+  const i = items.findIndex((it) => it.sid === cur);
+  showWaiting(items[(i + 1) % items.length]);
+}
+function advanceWaiting(fromSid) {
+  const items = waitingItems().filter((it) => it.sid !== fromSid);
+  if (!items.length) { toast('that was the last one: nothing else is waiting on you', 'ok'); return; }
+  showWaiting(items[0]);
+}
+function renderInbox() {
+  const items = waitingItems();
+  const sel = Math.min(state.inboxSel || 0, Math.max(0, items.length - 1)); state.inboxSel = sel;
+  const n = (k) => items.filter((x) => x.kind === k).length;
+  const row = (it, i) => `<div class="item${i === sel ? ' sel' : ''}" data-i="${i}"><span class="sess">${esc(it.name)}</span><span class="kind ${it.kind}">${it.kind}</span><code${it.kind === 'error' ? ' class="warn"' : ''}>${esc(it.desc)}</code><span class="meta">${age(it.ts)} ago</span>` +
+    (it.kind === 'approval' ? `<button class="primary" data-ap="1" data-sid="${it.sid}" data-rid="${esc(it.rid)}">yes</button><button class="danger" data-ap="0" data-sid="${it.sid}" data-rid="${esc(it.rid)}">no</button>`
+      : it.kind === 'review' ? `<button class="primary" data-go="${i}">changes</button>` : it.kind === 'error' ? `<button data-go="${i}">details</button>` : `<button class="primary" data-go="${i}">open</button>`) + '</div>';
+  const html = `<h2>inbox <span class="help">${n('approval')} approval${n('approval') === 1 ? '' : 's'}${n('question') ? ` · ${n('question')} question${n('question') === 1 ? '' : 's'}` : ''}${n('review') ? ` · ${n('review')} in review` : ''}${n('error') ? ` · ${n('error')} error${n('error') === 1 ? '' : 's'}` : ''} · ↑↓ or j k move · y approve · n decline · ↩ open · a approve all · esc</span><span class="spacer"></span><button data-x="close">✕</button></h2>` +
+    `<div class="list">${items.map(row).join('') || '<div class="empty-row">nothing waiting on you</div>'}</div>`;
+  state.inboxItems = items;
   if (state.dialog === 'inbox') { $('#overlay .dialog').innerHTML = html; }
   else openDialog(html, 'inbox');
+  const el = $(`#overlay .item[data-i="${sel}"]`); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
 }
 function openInbox() { state.inboxSel = 0; renderInbox(); }
 $('#overlay').addEventListener('click', async (e) => {
@@ -1618,18 +1649,22 @@ $('#overlay').addEventListener('click', async (e) => {
   if (e.target.closest('[data-x]')) { closeDialog(); return; }
   const b = e.target.closest('[data-ap]');
   if (b) { await approve(b.dataset.sid, b.dataset.rid, b.dataset.ap === '1'); return; }
-  const o = e.target.closest('[data-open]');
-  if (o) { closeDialog(); state.sid = o.dataset.open; if (state.view === 'chat') assignPane(state.layout.focus, o.dataset.open); else { if (state.view !== 'wall') setView('wall'); focusPane(o.dataset.open); } return; }
+  const g = e.target.closest('[data-go]');
+  if (g) { const it = (state.inboxItems || [])[Number(g.dataset.go)]; closeDialog(); showWaiting(it); return; }
   const it = e.target.closest('.item[data-i]'); if (it) { state.inboxSel = Number(it.dataset.i); renderInbox(); }
 });
-async function approve(sid, rid, ok) { try { await request('approve', { sid, rid, approved: ok }); } catch (e) { toast(e.message, 'err'); } setTimeout(() => { if (state.dialog === 'inbox') renderInbox(); }, 150); }
+async function approve(sid, rid, ok, advance = false) {
+  try { await request('approve', { sid, rid, approved: ok }); } catch (e) { toast(e.message, 'err'); return; }
+  setTimeout(() => { if (state.dialog === 'inbox') renderInbox(); else if (advance) advanceWaiting(sid); }, 350);
+}
 function inboxKey(e) {
   const items = state.inboxItems || []; const cur = items[state.inboxSel || 0];
   if (e.key === 'ArrowDown' || e.key === 'j') { state.inboxSel = Math.min(items.length - 1, (state.inboxSel || 0) + 1); renderInbox(); }
   else if (e.key === 'ArrowUp' || e.key === 'k') { state.inboxSel = Math.max(0, (state.inboxSel || 0) - 1); renderInbox(); }
-  else if (e.key === 'y' && cur) approve(cur.sid, cur.rid, true);
-  else if (e.key === 'n' && cur) approve(cur.sid, cur.rid, false);
-  else if (e.key === 'a') items.forEach((p) => approve(p.sid, p.rid, true));
+  else if (e.key === 'y' && cur && cur.kind === 'approval') approve(cur.sid, cur.rid, true);
+  else if (e.key === 'n' && cur && cur.kind === 'approval') approve(cur.sid, cur.rid, false);
+  else if (e.key === 'Enter' && cur) { closeDialog(); showWaiting(cur); }
+  else if (e.key === 'a') items.filter((p) => p.kind === 'approval').forEach((p) => approve(p.sid, p.rid, true));
   else if (e.key === 'Escape') closeDialog();
   else return; e.preventDefault();
 }
@@ -2439,7 +2474,7 @@ const SHORTCUTS = [
   { id: 'escape', group: 'navigation', combo: 'Escape', label: 'close dialog · back to the grid', scope: 'plain', when: () => !!state.focus, run: () => focusPane(null) },
   // sessions
   { id: 'new', group: 'sessions', combo: 'n', label: 'new session', scope: 'plain', palette: 'new session', run: () => openNewSession() },
-  { id: 'waiting', group: 'sessions', combo: 'w', label: 'cycle sessions waiting on you', scope: 'plain', palette: 'cycle waiting sessions', run: () => cycleWaiting() },
+  { id: 'waiting', group: 'sessions', combo: 'w', label: 'next item waiting on you (approval, question, review, error)', scope: 'plain', palette: 'next item waiting on you', run: () => cycleWaiting() },
   { id: 'jump', group: 'sessions', keys: '1 … 9', label: 'jump to pane on the wall', scope: 'plain', test: (e) => !e.metaKey && !e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key), run: (e) => { const s = visibleSessions()[Number(e.key) - 1]; if (s) { if (state.view !== 'wall') setView('wall'); focusPane(s.id); } } },
   { id: 'open', group: 'sessions', combo: 'Enter', label: 'focus the current session on the wall', scope: 'plain', when: () => state.view === 'wall' && !state.focus && !!state.sid, run: () => focusPane(state.sid) },
   { id: 'view', group: 'sessions', combo: 'v', label: 'pane view: chat ↔ terminal (grid panes also: shell → preview)', scope: 'plain', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
@@ -2465,10 +2500,11 @@ const SHORTCUTS = [
   // review
   { id: 'inbox', group: 'review', combo: 'a', label: 'approval inbox', scope: 'plain', palette: 'approval inbox', run: () => openInbox() },
   { id: 'inbox2', group: 'review', combo: 'i', label: 'approval inbox', scope: 'plain', hidden: true, run: () => openInbox() },
-  { id: 'approve', group: 'review', combo: 'y', label: 'approve the focused pane\'s request', scope: 'plain', when: () => { const f = focusedSession(); return !!(f && f.pending_approval); }, run: () => { const f = focusedSession(); approve(f.id, f.pending_approval, true); } },
-  { id: 'decline', group: 'review', combo: 'N', label: 'decline the focused pane\'s request', scope: 'plain', when: () => { const f = focusedSession(); return !!(f && f.pending_approval); }, run: () => { const f = focusedSession(); approve(f.id, f.pending_approval, false); } },
+  { id: 'approve', group: 'review', combo: 'y', label: 'approve the focused pane\'s request', scope: 'plain', when: () => { const f = focusedSession(); return !!(f && f.pending_approval); }, run: () => { const f = focusedSession(); approve(f.id, f.pending_approval, true, true); } },
+  { id: 'decline', group: 'review', combo: 'N', label: 'decline the focused pane\'s request', scope: 'plain', when: () => { const f = focusedSession(); return !!(f && f.pending_approval); }, run: () => { const f = focusedSession(); approve(f.id, f.pending_approval, false, true); } },
   { id: 'inbox-move', group: 'review', keys: '↑ / ↓ · j / k', label: 'move in the inbox', scope: 'inbox' },
-  { id: 'inbox-yn', group: 'review', keys: 'y / n', label: 'approve / decline in the inbox', scope: 'inbox' },
+  { id: 'inbox-yn', group: 'review', keys: 'y / n', label: 'approve / decline in the inbox (the next item is selected)', scope: 'inbox' },
+  { id: 'inbox-open', group: 'review', keys: '↩', label: 'open the selected item (question, changes, error details)', scope: 'inbox' },
   { id: 'inbox-all', group: 'review', keys: 'a', label: 'approve everything in the inbox', scope: 'inbox' },
   { id: 'undo', group: 'review', keys: '↶ on a message', label: 'undo to here (files + conversation)', scope: 'mouse' },
   { id: 'changes', group: 'review', keys: 'changes', label: 'accept / reject / edit each hunk, then approve', scope: 'mouse' },

@@ -707,3 +707,8 @@ table.grid tr[data-sha] { cursor: pointer; }
 .search .sr .hit:hover { color: var(--fg); border-color: var(--accent); }
 .search .sr .hit .k { color: var(--accent-text); margin-right: 8px; font-size: 10px; text-transform: uppercase; }
 .search button.link { background: none; border: none; color: var(--accent-text); padding: 0; font: inherit; font-weight: 600; cursor: pointer; }
+
+.approval-bar .keys { color: var(--fg-dim); font-size: 10px; white-space: nowrap; }
+.dialog .list .item .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-dim); flex: 0 0 60px; }
+.dialog .list .item .kind.approval { color: var(--waiting); }
+.dialog .list .item .kind.error { color: var(--err, #e06c75); }
