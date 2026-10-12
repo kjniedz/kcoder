@@ -176,6 +176,10 @@ def open_pr(manager, session, info: dict, title: str | None = None, body: str | 
                 if not title:
                     title = first.replace("TITLE:", "").strip()[:70] or None
                 body = rest.strip() + "\n\n---\n" + deterministic.split("---")[-1].strip()
+    issue = session.meta.get("issue")
+    if issue:
+        from . import issues as issuesmod, repos as reposmod
+        title, body = issuesmod.pr_fields(issue, reposmod.github_spec(path), title if title and not title.startswith(f"#{issue['number']} ") else None, body)
     if not title:
         title = (session.meta.get("title") or f"kcoder: {branch}")[:70]
     if shots:
@@ -211,6 +215,13 @@ def open_pr(manager, session, info: dict, title: str | None = None, body: str | 
           "state": "OPEN", "checks": "none", "updated": time.time()}
     session.meta["pr"] = pr
     session.save_meta()
+    if issue and url:
+        from . import issues as issuesmod
+        try:
+            if issuesmod.comment(issue, url):
+                manager._record(session, {"t": "git", "ts": time.time(), "text": f"commented on issue #{issue['number']} with the PR link; the PR closes it when merged"})
+        except Exception as exc:  # noqa: BLE001
+            manager._record(session, {"t": "notice", "ts": time.time(), "text": f"could not comment on issue #{issue['number']}: {exc}"})
     return {"url": url, "message": text[-500:], "committed": committed, "pr": pr}
 
 

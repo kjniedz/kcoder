@@ -59,6 +59,7 @@ from . import uninstall as uninstaller
 from . import worktree as wt
 from . import jobs as jobsmod
 from . import rules as rulesmod
+from . import issues as issuesmod
 from .providers import plan_usage as providers_plan_usage
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
@@ -134,6 +135,7 @@ class Session:
         m["shell"] = self.shell is not None
         m["plan"] = self.engine.provider.kind == "claude"
         m["plan_share"] = self.meta.get("plan_share")
+        m["issue"] = self.meta.get("issue")
         info = self.meta.get("worktree")
         m["worktree_attached"] = bool(info and wt.is_attached(info))
         root = (self.meta.get("project") or {}).get("path") or self.engine.cwd
@@ -1004,6 +1006,9 @@ class Manager:
                                       trust=task.get("trust") or self.cfg.get("default_trust") or "auto",
                                       worktree=None, title=task["text"][:80])
                 session.meta["task"] = task["id"]
+                if task.get("issue"):
+                    session.meta["issue"] = task["issue"]
+                    session.meta["title"] = f"#{task['issue']['number']} {task['issue'].get('title') or ''}"[:80]
                 self.record_user(session, task["text"], [])
                 session.engine.send(task["text"], [])
                 session.save_meta()
@@ -1604,6 +1609,13 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         default_trust = manager.cfg.get("default_trust") if manager.cfg.get("default_trust") in TRUST_LEVELS else "auto"
         trust = req.get("trust") or ("auto" if req.get("auto_approve") else default_trust)
         cwd = req.get("cwd") or os.getcwd()
+        issue = None
+        if issuesmod.find(str(req.get("task") or "")):     # an issue URL as the first task
+            try:
+                req["task"], cwd2, issue = await asyncio.get_running_loop().run_in_executor(None, issuesmod.expand, str(req["task"]), (cwd or "").strip() or None)
+            except Exception as exc:  # noqa: BLE001
+                raise RequestError(str(exc))
+            cwd = cwd2 or cwd
         spec = repos.parse_spec(cwd)
         pulled = None
         if spec:  # a GitHub repo: clone it, or reuse the existing clone and pull it
@@ -1646,6 +1658,11 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if publish_root:
             asyncio.get_running_loop().create_task(_auto_publish(manager, session, publish_root))
         task = (req.get("task") or "").strip()
+        if issue:
+            session.meta["issue"] = issue
+            if not req.get("title"):
+                session.meta["title"] = f"#{issue['number']} {issue.get('title') or ''}"[:80]
+            manager._record(session, {"t": "system", "ts": time.time(), "text": f"working on GitHub issue #{issue['number']}: {issue.get('title') or ''} ({issue['url']})"})
         if task:
             manager.record_user(session, task, [])
             session.engine.send(task, [])
@@ -1771,13 +1788,21 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if action == "add":
             text = (req.get("text") or "").strip()
             repo = (req.get("repo") or "").strip()
+            issue = None
+            if issuesmod.find(text):          # an issue URL as the task: fetch it, the repo defaults to the issue's
+                try:
+                    text, repo, issue = await asyncio.get_running_loop().run_in_executor(None, issuesmod.expand, text, repo or None)
+                except Exception as exc:  # noqa: BLE001
+                    raise RequestError(str(exc))
             if not text or not repo:
-                raise RequestError("a task needs text and a repo (path or owner/name)")
+                raise RequestError("a task needs text and a repo (path or owner/name), or a GitHub issue URL")
             if not repos.parse_spec(repo) and not os.path.isdir(os.path.expanduser(repo)):
                 raise RequestError(f"no such folder or GitHub repo: {repo}")
             trust = req.get("trust") if req.get("trust") in TRUST_LEVELS else None
-            q.add(text, os.path.abspath(os.path.expanduser(repo)) if not repos.parse_spec(repo) else repo,
-                  provider=req.get("provider") or None, model=req.get("model") or None, trust=trust, name=req.get("name") or None)
+            task = q.add(text, os.path.abspath(os.path.expanduser(repo)) if not repos.parse_spec(repo) else repo,
+                         provider=req.get("provider") or None, model=req.get("model") or None, trust=trust, name=req.get("name") or None)
+            if issue:
+                q.update(task["id"], issue=issue)
             asyncio.get_running_loop().create_task(manager.schedule_tasks())
         elif action in ("remove", "cancel"):
             task = q.get(str(req.get("id")))

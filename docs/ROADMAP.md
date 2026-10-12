@@ -12,8 +12,8 @@ here so any session can pick up where the last one stopped.
 | 5 | **Per-repo rules in plain English** (`KCODER.md`): "never touch migrations", "run the tests before committing", enforced as checks. | done (`kcoder/rules.py`: protect / only / never-commit / never-run / run-before-commit / run-before-push; checked in the built-in tools, the Claude Code PreToolUse hook and the worktree git hooks; listed in the instructions dialog) |
 | 12 | **Automatic handoff**: at the compaction point kcoder writes the handoff summary and starts a fresh session instead of carrying a giant context. | done (`Engine._maybe_handoff` + `Manager._handoff`: fresh session in the same worktree, pending message and queue move over, panes follow, old session archived; Settings toggle, off = compact in place) |
 | 13 | **Plan-limit awareness**: how much of the 5-hour and weekly limits a session is using. | done (utilization from Claude Code's rate_limit_events: status-bar `plan 5h 23% · wk 41%`, bars with reset times and a per-session share in the plan dialog, share on each pane and sidebar row; `kcoder plan` prints it) |
-| 9 | **GitHub issues in**: an issue URL as a task; the PR links back and closes it. | next |
-| 8 | **Session templates**: one-click starts with repo, model, trust and first prompt. | |
+| 9 | **GitHub issues in**: an issue URL as a task; the PR links back and closes it. | done (`kcoder/issues.py`: URL or owner/name#N in a task or first message; repo defaults to the issue's; issue chip; PR title from the issue, body starts with Closes #N, comment on the issue with the PR link) |
+| 8 | **Session templates**: one-click starts with repo, model, trust and first prompt. | next |
 | 7 | **Auto-fix on CI failure**: a red check on a draft PR opens a session with the failing log; the fix lands in review. | |
 | 10 | **Morning brief**: what every session did, what is waiting, what is in review. | |
 | 14 | **Search across transcripts** with filters (repo, date, free text). | |

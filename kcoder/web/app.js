@@ -1604,7 +1604,7 @@ async function openNewSession(pre = {}) {
       <label>trust<select id="ns-trust"><option value="auto">auto (never ask)</option><option value="write">write (gate shell)</option><option value="read">read (gate writes + shell)</option><option value="none">none (ask for everything)</option><option value="dry">dry run (plan + diff only, changes nothing)</option></select></label>
     </div>
     <label>session name (optional)<input id="ns-name" placeholder="defaults to the folder name"></label>
-    <label>initial task<textarea id="ns-task" placeholder="what should it do first?"></textarea></label>
+    <label>initial task<textarea id="ns-task" placeholder="what should it do first? A GitHub issue URL works too: the issue becomes the task and the PR closes it"></textarea></label>
     <label>follow-up tasks, one per line (optional)<textarea id="ns-queue" placeholder="run the tests&#10;open a PR"></textarea></label>
     <label class="check"><input type="checkbox" id="ns-wt" ${cfg.worktrees === false ? '' : 'checked'}> use a separate git worktree + branch (recommended when running several sessions on one repo)</label>
     <div class="help" style="text-transform:none;letter-spacing:0">Provider not set up yet? <a href="#" id="ns-setup">Connect your AI</a></div>
@@ -1943,6 +1943,7 @@ function paneChips(s) {
   for (const j of (s.jobs || []).filter((j) => j.status === 'running' || j.status === 'stopping')) h += `<span class="chip job" data-job="${j.id}" title="background job: ${esc(j.cmd)} (click for output, stop)">▶ ${esc(j.name.slice(0, 28))} · ${fmtElapsed((Date.now() / 1000 - j.started) * 1000)}</span>`;
   const ins = s.instructions || [];
   h += `<span class="chip" data-act="instructions" title="${ins.length ? 'instruction file(s) loaded for every turn: ' + esc(ins.join(', ')) + (s.rules ? ' · ' + s.rules + ' plain-English rule' + (s.rules === 1 ? '' : 's') + ' enforced as checks' : '') + ' (click to edit)' : 'no instruction file in this repo (click to create KCODER.md)'}">${ins.length ? '📄 ' + esc(ins[0]) + (ins.length > 1 ? ' +' + (ins.length - 1) : '') + (s.rules ? ' · ' + s.rules + ' rule' + (s.rules === 1 ? '' : 's') : '') : '📄 none'}</span>`;
+  if (s.issue && s.issue.url) h += `<a class="chip" href="${esc(s.issue.url)}" target="_blank" rel="noopener" title="GitHub issue this session works on: ${esc(s.issue.title || '')}. The PR says Closes #${esc(s.issue.number)} and links back.">◉ #${esc(s.issue.number)}</a>`;
   if (s.pr && s.pr.url) {
     const ck = s.pr.checks || 'none'; const icon = ck === 'success' ? '✓' : ck === 'failure' ? '✗' : ck === 'pending' ? '◐' : '';
     h += `<a class="chip pr ${esc(ck)}" href="${esc(s.pr.url)}" target="_blank" rel="noopener" title="${esc(s.pr.title || '')} · ${esc((s.pr.state || '').toLowerCase())}${s.pr.draft ? ' · draft' : ''} · checks: ${esc(ck)}">PR #${esc(s.pr.number)}${s.pr.draft ? ' draft' : ''} ${icon}</a>`;
@@ -2044,7 +2045,7 @@ async function renderTasksView(force) {
   const row = (x, drag) => { const s = state.sessions.get(x.sid) || state.chats.find((c) => c.id === x.sid); return `<div class="task ${esc(x.status)}" data-id="${esc(x.id)}" ${drag ? 'draggable="true"' : ''}>
       ${drag ? '<span class="grip" title="drag to reorder">⋮⋮</span>' : '<span class="grip"></span>'}
       <span class="st">${esc(x.status)}</span>
-      <div class="txt"><div class="t1">${esc(x.text.length > 140 ? x.text.slice(0, 140) + '…' : x.text)}</div><div class="t2">${esc(shortHome(x.repo))} · ${esc(x.model || (x.provider || def.id || '') + ' default')} · trust ${esc(x.trust || state.config && state.config.default_trust || 'auto')}${s ? ' · session ' + esc(s.name) : ''}${x.error ? ' · ' + esc(x.error) : ''}</div></div>
+      <div class="txt"><div class="t1">${x.issue ? `<a href="${esc(x.issue.url)}" target="_blank" rel="noopener" title="${esc(x.issue.url)}">#${esc(x.issue.number)}</a> ${esc(x.issue.title || '')}` : esc(x.text.length > 140 ? x.text.slice(0, 140) + '…' : x.text)}</div><div class="t2">${esc(shortHome(x.repo))} · ${esc(x.model || (x.provider || def.id || '') + ' default')} · trust ${esc(x.trust || state.config && state.config.default_trust || 'auto')}${s ? ' · session ' + esc(s.name) : ''}${x.error ? ' · ' + esc(x.error) : ''}</div></div>
       <span class="when">${age(x.finished || x.started || x.created)} ago</span>
       ${x.sid ? `<button data-t="open" title="open the session">open</button>` : ''}${x.status === 'review' && x.sid ? `<button data-t="review" class="primary" title="review the changes">⚑ review</button>` : ''}
       ${x.status === 'queued' || x.status === 'running' ? `<button data-t="cancel" class="danger">cancel</button>` : `<button data-t="remove" title="remove from the list">✕</button>`}
@@ -2058,7 +2059,7 @@ async function renderTasksView(force) {
         <label>provider<select name="provider">${provs.map((p) => `<option value="${esc(p.id)}" ${p.id === def.id ? 'selected' : ''} ${p.configured ? '' : 'disabled'}>${esc(p.label)}</option>`).join('')}</select></label>
         <label>model<select name="model"><option value="">provider default</option>${(def.models || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
         <label>trust<select name="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select></label></div>
-      <label>task<textarea name="text" placeholder="what should it do? It runs in its own worktree as soon as a slot is free, and lands in review when done." required></textarea></label>
+      <label>task<textarea name="text" placeholder="what should it do? It runs in its own worktree as soon as a slot is free, and lands in review when done. Paste a GitHub issue URL and the issue becomes the task (repo optional); the PR closes it." required></textarea></label>
       <div class="row"><span class="help">finished tasks wait in review; nothing is pushed on its own</span><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add to queue</button></div>
     </form>
     <h3>running</h3><div class="task-list">${by('running').map((x) => row(x, false)).join('') || '<div class="empty-row">nothing running</div>'}</div>

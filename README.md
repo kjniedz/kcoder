@@ -326,6 +326,13 @@ every rule it understood and what it does; the pane chip shows the count.
 
 - **Task queue**: described above. `max_concurrent` caps how many sessions
   run at once; drag to reorder, pause, cancel.
+- **GitHub issues in**: paste an issue URL (or `owner/name#123`) as a task,
+  or as a new session's first message. kcoder reads the issue (`gh` when
+  signed in, the public API otherwise), writes the task from its title, body
+  and labels, and defaults the repo to the issue's. The session shows an
+  issue chip; the PR it opens is titled after the issue, starts with
+  `Closes #123`, and the issue gets a comment with the PR link, so GitHub
+  closes it when the PR merges.
 - **Schedules** (tasks tab): recurring jobs per repo (hourly, daily, weekly)
   feed the queue. A job missed while the Mac slept runs once on wake. A run
   that changed nothing just logs; one that did opens a draft PR or lands in
