@@ -26,6 +26,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -592,14 +593,21 @@ def plan_limit_message(scope: str, limit: str | None, resets_at: float | None, *
     return head + tail
 
 
-def _claude_settings() -> str | None:
+def _claude_settings(sid: str | None = None) -> str | None:
     """Inline settings for `claude --settings`: no AI attribution on commits
-    unless the user configured a trailer."""
-    from . import identity
-    if identity.trailer():
-        return None
+    (unless the user configured a trailer), and the connector-approval hook
+    that routes every `mcp__*` tool call through kcoder (reads pass, writes
+    wait for approval)."""
     import json as _json
-    return _json.dumps({"includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
+    import shlex as _shlex
+    from . import identity, paths
+    settings: dict = {}
+    if not identity.trailer():
+        settings.update({"includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
+    if sid:
+        cmd = f"{_shlex.quote(sys.executable)} -P -m kcoder.permit --sid {_shlex.quote(str(sid))} --data-dir {_shlex.quote(paths.DATA_DIR)}"
+        settings["hooks"] = {"PreToolUse": [{"matcher": "mcp__.*", "hooks": [{"type": "command", "command": cmd, "timeout": 300}]}]}
+    return _json.dumps(settings) if settings else None
 
 
 def describe_claude_tool(name: str, inp: dict) -> str:
@@ -660,7 +668,7 @@ class ClaudeCodeBackend:
             args += ["--resume", self.session_id]
         if system:
             args += ["--append-system-prompt", system]
-        settings = _claude_settings()
+        settings = _claude_settings(getattr(hooks, "sid", None))
         if settings:
             args += ["--settings", settings]
         cwd = getattr(hooks, "cwd", None) or os.getcwd()

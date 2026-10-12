@@ -1,0 +1,25 @@
+# kcoder roadmap (agreed 2026-10-12)
+
+Each item ships on its own: built, tested on an isolated daemon (fake `claude`
+on PATH whenever a turn could start), committed and pushed. Status is kept
+here so any session can pick up where the last one stopped.
+
+| # | Feature | Status |
+|---|---|---|
+| 1 | **Connector approvals**: connector reads run by themselves; anything that sends or changes (email, calendar, Drive, Linear writes) waits for an approval that shows exactly what would go out. Same inbox / pane / phone flow as tool and push approvals. | done (PreToolUse hook `kcoder/permit.py`; reads by verb, unknown tools ask; 240s wait, 10-minute grants for a late approval) |
+| 2 | **Long-running work**: commands that outlive the Bash tool's two-minute limit become background jobs with live output, a stop button and a result the session picks up when the job ends. Also lets the push gate wait longer. | in progress |
+| 3 | **Dry-run sessions**: the agent plans and shows the diff it would make without touching files. | |
+| 5 | **Per-repo rules in plain English** (`KCODER.md`): "never touch migrations", "run the tests before committing", enforced as checks. | |
+| 12 | **Automatic handoff**: at the compaction point kcoder writes the handoff summary and starts a fresh session instead of carrying a giant context. | |
+| 13 | **Plan-limit awareness**: how much of the 5-hour and weekly limits a session is using. | |
+| 9 | **GitHub issues in**: an issue URL as a task; the PR links back and closes it. | |
+| 8 | **Session templates**: one-click starts with repo, model, trust and first prompt. | |
+| 7 | **Auto-fix on CI failure**: a red check on a draft PR opens a session with the failing log; the fix lands in review. | |
+| 10 | **Morning brief**: what every session did, what is waiting, what is in review. | |
+| 14 | **Search across transcripts** with filters (repo, date, free text). | |
+| 16 | **Keyboard-only inbox**: next waiting item, approve, next. | |
+| 17 | **Export a session as a shareable HTML page**. | |
+| 11 | **Voice input** on the phone approval page and the composer. | |
+| 15 | **Light-theme pass and a compact density setting**. | |
+
+Dropped from the list: 4 (per-session budgets), 6 (plan-then-fan-out).

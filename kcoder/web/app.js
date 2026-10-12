@@ -444,7 +444,7 @@ function buildChatHtml(store, sid, opts = {}) {
         const decided = approvals.has(e.id) || results.has(e.id);
         const sess = state.sessions.get(sid);
         const live = !decided && sess && sess.pending_approval === e.id;
-        if (live) out.push(`<div class="approval${e.kind === 'review' ? ' review' : ''}" data-rid="${esc(e.id)}"><span>${e.kind === 'review' ? 'Review' : 'Allow'}</span><code>${esc(e.description)}</code>${e.kind === 'review' ? '<button data-act="changes" title="see the diff first">review changes</button>' : ''}<button class="primary" data-act="approve">${e.kind === 'review' ? 'approve' : 'yes'} <kbd>y</kbd></button><button class="danger" data-act="decline">${e.kind === 'review' ? 'decline' : 'no'} <kbd>n</kbd></button></div>`);
+        if (live) out.push(`<div class="approval${e.kind === 'review' ? ' review' : e.kind === 'connector' ? ' connector' : ''}" data-rid="${esc(e.id)}"><span>${e.kind === 'review' ? 'Review' : e.kind === 'connector' ? 'Connector' : 'Allow'}</span><code>${esc(e.description)}</code>${e.kind === 'review' ? '<button data-act="changes" title="see the diff first">review changes</button>' : ''}<button class="primary" data-act="approve">${e.kind === 'review' ? 'approve' : 'yes'} <kbd>y</kbd></button><button class="danger" data-act="decline">${e.kind === 'review' ? 'decline' : 'no'} <kbd>n</kbd></button></div>`);
         break;
       }
       case 'usage':
@@ -1751,6 +1751,7 @@ async function settingsDialog() {
     ${chk('routing_enabled', !(cfg.routing && cfg.routing.enabled === false), 'Model routing', 'auto picks a cheap model for small turns, a strong one for large')}
     ${sel('review_required', cfg.review_required || 'push', 'Review required before', [['push', 'push - PRs, pushes and merges'], ['commit', 'commit - every commit'], ['none', 'none - review is optional']])}
     ${chk('auto_publish', cfg.auto_publish === true, 'Auto-publish local folders to GitHub', 'a private repo is created and pushed for folders with no remote')}
+    ${chk('connector_approvals', cfg.connector_approvals !== false, 'Connector approvals', 'reads (Gmail, Calendar, Drive, Linear…) run by themselves; sends and changes wait for your approval')}
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
     <div class="label-h">accounts</div>
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
@@ -1767,7 +1768,7 @@ async function settingsDialog() {
       if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
       if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
       if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
-      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
+      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
       const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');
     } catch (err) { toast(err.message, 'err'); }
   });

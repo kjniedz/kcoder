@@ -51,7 +51,8 @@ DEFAULTS = {
     "remote": {"ttl_minutes": 10},  # phone approvals (opt-in via the UI; relay + tokens live in remote.json)
     "default_trust": "auto",   # auto | write | read | none - what new sessions run without asking
     "projects_dir": "~/kcoder-projects",   # where GitHub repos are cloned
-    "auto_publish": False,     # opt in: new sessions on local folders with no GitHub remote get a private repo created + pushed
+    "auto_publish": False,
+    "connector_approvals": True,   # connector reads run by themselves; sends and changes wait for approval     # opt in: new sessions on local folders with no GitHub remote get a private repo created + pushed
     "commit_email": "noreply",  # noreply | public - which email of the signed-in GitHub account commits use
     "ai_trailer": "",          # extra trailer for commits kcoder makes (e.g. "Co-Authored-By: ..."); empty = none
 }

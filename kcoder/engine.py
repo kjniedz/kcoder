@@ -33,6 +33,7 @@ A turn runs on its own thread so the owner (the daemon) stays responsive;
 from __future__ import annotations
 
 import base64
+import logging
 import mimetypes
 import os
 import random
@@ -450,6 +451,7 @@ class Engine:
         except Exception as exc:  # noqa: BLE001 - never let a turn thread die silently
             result = "error"
             del self.messages[turn_start:]
+            logging.getLogger("kcoderd").exception("turn failed: %s: %s", type(exc).__name__, exc)
             self.emit("error", text=f"{type(exc).__name__}: {exc}")
         finally:
             self._pending = None

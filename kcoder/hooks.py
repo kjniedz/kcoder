@@ -68,9 +68,9 @@ def _block(title: str, body: str) -> int:
 REVIEW_WAIT_SECONDS = int(os.environ.get("KCODER_REVIEW_WAIT") or 90)   # inside the Bash tool's 120s timeout
 
 
-def _ask_review(a, kind: str, trees: list, description: str, wait_s: int = REVIEW_WAIT_SECONDS) -> dict | None:
-    """Post an approval request for this push/commit in kcoder and wait for
-    the answer. Returns the daemon's reply, or None when kcoderd is unreachable."""
+def ask_daemon(sid: str, payload: dict, wait_s: int) -> dict | None:
+    """Send one request to kcoderd on behalf of a hook and wait for the reply
+    (up to wait_s + 15s). None when kcoderd is unreachable or refuses."""
     import json
     try:
         from websockets.sync.client import connect as ws_connect, unix_connect
@@ -86,7 +86,7 @@ def _ask_review(a, kind: str, trees: list, description: str, wait_s: int = REVIE
             hello = json.loads(ws.recv(timeout=10))
             if not hello.get("ok"):
                 return None
-            ws.send(json.dumps({"type": "review_wait", "id": 1, "sid": a.sid, "kind": kind, "trees": trees, "description": description, "wait": wait_s}))
+            ws.send(json.dumps({**payload, "id": 1, "sid": sid}))
             deadline = time.monotonic() + wait_s + 15
             while time.monotonic() < deadline:
                 m = json.loads(ws.recv(timeout=max(1, deadline - time.monotonic())))
@@ -95,6 +95,11 @@ def _ask_review(a, kind: str, trees: list, description: str, wait_s: int = REVIE
     except Exception:  # noqa: BLE001 - any failure falls back to the plain block
         return None
     return None
+
+
+def _ask_review(a, kind: str, trees: list, description: str, wait_s: int = REVIEW_WAIT_SECONDS) -> dict | None:
+    """Post an approval request for this push/commit in kcoder and wait for the answer."""
+    return ask_daemon(a.sid, {"type": "review_wait", "kind": kind, "trees": trees, "description": description, "wait": wait_s}, wait_s)
 
 
 def _gate(a, kind: str, trees: list, description: str) -> int:

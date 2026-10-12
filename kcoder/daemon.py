@@ -99,6 +99,7 @@ class Session:
         self.dir = session_dir(self.id)
         self._events_file = None
         self.shell = None   # phase 6: attached pty
+        engine.sid = self.id          # for the connector-approval hook's command line
         self.pending_review = None   # a push/commit waiting for approval: {rid, kind, trees, description, ts, future}
         self.preview = None  # running dev server (kcoder.preview.Preview)
 
@@ -418,9 +419,14 @@ class Manager:
         if approved:
             for tree in pr["trees"]:
                 review.approve_tree(session.dir, tree)
-            session.meta["needs_review"] = False
+            if pr.get("trees"):
+                session.meta["needs_review"] = False
+            if verb == "connector" and pr.get("key"):
+                grants = [g for g in (session.meta.get("tool_grants") or []) if float(g.get("until") or 0) > time.time()]
+                grants.append({"key": pr["key"], "until": time.time() + 600, "description": pr["description"][:200]})
+                session.meta["tool_grants"] = grants[-20:]
         self._record(session, {"t": "approval_result", "ts": time.time(), "id": pr["rid"], "approved": bool(approved)})
-        self._record(session, {"t": "system", "ts": time.time(), "text": f"review: {verb} {'approved' if approved else 'declined'}" + (f" ({reason})" if reason else "")})
+        self._record(session, {"t": "system", "ts": time.time(), "text": (f"connector: {pr['description'][:120]} " if verb == "connector" else f"review: {verb} ") + ('approved' if approved else 'declined') + (f" ({reason})" if reason else "")})
         if self.remote.enabled():
             self.loop.run_in_executor(None, self.remote.resolve, pr["rid"], "approved" if approved else "denied")
         fut = pr.get("future")
@@ -428,8 +434,12 @@ class Manager:
             fut.set_result({"approved": bool(approved), "reason": reason})
         else:
             # the hook stopped waiting: close the loop with a message to the session
-            text = (f"Your git {verb} was approved in kcoder. Run the same git {verb} again now." if approved
-                    else f"Your git {verb} was declined in kcoder{(': ' + reason) if reason else ''}. Do not {verb}; ask what should change.")
+            if verb == "connector":
+                text = (f"Your connector request ({pr['description'][:200]}) was approved in kcoder. Do it again now; it will go through without asking." if approved
+                        else f"Your connector request ({pr['description'][:200]}) was declined in kcoder{(': ' + reason) if reason else ''}. Do not retry it; ask what the user would like instead.")
+            else:
+                text = (f"Your git {verb} was approved in kcoder. Run the same git {verb} again now." if approved
+                        else f"Your git {verb} was declined in kcoder{(': ' + reason) if reason else ''}. Do not {verb}; ask what should change.")
             if session.engine.busy:
                 session.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
             else:
@@ -1272,6 +1282,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if "auto_publish" in req:
             manager.cfg["auto_publish"] = bool(req["auto_publish"])
             config.save({"auto_publish": bool(req["auto_publish"])})
+        if "connector_approvals" in req:
+            manager.cfg["connector_approvals"] = bool(req["connector_approvals"])
+            config.save({"connector_approvals": bool(req["connector_approvals"])})
         if req.get("commit_email") in ("noreply", "public"):
             manager.cfg["commit_email"] = req["commit_email"]
             config.save({"commit_email": req["commit_email"]})
@@ -1867,20 +1880,30 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t == "review_wait":
         # a git hook asking whether this push/commit may go ahead. Posts an approval
         # request like a tool call (pane, inbox, phone) and waits up to `wait` seconds.
-        kind = "commit" if req.get("kind") == "commit" else "push"
+        kind = {"commit": "commit", "connector": "connector"}.get(str(req.get("kind")), "push")
         trees = [str(x) for x in (req.get("trees") or []) if x]
-        if not trees:
+        if kind != "connector" and not trees:
             raise RequestError("no trees to review")
+        key = str(req.get("key") or "")
+        if kind == "connector" and key:
+            # approved a moment ago (a late approval told the session to try again): let it through
+            now = time.time()
+            grants = [g for g in (session.meta.get("tool_grants") or []) if float(g.get("until") or 0) > now]
+            session.meta["tool_grants"] = grants
+            if any(g.get("key") == key for g in grants):
+                return {"approved": True, "granted": True}
         if session.pending_review:
             manager.resolve_review(session, False, "superseded by a newer request")
-        rid = "rev-" + uuid.uuid4().hex[:12]
+        rid = ("con-" if kind == "connector" else "rev-") + uuid.uuid4().hex[:12]
         fut = asyncio.get_running_loop().create_future()
         desc = str(req.get("description") or f"git {kind}")[:600]
-        session.pending_review = {"rid": rid, "kind": kind, "trees": trees, "description": desc, "ts": time.time(), "future": fut}
-        ev = {"t": "approval_request", "ts": time.time(), "id": rid, "name": f"git {kind}", "description": desc, "kind": "review", "input": {"trees": trees}}
+        name = str(req.get("name") or f"git {kind}")
+        session.pending_review = {"rid": rid, "kind": kind, "trees": trees, "description": desc, "ts": time.time(), "future": fut, "key": key, "name": name}
+        ev = {"t": "approval_request", "ts": time.time(), "id": rid, "name": name, "description": desc,
+              "kind": "connector" if kind == "connector" else "review", "input": req.get("input") if kind == "connector" else {"trees": trees}}
         manager._record(session, ev)
         manager.broadcast_sessions()
-        manager.notify(f"{session.meta['name']} wants to {kind}", desc[:200], session.id)
+        manager.notify(f"{session.meta['name']} asks to {'use a connector' if kind == 'connector' else kind}", desc[:200], session.id)
         if manager.remote.enabled():
             manager.loop.run_in_executor(None, manager._remote_notify, session, ev)
         try:

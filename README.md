@@ -259,6 +259,17 @@ retries onto an API key. The status bar shows `plan ✓`, `plan limit` or
 clear a limit you reset yourself. In a terminal: `kcoder login` and `kcoder
 plan [--clear]`.
 
+**Connector approvals.** Claude sessions can use the connectors on your
+claude.ai account (Gmail, Calendar, Drive, Linear and whatever else you have
+connected). Reads run by themselves. Anything that sends or changes (an
+email, a calendar event, a Drive file, a Linear issue, a paid generation)
+waits for your approval first, with the exact call shown ("Gmail · send_email:
+to=sam@example.com, subject=…") on the pane, in the inbox and on your phone.
+Approve within about four minutes and it goes through; otherwise the agent is
+told to wait, and a later approval lets the same call through without asking
+again. Unknown connector tools ask. Off switch in Settings ("Connector
+approvals").
+
 **Daemon security.** `kcoderd` can run shell commands, so it treats every
 other app and web page on the machine as hostile: the CLI talks to it over a
 user-only Unix socket, the app over `127.0.0.1` only, with Host and Origin
