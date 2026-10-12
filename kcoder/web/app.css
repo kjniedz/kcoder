@@ -678,3 +678,7 @@ table.grid tr[data-sha] { cursor: pointer; }
 .planrow .fill { display: block; height: 100%; background: var(--accent); }
 .planrow .fill.hot { background: var(--warn, #e0b341); }
 .planrow .pv { text-align: right; font-variant-numeric: tabular-nums; }
+
+.tplrow { align-items: flex-end; }
+.tplrow label { flex: 1; }
+.tplrow button { margin-bottom: 2px; }

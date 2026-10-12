@@ -1593,7 +1593,9 @@ async function openNewSession(pre = {}) {
   const def = provs.find((p) => p.default && p.configured) || provs.find((p) => p.configured) || provs[0];
   const cfg = state.config || {};
   const cwd = pre.cwd || (state.sid && state.sessions.get(state.sid) ? state.sessions.get(state.sid).cwd : '');
+  const tpls = (cfg.templates || []).slice().sort((a, b) => a.name.localeCompare(b.name));
   const d = openDialog(`<h2>new session</h2><div class="body">
+    <div class="row tplrow"><label>template<select id="ns-tpl"><option value="">none (fill in below)</option>${tpls.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></label><button data-x="tpl-save" title="save the fields below as a template: one click (or kcoder start NAME) starts a session like this">save as template</button><button data-x="tpl-del" title="delete the selected template" hidden>delete template</button></div>
     <label>repo / folder <span class="help" style="text-transform:none;letter-spacing:0">local path, owner/name, or a GitHub URL (cloned into ${esc(shortHome(cfg.projects_dir || '~/kcoder-projects'))} on first use)</span>
       <input id="ns-cwd" value="${esc(cwd)}" placeholder="/path/to/project  ·  owner/repo  ·  https://github.com/owner/repo" autocomplete="off">
       <div class="menu repo-menu" id="ns-repos" hidden></div>
@@ -1609,7 +1611,11 @@ async function openNewSession(pre = {}) {
     <label class="check"><input type="checkbox" id="ns-wt" ${cfg.worktrees === false ? '' : 'checked'}> use a separate git worktree + branch (recommended when running several sessions on one repo)</label>
     <div class="help" style="text-transform:none;letter-spacing:0">Provider not set up yet? <a href="#" id="ns-setup">Connect your AI</a></div>
   </div><div class="foot"><span class="help" id="ns-status"></span><span class="spacer" style="flex:1"></span><button data-x="cancel">cancel</button><button class="primary" data-x="ok">start</button></div>`, 'new');
-  const modelSel = $('#ns-model', d), provSel = $('#ns-provider', d), cwdIn = $('#ns-cwd', d), repoMenu = $('#ns-repos', d), status = $('#ns-status', d);
+  const modelSel = $('#ns-model', d), provSel = $('#ns-provider', d), cwdIn = $('#ns-cwd', d), repoMenu = $('#ns-repos', d), status = $('#ns-status', d), tplSel = $('#ns-tpl', d);
+  const collect = () => ({ cwd: cwdIn.value.trim(), provider: provSel.value, model: modelSel.value, trust: $('#ns-trust', d).value, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked });
+  const applyTpl = (t) => { if (!t) return; cwdIn.value = t.cwd || ''; if (t.provider && provs.some((p) => p.id === t.provider)) { provSel.value = t.provider; provSel.dispatchEvent(new Event('change')); } if (t.model) { if (!Array.from(modelSel.options).some((o) => o.value === t.model)) modelSel.insertBefore(new Option(t.model, t.model), modelSel.lastElementChild); modelSel.value = t.model; } if (t.trust) $('#ns-trust', d).value = t.trust; $('#ns-task', d).value = t.task || ''; $('#ns-queue', d).value = (t.queue || []).join('\n'); if (t.worktree != null) $('#ns-wt', d).checked = !!t.worktree; $('[data-x="tpl-del"]', d).hidden = false; };
+  tplSel.addEventListener('change', () => { const t = tpls.find((x) => x.id === tplSel.value); if (t) applyTpl(t); else $('[data-x="tpl-del"]', d).hidden = true; });
+  if (pre.template) { tplSel.value = pre.template; applyTpl(tpls.find((x) => x.id === pre.template)); }
   $('#ns-setup', d).addEventListener('click', (e) => { e.preventDefault(); const pid = provSel.value; closeDialog(); setupDialog(pid); });
   $('#ns-trust', d).value = state.config && state.config.default_trust ? state.config.default_trust : 'auto';
   const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; const auto = p.auto && (!state.config || !state.config.routing || state.config.routing.enabled !== false); modelSel.innerHTML = (auto ? `<option value="auto" selected>auto (${esc((p.tiers || {}).small || '')} for small tasks, ${esc((p.tiers || {}).large || '')} for large)</option>` : '') + (p.models || []).map((m) => `<option${!auto && m === p.default_model ? ' selected' : ''}>${esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
@@ -1641,7 +1647,10 @@ async function openNewSession(pre = {}) {
     try { const r = await request('create', fields); closeDialog(); state.repoCache = null; state.sid = r.session.id; localStorage.setItem('kcoder.sid', r.session.id); loadEvents(r.session.id, -1); if (state.view === 'wall') focusPane(r.session.id); else if (state.view === 'chat') assignPane(pre.pane != null ? pre.pane : state.layout.focus, r.session.id); toast('started ' + r.session.name + ' in ' + shortHome(r.session.cwd), 'ok'); }
     catch (e) { toast(e.message, 'err'); status.textContent = e.message; $('[data-x="ok"]', d).disabled = false; }
   };
-  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; b.dataset.x === 'ok' ? submit() : closeDialog(); });
+  d.addEventListener('click', async (e) => { const b = e.target.closest('[data-x]'); if (!b) return;
+    if (b.dataset.x === 'tpl-save') { const cur = tpls.find((x) => x.id === tplSel.value); const name = await promptDialog('Template name', 'A saved template starts a session with these fields in one click: ⌘K → "start: name", or kcoder start "name" in a terminal.', cur ? cur.name : ''); if (!name) return; try { const r = await request('templates', { action: 'save', template: cur && cur.name === name ? cur.id : undefined, name, ...collect() }); state.config = { ...(state.config || {}), templates: r.templates }; toast('template saved: ' + name, 'ok'); closeDialog(); openNewSession({ ...pre, template: (r.templates.find((x) => x.name === name) || {}).id }); } catch (err) { toast(err.message, 'err'); } return; }
+    if (b.dataset.x === 'tpl-del') { const cur = tpls.find((x) => x.id === tplSel.value); if (!cur || !(await confirmDialog(`Delete template ${cur.name}?`, ''))) return; try { const r = await request('templates', { action: 'remove', template: cur.id }); state.config = { ...(state.config || {}), templates: r.templates }; toast('template deleted', 'warn'); closeDialog(); openNewSession(pre); } catch (err) { toast(err.message, 'err'); } return; }
+    b.dataset.x === 'ok' ? submit() : closeDialog(); });
   d.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); });
 }
 
@@ -1665,6 +1674,7 @@ function paletteItems() {
     ['check for new commits', checkUpdates], ['pull + rebuild + restart kcoderd', updateNow], ['restart kcoderd', restartDaemon],
     ['uninstall kcoder…', uninstallDialog],
   );
+  for (const t of ((state.config || {}).templates || [])) items.push([`start: ${t.name}`, async () => { try { const r = await request('templates', { action: 'run', template: t.id }); state.sid = r.session.id; loadEvents(r.session.id, -1); if (state.view === 'chat') assignPane(state.layout.focus, r.session.id); else { if (state.view !== 'wall') setView('wall'); focusPane(r.session.id); } toast('started ' + r.session.name + ' from template ' + t.name, 'ok'); } catch (e) { toast(e.message, 'err'); } }, 'template']);
   for (const s of state.sessions.values()) {
     items.push([`focus: ${s.name}${s.title ? ' · ' + s.title : ''}`, () => { if (state.view !== 'wall') setView('wall'); focusPane(s.id); }]);
     items.push([`open: ${s.name}`, () => { state.sid = s.id; if (state.view === 'chat') assignPane(state.layout.focus, s.id); else setView('chat'); }]);

@@ -298,6 +298,12 @@ checks, `frame-ancestors 'none'`, and a per-install token
 (`~/.local/share/kcoder/token`, mode 600) on every connection. API keys are
 never written to logs or history.
 
+**Session templates.** In the new-session dialog, **save as template**
+keeps the repo, provider, model, trust, first task, follow-up queue and
+worktree choice under a name. Starting one is a click: pick it in the
+dialog, or ⌘K and `start: <name>`, or `kcoder start <name>` in a terminal
+(`kcoder start` alone lists them). Templates live in `config.json`.
+
 **Per-repo instructions.** Every turn loads the repo's `KCODER.md`, plus
 `AGENTS.md` and `CLAUDE.md` when present. The pane header shows which file is
 active; click it to edit or create one.

@@ -56,6 +56,7 @@ DEFAULTS = {
     "connector_approvals": True,   # connector reads run by themselves; sends and changes wait for approval     # opt in: new sessions on local folders with no GitHub remote get a private repo created + pushed
     "commit_email": "noreply",  # noreply | public - which email of the signed-in GitHub account commits use
     "ai_trailer": "",          # extra trailer for commits kcoder makes (e.g. "Co-Authored-By: ..."); empty = none
+    "templates": [],           # session templates: {id, name, cwd, provider, model, trust, task, queue, worktree}
 }
 
 _cache: dict | None = None

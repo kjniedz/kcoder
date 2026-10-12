@@ -1220,6 +1220,35 @@ def cmd_plan(args) -> int:
     return 0
 
 
+def cmd_start(args) -> int:
+    """`kcoder start <template>`: start a session from a saved template (repo, model, trust, first task)."""
+    try:
+        client = DaemonClient.connect()
+    except DaemonUnavailable as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+        return 1
+    with client:
+        if not args.template:
+            tpls = client.request("templates")["templates"]
+            if not tpls:
+                console.print("[dim]no templates yet: save one from the new-session dialog in the app (⌘K → new session → save as template)[/dim]")
+                return 0
+            for tp in tpls:
+                console.print(f"[bold]{escape(tp['name'])}[/bold]  [dim]{escape(_short_home(tp.get('cwd') or ''))} · {escape(tp.get('provider') or 'default')}/{escape(tp.get('model') or 'default')} · trust {escape(tp.get('trust') or 'default')}"
+                              + (f" · {escape((tp.get('task') or '')[:60])}" if tp.get("task") else "") + "[/dim]", highlight=False)
+            return 0
+        try:
+            reply = client.request("templates", 180, action="run", name=args.template, session_name=args.name)
+        except ClientError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+            return 1
+        meta = reply["session"]
+        console.print(f"[green]✓[/green] started [bold]{escape(meta['name'])}[/bold] in {escape(_short_home(meta['cwd']))}", highlight=False)
+        if args.attach:
+            chat(client, meta, replay=[], history=[])
+    return 0
+
+
 def cmd_job(args) -> int:
     """`kcoder job run -- <cmd>` and friends: background jobs managed by kcoderd.
     Meant to be run by an agent from inside a session (KCODER_SESSION is set
@@ -1606,7 +1635,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
 # entry point
 # ----------------------------------------------------------------------
 
-SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall", "login", "plan", "job"}
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall", "login", "plan", "job", "start"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1673,6 +1702,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("login", help="connect or reconnect your Claude plan (subscription sign-in, never an API key)")
     p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("start", help="start a session from a saved template (kcoder start with no name lists them)")
+    p.add_argument("template", nargs="?", help="template name")
+    p.add_argument("--name", help="session name")
+    p.add_argument("--attach", action="store_true", help="open the chat in this terminal after starting")
+    p.set_defaults(func=cmd_start)
 
     p = sub.add_parser("plan", help="show the Claude login kcoder uses and any plan limits it is waiting out")
     p.add_argument("--clear", action="store_true", help="forget recorded limits (after you reset one on claude.ai)")

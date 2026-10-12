@@ -1402,6 +1402,38 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t == "stats":
         return {"stats": manager.stats()}
 
+    if t == "templates":
+        # session templates: one-click starts with repo, provider, model, trust, first task and queue
+        action = req.get("action") or "list"
+        tpls = [x for x in (manager.cfg.get("templates") or []) if isinstance(x, dict) and x.get("name")]
+        if action == "save":
+            tpl = {k: req.get(k) for k in ("name", "cwd", "provider", "model", "trust", "task", "queue", "worktree")}
+            tpl["name"] = str(tpl.get("name") or "").strip()[:60]
+            if not tpl["name"]:
+                raise RequestError("a template needs a name")
+            tpl["queue"] = [str(x).strip() for x in (tpl.get("queue") or []) if str(x).strip()]
+            tpl["id"] = str(req.get("template") or uuid.uuid4().hex[:8])     # "id" is the request id on the wire
+            tpls = [x for x in tpls if x.get("id") != tpl["id"] and x.get("name") != tpl["name"]] + [tpl]
+            manager.cfg["templates"] = tpls
+            config.save({"templates": tpls})
+        elif action == "remove":
+            tpls = [x for x in tpls if x.get("id") != str(req.get("template")) and x.get("name") != str(req.get("template"))]
+            manager.cfg["templates"] = tpls
+            config.save({"templates": tpls})
+        elif action == "run":
+            key = str(req.get("template") or req.get("name") or "")
+            tpl = next((x for x in tpls if x.get("id") == key or x.get("name") == key), None)
+            if tpl is None:
+                raise RequestError(f"no template named {key!r}")
+            fields = {"type": "create", "cwd": tpl.get("cwd") or req.get("cwd") or os.getcwd(), "provider": tpl.get("provider") or None,
+                      "model": tpl.get("model") or None, "trust": tpl.get("trust") or None, "task": tpl.get("task") or "", "queue": tpl.get("queue") or [],
+                      "worktree": tpl.get("worktree"), "name": req.get("session_name") or None, "title": None}
+            fields = {k: v for k, v in fields.items() if v is not None}
+            return await _dispatch(manager, client, fields)
+        elif action != "list":
+            raise RequestError(f"unknown templates action: {action}")
+        return {"templates": sorted(tpls, key=lambda x: x.get("name", "").lower())}
+
     if t == "config":
         if "daily_cap_usd" in req:
             try:
