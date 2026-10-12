@@ -40,6 +40,8 @@ const state = {
   view: (localStorage.getItem('kcoder.view') || 'wall').replace('terminal', 'chat'),
   cpaneView: new Map(),    // sid -> 'chat' | 'term' (split panes; wall panes use paneView)
   verbs: new Map(),        // sid -> { verb, at, recent } for the working status line
+  statsSorts: JSON.parse(localStorage.getItem('kcoder.statsSorts') || '{}'),   // stats tables: id -> { key, dir }
+  statsCal: localStorage.getItem('kcoder.statsCal') || 'tokens',
   sid: localStorage.getItem('kcoder.sid') || null,     // current chat (chat/terminal views)
   focus: null,             // focused pane sid (wall)
   paneView: new Map(),     // sid -> 'chat' | 'term' | 'shell'
@@ -122,20 +124,37 @@ function connect() {
   };
   ws.onmessage = (e) => onFrame(JSON.parse(e.data));
   ws.onclose = (e) => {
-    state.connected = false; setConn('off');
+    state.connected = false; if (!state.downSince) state.downSince = Date.now(); setConn('off'); renderClaudeButton();
     for (const [, p] of state.pending) p.reject(new Error('disconnected'));
     state.pending.clear();
     if (e.code === 4401) { localStorage.removeItem('kcoder.token'); tokenGate('That token was rejected.'); return; }
+    maybeStartDaemon();
     setTimeout(connect, 1500);
   };
   ws.onerror = () => {};
 }
 
-function setConn(s) { const el = $('#conn'); el.className = 'conn ' + (s === 'on' ? 'on' : s === 'wait' ? 'wait' : ''); el.title = s === 'on' ? 'connected to kcoderd' : s === 'wait' ? 'connecting…' : 'disconnected - retrying'; }
+function setConn(s) {
+  const el = $('#conn'); el.className = 'conn ' + (s === 'on' ? 'on' : s === 'wait' ? 'wait' : '');
+  const native = !!(window.pywebview && window.pywebview.api);
+  const downFor = state.downSince ? Date.now() - state.downSince : 0;
+  el.title = s === 'on' ? 'connected to kcoderd' : s === 'wait' && downFor < 4000 ? 'connecting to kcoderd…' : native ? 'kcoderd is not running - starting it…' : 'kcoderd is not running - run `kcoder app` (or `kcoder`) in a terminal';
+  const note = $('#status-down'); if (note) { note.hidden = s === 'on' || downFor < 4000; note.textContent = native ? 'kcoderd not running · starting it…' : 'kcoderd not running · run `kcoder app` in a terminal'; }
+  if (s === 'on') state.downSince = 0;
+}
+// The native window can start kcoderd itself (a browser tab cannot): after
+// a few seconds down, ask it to, at most every 15 seconds.
+function maybeStartDaemon() {
+  const api = window.pywebview && window.pywebview.api; if (!api || !api.start_daemon) return;
+  const downFor = Date.now() - (state.downSince || Date.now());
+  if (downFor < 4000 || Date.now() - (state._daemonStartAt || 0) < 15000) return;
+  state._daemonStartAt = Date.now();
+  Promise.resolve(api.start_daemon()).then((r) => { if (r === 'started') toast('kcoderd was not running: started it', 'warn'); else if (String(r).startsWith('failed')) toast('could not start kcoderd: ' + r, 'err'); }).catch(() => {});
+}
 
 function request(type, fields = {}) {
   return new Promise((resolve, reject) => {
-    if (!state.ws || state.ws.readyState !== 1) return reject(new Error('not connected'));
+    if (!state.ws || state.ws.readyState !== 1) return reject(new Error('kcoderd is not running (the app reconnects as soon as it starts)'));
     const id = state.reqId++;
     state.pending.set(id, { resolve, reject: (e) => { if (/unknown request type/.test(e.message)) restartForMismatch('the running kcoderd does not know ' + type); reject(e); } });
     state.ws.send(JSON.stringify({ type, id, ...fields }));
@@ -460,6 +479,7 @@ function pickVerb(sid, elapsedMs) {
     const cands = pool.filter((x) => !v.recent.includes(x));
     const from = cands.length ? cands : pool;
     v.verb = from[Math.floor(Math.random() * from.length)]; v.at = now; v.recent = [v.verb, ...v.recent].slice(0, 5);
+    try { const all = JSON.parse(localStorage.getItem('kcoder.verbCounts') || '{}'); const mo = new Date().toISOString().slice(0, 7); all[mo] = all[mo] || {}; all[mo][v.verb] = (all[mo][v.verb] || 0) + 1; for (const k of Object.keys(all)) if (k < new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 7)) delete all[k]; localStorage.setItem('kcoder.verbCounts', JSON.stringify(all)); } catch {}
   }
   state.verbs.set(sid, v);
   return v.verb;
@@ -1662,6 +1682,7 @@ async function refreshClaude(clear) { try { state.claude = (await request('claud
 function claudeLimitText(l) { const when = l.until ? new Date(l.until * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'later'; return `${l.scope === 'all' ? 'all Claude models' : l.scope[0].toUpperCase() + l.scope.slice(1)}: ${l.label || 'plan limit'} · back ${when}`; }
 function renderClaudeButton() {
   const b = $('#btn-claude'); const c = state.claude; if (!b) return;
+  if (!state.connected) { b.textContent = 'plan ?'; b.className = 'warn'; b.title = 'kcoderd is not running, so the Claude plan status is unknown; it comes back when kcoderd starts'; return; }
   if (!c || !c.installed && !c.logged_in && c.on_plan === undefined) { b.textContent = 'Claude'; b.className = ''; return; }
   const lim = c.limits || [];
   b.className = !c.on_plan ? 'warn' : lim.length ? 'warn' : '';
@@ -1672,7 +1693,7 @@ function aboutDialog() {
   const v = state.version || {};
   const d = openDialog(`<div class="body"><img class="logo" src="icon-192.png" alt=""><pre class="banner" aria-label="KCODER">${esc(BANNER)}</pre>
     <div class="tagline">${esc(TAGLINES[Math.floor(Math.random() * TAGLINES.length)])}</div>
-    <div class="credits">developed by Kyle Niedzwiecki<br>© 2026 Kyer's Reserve LLC<br><span class="ver">kcoder ${esc(v.running || '')}${v.installed && v.installed !== v.running ? ` · ${esc(v.installed)} on disk` : ''}${v.dev ? ' · git checkout' : ''}</span></div>
+    <div class="credits">developed by Kyle Niedzwiecki<br>© 2026 Kyer's Reserve LLC<br><span class="ver">kcoder ${esc(v.running || '')}</span></div>
     <div class="row"><button data-x="settings">Settings</button><button data-x="keys">Keyboard shortcuts</button><button class="primary" data-x="close">Close</button></div></div>`, 'about');
   d.classList.add('about');
   d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; closeDialog(); if (b.dataset.x === 'settings') settingsDialog(); else if (b.dataset.x === 'keys') helpDialog(); });
@@ -1699,7 +1720,7 @@ async function settingsDialog() {
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
     <div class="label-h">kcoder</div>
     <div class="links"><button data-x="update">Check for new commits</button><button data-x="restart">Restart kcoderd</button><button data-x="keys">Keyboard shortcuts</button><button data-x="about">About</button><button class="danger" data-x="uninstall">Uninstall…</button></div>
-  </div><div class="foot"><span class="help">kcoder ${esc(v.running || '')}${v.dev ? ' · git checkout' : ''} · © 2026 Kyer's Reserve LLC · developed by Kyle Niedzwiecki</span><button class="primary" data-x="close">Done</button></div>`, 'settings');
+  </div><div class="foot"><span class="help">kcoder ${esc(v.running || '')} · © 2026 Kyer's Reserve LLC · developed by Kyle Niedzwiecki</span><button class="primary" data-x="close">Done</button></div>`, 'settings');
   d.classList.add('settings');
   d.addEventListener('change', async (e) => {
     const el = e.target.closest('[data-set]'); if (!el) return;
@@ -1723,6 +1744,7 @@ async function settingsDialog() {
 }
 
 async function claudeDialog() {
+  if (!state.connected) { toast('kcoderd is not running: Claude is fine, the app just cannot reach kcoderd. ' + (window.pywebview ? 'It is being started; try again in a few seconds.' : 'Run `kcoder app` in a terminal.'), 'warn'); return; }
   const d = openDialog(`<h2>your Claude plan<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body setup"><div id="cl-body" class="help plain">checking…</div></div>
     <div class="foot"><span class="help plain" id="cl-status"></span><span class="spacer" style="flex:1"></span><button data-cl="check">Check again</button><button class="primary" data-cl="login">Reconnect Claude</button></div>`, 'claude');
   const body = $('#cl-body', d), status = $('#cl-status', d);
@@ -2614,6 +2636,27 @@ let statsData = null;
 function openStats(metric) { state.statsMetric = metric || null; statsData = null; setView('stats'); }
 const fmtDur = (sec) => { sec = Math.round(sec || 0); if (sec < 60) return sec + 's'; const m = Math.round(sec / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60); return `${h}h ${m % 60}m`; };
 const fmtDate = (d) => { if (!d) return ''; const t = new Date(d + 'T00:00:00'); return isNaN(t) ? d : t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + (t.getFullYear() !== new Date().getFullYear() ? ' ' + t.getFullYear() : ''); };
+const fmtPct = (x) => `${Math.round((x || 0) * 100)}%`;
+const fmtNum = (v) => (v == null ? '-' : Number.isInteger(v) ? fmtInt(v) : Math.abs(v) >= 100 ? fmtInt(Math.round(v)) : v.toFixed(1));
+const fmtCompact = (v) => { v = Math.round(v || 0); const a = Math.abs(v); return a >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : a >= 10000 ? (v / 1e3).toFixed(1) + 'k' : fmtInt(v); };
+const fmtSigned = (v) => (v > 0 ? '+' : '') + fmtCompact(v);
+const plus = (v) => `<span class="ok">+${fmtInt(Math.round(v || 0))}</span>`, minus = (v) => `<span class="warn">-${fmtInt(Math.round(v || 0))}</span>`;
+const TOOL_NAMES = { run_bash: 'Bash', read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List' };
+const toolCategory = (n) => (/^(Bash|run_bash)$/.test(n) ? 'shell' : /^(Edit|Write|MultiEdit|NotebookEdit|write_file|edit_file)$/.test(n) ? 'edit' : /^(Read|read_file|list_dir|LS)$/.test(n) ? 'read' : /^(Grep|Glob|WebSearch|WebFetch)$/.test(n) ? 'search' : 'other');
+// one sortable table: cols [{k, label, f, cls:'l' for text (numbers are right-aligned by default), sort}]; sort state is kept per table id
+function sortableTable(id, cols, rows, opts = {}) {
+  const st = state.statsSorts[id] || opts.sort || { key: cols[0].k, dir: 1 };
+  const col = cols.find((c) => c.k === st.key) || cols[0];
+  const val = (r) => (col.sort ? col.sort(r) : r[col.k]);
+  const sorted = rows.slice().sort((a, b) => { const x = val(a), y = val(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * st.dir; });
+  const head = cols.map((c) => `<th class="${c.cls || ''}${st.key === c.k ? ' on' : ''}${opts.hl === c.k ? ' hl' : ''}" data-sort="${c.k}" title="sort by ${esc(c.label)}">${c.label}${st.key === c.k ? (st.dir < 0 ? ' ↓' : ' ↑') : ''}</th>`).join('');
+  const body = sorted.length ? sorted.map((r) => `<tr${opts.row ? opts.row(r) : ''}>${cols.map((c) => `<td class="${c.cls || ''}${opts.hl === c.k ? ' hl' : ''}">${c.f(r)}</td>`).join('')}</tr>`).join('') : `<tr><td class="l" colspan="${cols.length}">${opts.empty || 'nothing in this range'}</td></tr>`;
+  const total = opts.total && sorted.length ? `<tr class="total">${cols.map((c, i) => `<td class="${c.cls || ''}">${i === 0 ? esc(opts.total.label) : c.f(opts.total.row)}</td>`).join('')}</tr>` : '';
+  return `<div class="grid-wrap${opts.tall ? ' tall' : ''}${opts.fixed ? ' fixed' : ''}" data-table="${id}"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}${total}</tbody></table></div>`;
+}
+function sumRows(rows) { const t = {}; for (const r of rows) for (const k of Object.keys(r)) if (typeof r[k] === 'number') t[k] = (t[k] || 0) + r[k]; return t; }
+const verbCountsThisMonth = () => { try { return (JSON.parse(localStorage.getItem('kcoder.verbCounts') || '{}')[new Date().toISOString().slice(0, 7)] || {}); } catch { return {}; } };
+
 async function renderStatsView(force) {
   if (state.view !== 'stats') return;
   const box = $('#stats-body');
@@ -2623,22 +2666,80 @@ async function renderStatsView(force) {
     if (state.view !== 'stats') return;
   }
   const d = statsData; const S = d.summary; const m = state.statsMetric;
-  const metricCard = (key, title, pick, fmt) => `<div class="card${m === key ? ' hl' : ''}"><h3>${title}</h3><div class="big">${fmt(pick(S.today))}</div><div class="row"><span>7-day avg</span><b>${fmt(pick(S.avg7))}</b></div><div class="row"><span>30-day avg</span><b>${fmt(pick(S.avg30))}</b></div><div class="row"><span>all time${S.first_date ? ' (since ' + fmtDate(S.first_date) + ')' : ''}</span><b>${fmt(pick(S.all))}</b></div></div>`;
+  const metricCard = (key, title, pick, fmt, foot) => `<div class="card${m === key ? ' hl' : ''}"><h3>${title}</h3><div class="big">${fmt(pick(S.today))}</div><div class="row"><span>7-day avg</span><b>${fmt(pick(S.avg7))}</b></div><div class="row"><span>30-day avg</span><b>${fmt(pick(S.avg30))}</b></div><div class="row"><span>all time${S.first_date ? ' (since ' + fmtDate(S.first_date) + ')' : ''}</span><b>${fmt(pick(S.all))}</b></div>${foot || ''}</div>`;
+  const linesFmt = (r) => `<span class="ok">+${fmtCompact(r.insertions)}</span> <span class="warn">-${fmtCompact(r.deletions)}</span> <span class="dim">net ${fmtSigned(r.net)}</span>`;
   const summary = [
     metricCard('tokens', 'tokens', (r) => r.total, fmtTokens),
-    metricCard('commits', 'commits', (r) => r.commits, (v) => (Number.isInteger(v) ? fmtInt(v) : v.toFixed(1))),
-    metricCard('sessions', 'sessions', (r) => r.sessions, (v) => (Number.isInteger(v) ? fmtInt(v) : v.toFixed(1))),
+    metricCard('lines', 'lines of code', (r) => r, linesFmt, `<div class="row"><span>files changed today · all time</span><b>${fmtInt(S.today.files)} · ${fmtInt(S.all.files)}</b></div>`).replace('<div class="card', '<div class="card wide'),
+    metricCard('commits', 'commits', (r) => r.commits, fmtNum),
+    metricCard('sessions', 'sessions', (r) => r.sessions, fmtNum),
     metricCard('active', 'active agent time', (r) => r.active_seconds, fmtDur),
+    metricCard('api', 'API equivalent <span class="dim">(estimate)</span>', (r) => r.api_equivalent, fmtUsd, `<div class="row"><span class="dim">what this usage would cost at API rates; plan usage is not billed</span></div>`),
   ].join('');
-  // chart
-  const ser = d.series; const mx = Math.max(1, ...ser.map((r) => r.total)); const W = 900, H = 150, pad = 4; const bw = Math.max(2, (W - pad * 2) / Math.max(1, ser.length) - 2);
-  const bars = ser.map((r, i) => { const x = pad + i * ((W - pad * 2) / ser.length); const hi = Math.round(r.input / mx * (H - 20)); const ho = Math.round(r.output / mx * (H - 20)); return `<g><title>${r.date}: ${fmtInt(r.total)} tokens (${fmtInt(r.input)} in, ${fmtInt(r.output)} out)${r.commits ? ' · ' + r.commits + ' commits' : ''}</title><rect class="in" x="${x}" y="${H - 16 - hi}" width="${bw}" height="${hi}"></rect><rect class="out" x="${x}" y="${H - 16 - hi - ho}" width="${bw}" height="${ho}"></rect>${(ser.length <= 31 || i % 7 === 0) && (i === 0 || i === ser.length - 1 || i % Math.ceil(ser.length / 10) === 0) ? `<text x="${x}" y="${H - 4}">${fmtDate(r.date)}</text>` : ''}</g>`; }).join('');
-  const chart = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg><div class="legend"><span><i class="in"></i> tokens in</span><span><i class="out"></i> tokens out</span><span class="dim">peak ${fmtTokens(mx)} / day</span></div>`;
-  // breakdowns
-  const bd = (title, rows, keyLabel, extra) => `<div class="card"><h3>${title}</h3><div class="grid-wrap"><table class="grid"><thead><tr><th class="l">${keyLabel}</th>${extra ? extra.map((e) => `<th>${e[0]}</th>`).join('') : ''}<th>tokens</th><th>in</th><th>out</th><th>calls</th><th>sessions</th><th>cost</th></tr></thead><tbody>${rows.length ? rows.map((r) => `<tr><td class="l">${esc(r.key)}</td>${extra ? extra.map((e) => `<td>${e[1](r)}</td>`).join('') : ''}<td>${fmtTokens(r.total)}</td><td>${fmtTokens(r.input)}</td><td>${fmtTokens(r.output)}</td><td>${fmtInt(r.calls)}</td><td>${fmtInt(r.sessions)}</td><td>${r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost) + (r.cost ? ' est.' : '')}</td></tr>`).join('') : '<tr><td class="l" colspan="9">nothing in this range</td></tr>'}</tbody></table></div></div>`;
-  const top = `<div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens (${d.days} days)</h3><div class="grid-wrap"><table class="grid"><thead><tr><th class="l">session</th><th class="l">project</th><th class="l">model</th><th>tokens</th><th>turns</th><th>active</th><th>cost</th></tr></thead><tbody>${d.top_sessions.length ? d.top_sessions.map((r) => `<tr class="click" data-open="${esc(r.key)}" title="open in the focused pane"><td class="l">${esc(r.name || r.key)}${r.title && r.title !== r.name ? ' <span class="dim">· ' + esc(r.title) + '</span>' : ''}${r.archived ? ' <span class="badge archived">archived</span>' : ''}</td><td class="l">${esc(r.project || '')}</td><td class="l">${esc(r.model || '')}</td><td><b>${fmtTokens(r.total)}</b></td><td>${fmtInt(r.turns)}</td><td>${fmtDur(r.active_seconds)}</td><td>${r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost)}</td></tr>`).join('') : '<tr><td class="l" colspan="7">no usage in this range</td></tr>'}</tbody></table></div></div>`;
+  // daily tokens chart
+  const ser = d.series; const W = 900, H = 150, pad = 4; const slot = (W - pad * 2) / Math.max(1, ser.length); const bw = Math.max(2, slot - 2);
+  const label = (i, r) => ((ser.length <= 31 || i % 7 === 0) && (i === 0 || i === ser.length - 1 || i % Math.ceil(ser.length / 10) === 0) ? `<text x="${pad + i * slot}" y="${H - 4}">${fmtDate(r.date)}</text>` : '');
+  const mx = Math.max(1, ...ser.map((r) => r.total));
+  const tokBars = ser.map((r, i) => { const x = pad + i * slot; const hi = Math.round(r.input / mx * (H - 20)); const ho = Math.round(r.output / mx * (H - 20)); return `<g><title>${r.date}: ${fmtInt(r.total)} tokens (${fmtInt(r.input)} in, ${fmtInt(r.output)} out)${r.commits ? ' · ' + r.commits + ' commits' : ''}</title><rect class="in" x="${x}" y="${H - 16 - hi}" width="${bw}" height="${hi}"></rect><rect class="out" x="${x}" y="${H - 16 - hi - ho}" width="${bw}" height="${ho}"></rect>${label(i, r)}</g>`; }).join('');
+  const tokChart = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${tokBars}</svg><div class="legend"><span><i class="in"></i> tokens in</span><span><i class="out"></i> tokens out</span><span class="dim">peak ${fmtTokens(mx)} / day</span></div>`;
+  // daily lines chart: added above the zero line, removed below
+  const ml = Math.max(1, ...ser.map((r) => Math.max(r.insertions, r.deletions))); const zero = Math.round((H - 16) * 0.6);
+  const lineBars = ser.map((r, i) => { const x = pad + i * slot; const ha = Math.round(r.insertions / ml * (zero - 4)); const hr = Math.round(r.deletions / ml * (H - 20 - zero)); return `<g><title>${r.date}: +${fmtInt(r.insertions)} / -${fmtInt(r.deletions)} (net ${fmtSigned(r.net)}) · ${r.commits} commit${r.commits === 1 ? '' : 's'} · ${fmtInt(r.files)} files</title><rect class="add" x="${x}" y="${zero - ha}" width="${bw}" height="${ha}"></rect><rect class="del" x="${x}" y="${zero}" width="${bw}" height="${hr}"></rect>${label(i, r)}</g>`; }).join('');
+  const linesChart = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line class="zero" x1="0" x2="${W}" y1="${zero}" y2="${zero}"></line>${lineBars}</svg><div class="legend"><span><i class="add"></i> lines added</span><span><i class="del"></i> lines removed</span><span class="dim">peak ${fmtInt(ml)} / day</span></div>`;
+  // breakdown tables
+  const costCol = { k: 'api_equivalent', label: 'API equiv.', f: (r) => (r.plan ? `<span class="dim" title="estimate: this usage ran on your plan">${fmtUsd(r.api_equivalent)} est.</span>` : fmtUsd(r.cost)) };
+  const linesCols = [{ k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'insertions', label: '+', f: (r) => plus(r.insertions) }, { k: 'deletions', label: '-', f: (r) => minus(r.deletions) }, { k: 'net', label: 'net', f: (r) => fmtSigned(r.net) }, { k: 'tokens_per_line', label: 'tokens / line', f: (r) => (r.tokens_per_line == null ? '<span class="dim">-</span>' : fmtTokens(r.tokens_per_line)) }];
+  const byModel = sortableTable('model', [{ k: 'key', label: 'model', f: (r) => esc(r.key), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'fresh', label: 'fresh in', f: (r) => fmtTokens(r.fresh) }, { k: 'cache_read', label: 'cache read', f: (r) => fmtTokens(r.cache_read) }, { k: 'cache_write', label: 'cache write', f: (r) => fmtTokens(r.cache_write) }, { k: 'cache_hit', label: 'hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'output', label: 'out', f: (r) => fmtTokens(r.output) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, ...linesCols, costCol], d.by_model, { sort: { key: 'total', dir: -1 } });
+  const byProvider = sortableTable('provider', [{ k: 'key', label: 'provider', f: (r) => esc(r.key), cls: 'l' }, { k: 'billing', label: 'billing', f: (r) => esc(r.billing || (r.plan ? 'subscription' : 'api key')), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'cache_hit', label: 'cache hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, { k: 'cost', label: 'cost', f: (r) => (r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost)) }, costCol], d.by_provider, { sort: { key: 'total', dir: -1 } });
+  const byProject = sortableTable('project', [{ k: 'key', label: 'repo / project', f: (r) => esc(r.key), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, ...linesCols, { k: 'files', label: 'files', f: (r) => fmtInt(r.files) }, costCol], d.by_project, { sort: { key: 'total', dir: -1 } });
+  const top = sortableTable('top', [{ k: 'name', label: 'session', f: (r) => `<span class="ell" title="${esc((r.name || r.key) + (r.title ? ' · ' + r.title : ''))}">${esc(r.name || r.key)}${r.title && r.title !== r.name ? ' <span class="dim">· ' + esc(r.title) + '</span>' : ''}</span>${r.archived ? ' <span class="badge archived">archived</span>' : ''}`, cls: 'l name', sort: (r) => r.name || r.key }, { k: 'model', label: 'model', f: (r) => esc(r.model || ''), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'turns', label: 'turns', f: (r) => fmtInt(r.turns) }, { k: 'active_seconds', label: 'active', f: (r) => fmtDur(r.active_seconds) }, { k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'net', label: 'lines', f: (r) => (r.commits ? `${plus(r.insertions)} ${minus(r.deletions)}` : '<span class="dim">-</span>') }, costCol], d.top_sessions, { sort: { key: 'total', dir: -1 }, fixed: true, row: (r) => ` class="click" data-open="${esc(r.key)}" title="open in the focused pane"`, empty: 'no usage in this range' });
+  // cache split
+  const c = d.cache; const ci = Math.max(1, c.input);
+  const cacheCard = `<div class="card"><h3>input tokens · ${d.days} days</h3><div class="stack"><i class="fresh" style="width:${c.fresh / ci * 100}%" title="fresh input"></i><i class="cread" style="width:${c.cache_read / ci * 100}%" title="cache reads"></i><i class="cwrite" style="width:${c.cache_write / ci * 100}%" title="cache writes"></i></div>
+    <div class="row"><span><i class="sw fresh"></i> fresh input</span><b>${fmtTokens(c.fresh)}</b></div><div class="row"><span><i class="sw cread"></i> cache reads</span><b>${fmtTokens(c.cache_read)}</b></div><div class="row"><span><i class="sw cwrite"></i> cache writes</span><b>${fmtTokens(c.cache_write)}</b></div>
+    <div class="row"><span>cache hit rate</span><b>${fmtPct(c.hit_rate)}</b></div><div class="row"><span>API equivalent <span class="dim">(estimate)</span></span><b>${fmtUsd(c.api_equivalent)}</b></div>${c.cost ? `<div class="row"><span>actually billed (API keys)</span><b>${fmtUsd(c.cost)}</b></div>` : ''}</div>`;
+  // activity calendar
+  const cal = d.calendar; const key = state.statsCal === 'lines' ? 'lines' : 'tokens';
+  const vals = cal.map((r) => r[key]).filter((v) => v > 0).sort((a, b) => a - b);
+  const q = (p) => vals[Math.min(vals.length - 1, Math.floor(vals.length * p))] || 0;
+  const level = (v) => (!v ? 0 : v <= q(0.25) ? 1 : v <= q(0.5) ? 2 : v <= q(0.75) ? 3 : 4);
+  const first = new Date(cal[0].date + 'T00:00:00'); const offset = (first.getDay() + 6) % 7;
+  const cells = cal.map((r, i) => { const n = i + offset; const x = Math.floor(n / 7) * 13, y = (n % 7) * 13; return `<rect class="c l${level(r[key])}" x="${x}" y="${y}" width="11" height="11" rx="2"><title>${fmtDate(r.date)}: ${key === 'tokens' ? fmtInt(r.tokens) + ' tokens' : fmtInt(r.lines) + ' lines'} · ${r.commits} commit${r.commits === 1 ? '' : 's'}</title></rect>`; }).join('');
+  const months = []; let lastM = -1; cal.forEach((r, i) => { const dt = new Date(r.date + 'T00:00:00'); if (dt.getMonth() !== lastM) { lastM = dt.getMonth(); if (i > 6) months.push(`<text x="${Math.floor((i + offset) / 7) * 13}" y="-3">${dt.toLocaleDateString(undefined, { month: 'short' })}</text>`); } });
+  const weeks = Math.ceil((cal.length + offset) / 7);
+  const calendar = `<div class="card"><h3>activity · last year <span class="seg sm" id="cal-toggle"><button data-cal="tokens" class="${key === 'tokens' ? 'active' : ''}">tokens</button><button data-cal="lines" class="${key === 'lines' ? 'active' : ''}">lines</button></span><span class="spacer"></span><span class="dim">current streak <b>${d.streaks.current}</b> day${d.streaks.current === 1 ? '' : 's'} · longest <b>${d.streaks.longest}</b> · active days <b>${d.streaks.active_days}</b></span></h3>
+    <div class="cal-wrap"><svg class="cal" viewBox="-2 -14 ${weeks * 13 + 2} ${7 * 13 + 14}" width="${weeks * 13 + 2}" height="${7 * 13 + 14}">${months.join('')}${cells}</svg></div></div>`;
+  // hour of day / day of week
+  const hm = Math.max(1, ...d.hours.flat()); const dows = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const hours = `<div class="card"><h3>when sessions run · ${d.days} days <span class="dim">(active agent time by local hour)</span></h3><div class="hours"><div class="hrow head"><span></span>${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? h : ''}</span>`).join('')}</div>${d.hours.map((row, i) => `<div class="hrow"><span>${dows[i]}</span>${row.map((v, h) => `<i style="opacity:${v ? 0.15 + 0.85 * v / hm : 0}" title="${dows[i]} ${h}:00 · ${fmtDur(v)}"></i>`).join('')}</div>`).join('')}</div></div>`;
+  // parallelism, waiting, health, records, verbs
+  const P = d.parallel, Wt = d.waiting, Hh = d.health, R = d.records;
+  const small = (title, rows) => `<div class="card"><h3>${title}</h3>${rows.map(([k, v, hint]) => `<div class="row"${hint ? ` title="${esc(hint)}"` : ''}><span>${k}</span><b>${v}</b></div>`).join('')}</div>`;
+  const parallel = small(`parallelism · ${d.days} days`, [['agent-hours', `${P.agent_hours}h`, 'sum of every session\'s active time'], ['peak concurrent sessions', fmtInt(P.max_peak)], ['avg daily peak', P.avg_peak], ['avg concurrency while busy', P.avg_concurrency, 'active session-seconds divided by wall-clock seconds with at least one session running']]);
+  const waiting = small(`time waiting on you · ${d.days} days`, [['total', fmtDur(Wt.total_seconds)], ['median wait', fmtDur(Wt.median_seconds)], ['times a session waited', fmtInt(Wt.count), 'approvals and questions; waits over a day are not counted']]);
+  const health = small(`session health · ${d.days} days`, [['interrupts (esc)', fmtInt(Hh.interrupts)], ['undos', fmtInt(Hh.undos)], ['compactions', fmtInt(Hh.compactions)], ['sessions ended with no commit', `${fmtInt(Hh.sessions_no_commit)} <span class="dim">of ${fmtInt(Hh.sessions_with_turns)}</span>`]]);
+  const rec = (label, v) => `<div class="row stack"><span>${label}</span><b>${v || '<span class="dim">-</span>'}</b></div>`;
+  const records = `<div class="card"><h3>records · ${d.days} days</h3>` +
+    rec('biggest commit', R.biggest_commit && `${R.biggest_commit.url ? `<a href="${esc(R.biggest_commit.url)}" target="_blank" rel="noopener">${R.biggest_commit.sha.slice(0, 7)} ↗</a>` : R.biggest_commit.sha.slice(0, 7)} · ${fmtInt(R.biggest_commit.lines)} lines <span class="dim">· ${esc(R.biggest_commit.project || '')} · ${fmtDate(R.biggest_commit.date)}</span>`) +
+    rec('longest turn', R.longest_turn && `${fmtDur(R.longest_turn.seconds)} <span class="dim">· <a href="#" data-open-session="${esc(R.longest_turn.sid)}">${esc(R.longest_turn.name || R.longest_turn.sid)}</a> · ${fmtDate(R.longest_turn.date)}</span>`) +
+    rec('most tokens in a day', R.most_tokens_day && `${fmtTokens(R.most_tokens_day.tokens)} <span class="dim">· ${fmtDate(R.most_tokens_day.date)}</span>`) +
+    rec('most lines in a day', R.most_lines_day && `${fmtInt(R.most_lines_day.lines)} <span class="dim">· ${fmtDate(R.most_lines_day.date)}</span>`) + '</div>';
+  const vc = Object.entries(verbCountsThisMonth()).sort((a, b) => b[1] - a[1]);
+  const fun = `<div class="card"><h3>just for fun</h3>${rec('most-shown verb this month', vc.length ? `${esc(vc[0][0])} <span class="dim">· ${fmtInt(vc[0][1])} times${vc[1] ? ' · then ' + esc(vc[1][0]) : ''}</span>` : null)}<div class="row"><span class="dim">counted in this browser while sessions work</span></div></div>`;
+  // tools
+  const toolRows = Object.values(d.tools.reduce((acc, r) => { const n = TOOL_NAMES[r.name] || r.name; const a = acc[n] || (acc[n] = { name: n, category: toolCategory(r.name), count: 0, errors: 0 }); a.count += r.count; a.errors += r.errors; return acc; }, {})).map((r) => ({ ...r, error_rate: r.count ? r.errors / r.count : 0 }));
+  const toolsT = sortableTable('tools', [{ k: 'name', label: 'tool', f: (r) => esc(r.name), cls: 'l' }, { k: 'category', label: 'kind', f: (r) => esc(r.category), cls: 'l' }, { k: 'count', label: 'calls', f: (r) => fmtInt(r.count) }, { k: 'errors', label: 'failed', f: (r) => (r.errors ? `<span class="warn">${fmtInt(r.errors)}</span>` : '0') }, { k: 'error_rate', label: 'failure rate', f: (r) => fmtPct(r.error_rate) }], toolRows, { sort: { key: 'count', dir: -1 }, empty: 'no tool calls in this range', total: toolRows.length ? { label: 'total', row: { ...sumRows(toolRows), error_rate: sumRows(toolRows).count ? sumRows(toolRows).errors / sumRows(toolRows).count : 0 } } : null });
+  // commits
   const ct = d.commit_totals;
-  const commits = `<div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions (${d.days} days) · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3><div class="grid-wrap tall"><table class="grid"><thead><tr><th class="l">when</th><th class="l">commit</th><th class="l">subject</th><th class="l">repo</th><th class="l">session</th><th>+</th><th>-</th><th class="l">state</th></tr></thead><tbody>${d.commits.length ? d.commits.map((c) => `<tr><td class="l" title="${new Date(c.ts * 1000).toLocaleString()}">${fmtDate(c.date)} ${new Date(c.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</td><td class="l">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="open on GitHub">${c.sha.slice(0, 7)} ↗</a>` : `<code>${c.sha.slice(0, 7)}</code>`}</td><td class="l wrap">${esc(c.subject)}</td><td class="l">${esc(c.project || '')}${c.branch ? ' <span class="dim">@ ' + esc(c.branch) + '</span>' : ''}</td><td class="l">${esc(c.session || c.sid || '')}</td><td class="ok">+${fmtInt(c.insertions)}</td><td class="warn">-${fmtInt(c.deletions)}</td><td class="l"><span class="badge ${c.pushed ? 'pushed' : 'local'}">${c.pushed ? 'pushed' : 'local only'}</span></td></tr>`).join('') : '<tr><td class="l" colspan="8">no commits from sessions in this range</td></tr>'}</tbody></table></div></div>`;
+  const commitsT = sortableTable('commits', [
+    { k: 'ts', label: 'when', f: (c) => `<span title="${new Date(c.ts * 1000).toLocaleString()}">${fmtDate(c.date)} ${new Date(c.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>`, cls: 'l' },
+    { k: 'sha', label: 'commit', f: (c) => (c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="open on GitHub">${c.sha.slice(0, 7)} ↗</a>` : `<code>${c.sha.slice(0, 7)}</code>`), cls: 'l' },
+    { k: 'subject', label: 'subject', f: (c) => `<span class="subject" title="click to expand">${esc(c.subject)}</span>`, cls: 'l subj' },
+    { k: 'project', label: 'repo', f: (c) => `${esc(c.project || '')}${c.branch ? ' <span class="dim">@ ' + esc(c.branch) + '</span>' : ''}`, cls: 'l' },
+    { k: 'session', label: 'session', f: (c) => esc(c.session || c.sid || ''), cls: 'l' },
+    { k: 'insertions', label: '+', f: (c) => plus(c.insertions) }, { k: 'deletions', label: '-', f: (c) => minus(c.deletions) }, { k: 'files', label: 'files', f: (c) => fmtInt(c.files) },
+    { k: 'pushed', label: 'state', f: (c) => `<span class="badge ${c.pushed ? 'pushed' : 'local'}">${c.pushed ? 'pushed' : 'local only'}</span>`, cls: 'l', sort: (c) => (c.pushed ? 1 : 0) },
+  ], d.commits, { sort: { key: 'ts', dir: -1 }, tall: true, fixed: true, row: (c) => ` data-sha="${esc(c.sha)}"`, empty: 'no commits from sessions in this range' });
   box.innerHTML = `
     <div class="stats-head"><h2>stats</h2>
       <div class="seg" id="stats-range">${[7, 30, 90].map((n) => `<button data-days="${n}" class="${state.statsDays === n ? 'active' : ''}">${n} days</button>`).join('')}</div>
@@ -2646,33 +2747,48 @@ async function renderStatsView(force) {
       <span class="spacer"></span>
       <button id="stats-csv" title="daily table as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
     </div>
-    <div class="summary">${summary}</div>
-    <div class="card${m === 'tokens' ? ' hl' : ''}"><h3>daily tokens · last ${d.days} days</h3>${chart}</div>
-    <div class="card"><h3>daily</h3><div class="grid-wrap tall" id="stats-daily"></div></div>
-    <div class="two">${bd('by model', d.by_model, 'model')}${bd('by provider', d.by_provider, 'provider', [['billing', (r) => r.billing || (r.plan ? 'subscription' : 'api key')]])}</div>
-    <div class="two">${bd('by repo / project', d.by_project, 'project')}${top}</div>
-    ${commits}`;
+    <div class="summary six">${summary}</div>
+    <div class="two"><div class="card${m === 'tokens' ? ' hl' : ''}"><h3>daily tokens · last ${d.days} days</h3>${tokChart}</div><div class="card${m === 'lines' ? ' hl' : ''}"><h3>daily lines of code · last ${d.days} days</h3>${linesChart}</div></div>
+    <div class="card"><h3>daily</h3><div id="stats-daily"></div></div>
+    <div class="card"><h3>by model · ${d.days} days <span class="dim">(aliases and full ids merged)</span></h3>${byModel}</div>
+    <div class="two"><div class="card"><h3>by provider · ${d.days} days</h3>${byProvider}</div>${cacheCard}</div>
+    <div class="card"><h3>by repo / project · ${d.days} days</h3>${byProject}</div>
+    <div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens · ${d.days} days</h3>${top}</div>
+    ${calendar}
+    ${hours}
+    <div class="summary four">${parallel}${waiting}${health}${records}</div>
+    <div class="two"><div class="card"><h3>tool usage · ${d.days} days</h3>${toolsT}</div>${fun}</div>
+    <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${d.days} days · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
   renderDailyTable();
   $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
   $('#stats-csv').addEventListener('click', exportStatsCsv);
   $('#stats-refresh').addEventListener('click', () => renderStatsView(true));
-  box.onclick = (e) => { const tr = e.target.closest('tr[data-open]'); if (tr) { assignPane(state.layout.focus, tr.dataset.open); setView('chat'); } };
+  box.onclick = (e) => {
+    const th = e.target.closest('th[data-sort]'); const tb = th && th.closest('[data-table]');
+    if (th && tb) { const id = tb.dataset.table, k = th.dataset.sort; const cur = state.statsSorts[id]; state.statsSorts[id] = { key: k, dir: cur && cur.key === k ? -cur.dir : -1 }; localStorage.setItem('kcoder.statsSorts', JSON.stringify(state.statsSorts)); renderStatsView(false); return; }
+    const cb = e.target.closest('[data-cal]'); if (cb) { state.statsCal = cb.dataset.cal; localStorage.setItem('kcoder.statsCal', state.statsCal); renderStatsView(false); return; }
+    const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
+    if (e.target.closest('a')) return;
+    const tr = e.target.closest('tr[data-open]'); if (tr) { assignPane(state.layout.focus, tr.dataset.open); setView('chat'); return; }
+    const cr = e.target.closest('tr[data-sha]'); if (cr) cr.classList.toggle('open');
+  };
 }
-const DAILY_COLS = [['date', 'day', (r) => fmtDate(r.date), 'l'], ['input', 'tokens in', (r) => fmtTokens(r.input)], ['output', 'tokens out', (r) => fmtTokens(r.output)], ['total', 'total tokens', (r) => fmtTokens(r.total)], ['sessions', 'sessions', (r) => fmtInt(r.sessions)], ['commits', 'commits', (r) => fmtInt(r.commits)], ['lines', 'lines changed', (r) => (r.lines ? `+${fmtInt(r.insertions)} / -${fmtInt(r.deletions)}` : '0')], ['active_seconds', 'active time', (r) => fmtDur(r.active_seconds)], ['cost', 'cost', (r) => (r.cost ? fmtUsd(r.cost) : r.api_equivalent ? '<span class="dim">plan</span>' : '-')]];
+const DAILY_COLS = [
+  { k: 'date', label: 'day', f: (r) => fmtDate(r.date), cls: 'l' }, { k: 'input', label: 'tokens in', f: (r) => fmtTokens(r.input) }, { k: 'output', label: 'out', f: (r) => fmtTokens(r.output) }, { k: 'total', label: 'total', f: (r) => fmtTokens(r.total) },
+  { k: 'cache_hit', label: 'cache hit', f: (r) => (r.input ? fmtPct(r.cache_read / r.input) : '-'), sort: (r) => (r.input ? r.cache_read / r.input : -1) }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, { k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) },
+  { k: 'insertions', label: '+', f: (r) => plus(r.insertions) }, { k: 'deletions', label: '-', f: (r) => minus(r.deletions) }, { k: 'net', label: 'net', f: (r) => fmtSigned(r.net) }, { k: 'files', label: 'files', f: (r) => fmtInt(r.files) },
+  { k: 'active_seconds', label: 'active', f: (r) => fmtDur(r.active_seconds) }, { k: 'api_equivalent', label: 'API equiv.', f: (r) => (r.api_equivalent ? `<span class="dim" title="estimate at API rates${r.cost ? '; ' + fmtUsd(r.cost) + ' actually billed on API keys' : ''}">${fmtUsd(r.api_equivalent)} est.</span>` : '-') },
+];
 function renderDailyTable() {
   const el = $('#stats-daily'); if (!el || !statsData) return;
-  const rows = statsData.daily.slice();
-  const { key, dir } = state.statsSort;
-  rows.sort((a, b) => (a[key] > b[key] ? 1 : a[key] < b[key] ? -1 : 0) * dir);
-  const tot = {}; for (const r of statsData.daily) for (const k of Object.keys(r)) if (typeof r[k] === 'number') tot[k] = (tot[k] || 0) + r[k];
-  tot.date = `total · ${statsData.daily.length} day${statsData.daily.length === 1 ? '' : 's'}`;
-  const metricCol = { tokens: 'total', commits: 'commits', sessions: 'sessions', active: 'active_seconds' }[state.statsMetric];
-  el.innerHTML = `<table class="grid"><thead><tr>${DAILY_COLS.map(([k, label, , cls]) => `<th class="${cls || ''}${key === k ? ' on' : ''}${metricCol === k ? ' hl' : ''}" data-sort="${k}">${label}${key === k ? (dir < 0 ? ' ↓' : ' ↑') : ''}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((r) => `<tr${r.date === statsData.today ? ' class="today"' : ''}>${DAILY_COLS.map(([k, , f, cls]) => `<td class="${cls || ''}${metricCol === k ? ' hl' : ''}">${f(r)}</td>`).join('')}</tr>`).join('') : '<tr><td class="l" colspan="9">no history yet</td></tr>'}${rows.length ? `<tr class="total">${DAILY_COLS.map(([k, , f, cls]) => `<td class="${cls || ''}">${k === 'date' ? esc(tot.date) : f(tot)}</td>`).join('')}</tr>` : ''}</tbody></table>`;
-  el.onclick = (e) => { const th = e.target.closest('th[data-sort]'); if (!th) return; const k = th.dataset.sort; state.statsSort = { key: k, dir: state.statsSort.key === k ? -state.statsSort.dir : -1 }; renderDailyTable(); };
+  const rows = statsData.daily;
+  const tot = sumRows(rows); tot.date = `total · ${rows.length} day${rows.length === 1 ? '' : 's'}`;
+  const metricCol = { tokens: 'total', commits: 'commits', sessions: 'sessions', active: 'active_seconds', lines: 'net', api: 'api_equivalent' }[state.statsMetric];
+  el.innerHTML = sortableTable('daily', DAILY_COLS, rows, { sort: { key: 'date', dir: -1 }, tall: true, hl: metricCol, empty: 'no history yet', total: rows.length ? { label: tot.date, row: tot } : null, row: (r) => (r.date === statsData.today ? ' class="today"' : '') });
 }
 function exportStatsCsv() {
   if (!statsData) return;
-  const cols = ['date', 'input', 'output', 'total', 'cache_read', 'calls', 'sessions', 'commits', 'insertions', 'deletions', 'lines', 'active_seconds', 'cost', 'api_equivalent', 'pushed', 'unpushed'];
+  const cols = ['date', 'input', 'fresh', 'cache_read', 'cache_write', 'output', 'total', 'calls', 'sessions', 'commits', 'insertions', 'deletions', 'net', 'files', 'active_seconds', 'cost', 'api_equivalent', 'pushed', 'unpushed'];
   const csv = [cols.join(',')].concat(statsData.daily.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => cols.map((c) => r[c] ?? '').join(','))).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `kcoder-stats-${statsData.today}.csv`; a.click();

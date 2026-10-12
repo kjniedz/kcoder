@@ -533,6 +533,35 @@ table.grid .dim, .card .dim, .legend .dim { color: var(--fg-mute); }
 table.grid .ok, .card .ok { color: var(--green); }
 table.grid .warn, .card .warn { color: var(--yellow); }
 .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+.summary.six { grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); }
+.summary .card.wide { grid-column: span 2; }
+.card .row.stack { flex-direction: column; align-items: flex-start; gap: 0; margin-bottom: 5px; }
+.card .row.stack b { white-space: normal; }
+.summary.four { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.card h3 .seg.sm { display: inline-flex; margin-left: 8px; }
+.card h3 .seg.sm button { padding: 0 7px; font-size: 10px; }
+.card h3 .spacer { flex: 1; }
+.card h3 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.chart rect.add { fill: var(--green); } .chart rect.del { fill: var(--yellow); } .chart line.zero { stroke: var(--line-2); stroke-width: 1; }
+.legend i.add { background: var(--green); } .legend i.del { background: var(--yellow); }
+.stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-3); margin: 2px 0 8px; }
+.stack i, .sw { display: inline-block; height: 10px; } .sw { width: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.fresh { background: var(--accent); } .cread { background: var(--chart-in); } .cwrite { background: var(--yellow); }
+.grid-wrap.fixed table.grid { table-layout: fixed; width: 100%; }
+.grid-wrap.fixed table.grid td, .grid-wrap.fixed table.grid th { overflow: hidden; text-overflow: ellipsis; }
+.grid-wrap.fixed th.name, .grid-wrap.fixed td.name { width: 38%; }
+.grid-wrap.fixed th.subj, .grid-wrap.fixed td.subj { width: 34%; }
+table.grid td.subj .subject { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+table.grid tr.open td.subj .subject { white-space: normal; }
+table.grid tr[data-sha] { cursor: pointer; }
+.cal-wrap { overflow-x: auto; }
+.cal text { fill: var(--fg-mute); font-size: 9px; font-family: var(--mono); }
+.cal rect.c { fill: var(--bg-3); } .cal rect.l1 { fill: var(--accent); opacity: .3; } .cal rect.l2 { fill: var(--accent); opacity: .55; } .cal rect.l3 { fill: var(--accent); opacity: .8; } .cal rect.l4 { fill: var(--accent); opacity: 1; }
+.hours { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: var(--fg-mute); }
+.hrow { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 2px; align-items: center; }
+.hrow i { display: block; height: 14px; border-radius: 2px; background: var(--accent); }
+.hrow.head span { text-align: left; }
+.card .row a { color: var(--accent-text); }
 @media (max-width: 900px) { .two { grid-template-columns: 1fr; } .summary { grid-template-columns: 1fr 1fr; } }
 
 /* ---- header stays one line at any width ---- */

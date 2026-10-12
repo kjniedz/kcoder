@@ -516,12 +516,25 @@ something coming out.
   agent is writing, a "jump to latest" button appears instead of yanking you
   down. `⌘F` finds inside a session, `⌘⇧F` searches across sessions, and you
   can drop files onto a pane to attach them to the prompt.
+- **If kcoderd stops** (a restart that did not come back, a crash), the
+  status bar says "kcoderd not running"; the kcoder.app window starts it
+  again by itself, a browser tab tells you to run `kcoder app`. The Claude
+  plan button shows `plan ?` meanwhile rather than claiming Claude is
+  disconnected. `kcoder daemon install` keeps kcoderd alive from login so
+  this rarely matters.
 - **Stats** (the status bar numbers, or `alt+3`): today / 7-day / 30-day / all-time
-  tokens, commits, sessions and active agent time; a sortable daily table
-  with CSV export; a daily token chart over 7 / 30 / 90 days; breakdowns by
-  model, provider (subscription vs API key, with estimated cost for API use)
-  and project; top sessions by tokens; and every commit made from a kcoder
-  session with its repo, session, lines changed, pushed-or-local state and a
+  tokens, lines of code (added, removed, net, files changed), commits,
+  sessions, active agent time and an API-equivalent estimate; a sortable daily
+  table
+  with CSV export; daily token and lines-added-vs-removed charts over 7 / 30 /
+  90 days; breakdowns by model (aliases and full ids merged into one row, with
+  fresh input, cache reads and writes, hit rate, lines and tokens per line),
+  provider (subscription vs API key) and project; top sessions by tokens; an
+  activity calendar for the last year with streaks; an hour-of-day heatmap;
+  parallelism, time waiting on you, tool usage with failure rates, session
+  health, records and the most-shown working verb; every table sortable; and
+  every commit made from a kcoder session with its repo, session, lines
+  changed, files, pushed-or-local state and a
   GitHub link. Commits are detected from local git at turn boundaries, so it
   works offline and for private repos. History lives in
   `~/.local/share/kcoder/usage.jsonl` and `commits.jsonl`, survives daemon

@@ -121,32 +121,96 @@ def session_metas() -> dict:
     return out
 
 
-def turn_windows(sid: str) -> list:
-    """[(start_ts, end_ts, elapsed)] for every finished turn of a session."""
+def session_facts(sid: str) -> dict:
+    """Everything the stats view needs from one session's events.jsonl, parsed
+    once per file change: turn windows, tool calls, waits on the user,
+    interrupts, undos and compactions. Timestamps are kept so callers can
+    filter by date window."""
     path = os.path.join(paths.SESSIONS_DIR, sid, "events.jsonl")
     sig = _sig(path)
+    empty = {"turns": [], "tools": [], "waits": [], "interrupts": [], "undos": [], "compactions": []}
     if sig is None:
-        return []
+        return empty
     with _lock:
         if _cache["turns_sig"].get(sid) == sig:
             return _cache["turns"][sid]
-    windows, start = [], None
+    f = {k: [] for k in empty}
+    start = None
+    calls: dict[str, tuple] = {}
+    wait_since = None
     for ev in _read_jsonl(path):
         t = ev.get("t")
+        ts = float(ev.get("ts") or 0)
         if t == "turn_start":
-            start = ev.get("ts")
+            start = ts
         elif t == "turn_end":
-            end = ev.get("ts") or 0
             elapsed = float(ev.get("elapsed") or 0)
             if start is None and elapsed:
-                start = end - elapsed
+                start = ts - elapsed
             if start is not None:
-                windows.append((start, end, elapsed or max(0.0, end - start)))
+                f["turns"].append((start, ts, elapsed or max(0.0, ts - start), ev.get("result") or "ok"))
+            if ev.get("result") == "interrupted":
+                f["interrupts"].append(ts)
             start = None
+        elif t == "tool_call":
+            calls[ev.get("id")] = (ts, ev.get("name") or "tool")
+        elif t == "tool_result":
+            c = calls.pop(ev.get("id"), None)
+            f["tools"].append((c[0] if c else ts, (c[1] if c else ev.get("name")) or "tool", bool(ev.get("is_error"))))
+        elif t == "status":
+            st = ev.get("status")
+            if st == "waiting" and wait_since is None:
+                wait_since = ts
+            elif st != "waiting" and wait_since is not None:
+                f["waits"].append((wait_since, max(0.0, ts - wait_since)))
+                wait_since = None
+        elif t == "history_reset":
+            f["undos"].append(ts)
+        elif t == "compaction":
+            f["compactions"].append(ts)
+    for cid, (ts, name) in calls.items():      # calls that never got a result (crash, interrupt)
+        f["tools"].append((ts, name, False))
     with _lock:
-        _cache["turns"][sid] = windows
+        _cache["turns"][sid] = f
         _cache["turns_sig"][sid] = sig
-    return windows
+    return f
+
+
+def turn_windows(sid: str) -> list:
+    """[(start_ts, end_ts, elapsed)] for every finished turn of a session."""
+    return [(a, b, c) for a, b, c, _ in session_facts(sid)["turns"]]
+
+
+# ----------------------------------------------------------------------
+# model names: one row per model family, whatever alias or id was used
+# ----------------------------------------------------------------------
+
+_FAMILY_PRICE_ID = {"fable": "claude-fable-5-1", "opus": "claude-opus-4-8", "sonnet": "claude-sonnet-4-6", "haiku": "claude-haiku-4-5"}
+
+
+def normalize_model(model: str | None) -> str:
+    """'fable', 'Fable', 'claude-fable-5-1' and 'claude-fable-5' are all one
+    model to the stats; other providers' ids are lower-cased."""
+    m = (model or "?").strip().lower()
+    for fam in ("fable", "mythos", "opus", "sonnet", "haiku"):
+        if fam in m:
+            return "fable" if fam == "mythos" else fam
+    return m or "?"
+
+
+def api_equivalent(r: dict) -> float:
+    """What a usage row would have cost at API rates: the logged figure when
+    the call reported one, else an estimate from the pricing table."""
+    v = float(r.get("api_equivalent") or 0.0)
+    if v:
+        return v
+    if not r.get("plan"):
+        return float(r.get("cost") or 0.0)
+    from . import pricing
+    fam = normalize_model(r.get("model"))
+    cr, cw = int(r.get("cache_read") or 0), int(r.get("cache_write") or 0)
+    fresh = max(0, int(r.get("input") or 0) - cr - cw)
+    return pricing.cost(_FAMILY_PRICE_ID.get(fam, r.get("model") or ""), fresh, int(r.get("output") or 0), cr, cw)
 
 
 # ----------------------------------------------------------------------
@@ -413,18 +477,60 @@ def header_stats() -> dict:
     }
 
 
+def _median(xs: list) -> float:
+    xs = sorted(xs)
+    if not xs:
+        return 0.0
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def _split_hours(start: float, end: float, matrix: list) -> None:
+    """Spread an active window over local (weekday, hour) cells, in seconds."""
+    if end <= start:
+        return
+    t = start
+    while t < end:
+        d = dt.datetime.fromtimestamp(t)
+        edge = (d.replace(minute=0, second=0, microsecond=0) + dt.timedelta(hours=1)).timestamp()
+        seg = min(end, edge) - t
+        matrix[d.weekday()][d.hour] += seg
+        t = min(end, edge)
+
+
+def _parallelism(windows: list) -> dict:
+    """windows: [(start, end)] for one day. Peak overlap, average concurrency
+    while anything ran, and agent-hours."""
+    if not windows:
+        return {"peak": 0, "avg": 0.0, "agent_seconds": 0.0, "busy_seconds": 0.0}
+    edges = sorted([(s, 1) for s, _ in windows] + [(e, -1) for _, e in windows])
+    cur = peak = 0
+    busy = 0.0
+    last = None
+    for ts, d in edges:
+        if cur > 0 and last is not None:
+            busy += ts - last
+        cur += d
+        peak = max(peak, cur)
+        last = ts
+    agent = sum(max(0.0, e - s) for s, e in windows)
+    return {"peak": peak, "avg": round(agent / busy, 2) if busy else 0.0, "agent_seconds": round(agent), "busy_seconds": round(busy)}
+
+
 def full(days: int = 30) -> dict:
     """Everything the stats view shows."""
     days = max(7, min(int(days or 30), 365))
     usage = usage_rows()
     commits = commits_with_state()
     metas = session_metas()
+    facts = {sid: session_facts(sid) for sid in metas}
     t = today()
+    now = time.time()
 
     def day_row(d: str) -> dict:
-        return {"date": d, "input": 0, "output": 0, "total": 0, "cache_read": 0, "calls": 0, "sessions": 0,
-                "commits": 0, "insertions": 0, "deletions": 0, "lines": 0, "active_seconds": 0.0,
-                "cost": 0.0, "api_equivalent": 0.0, "pushed": 0, "unpushed": 0}
+        return {"date": d, "input": 0, "fresh": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0, "calls": 0,
+                "sessions": 0, "commits": 0, "insertions": 0, "deletions": 0, "net": 0, "lines": 0, "files": 0,
+                "active_seconds": 0.0, "cost": 0.0, "api_equivalent": 0.0, "pushed": 0, "unpushed": 0}
 
     per_day: dict[str, dict] = {}
     sessions_by_day: dict[str, set] = {}
@@ -432,25 +538,31 @@ def full(days: int = 30) -> dict:
         d = r.get("date") or local_date(r.get("ts") or 0)
         row = per_day.setdefault(d, day_row(d))
         i, o = int(r.get("input") or 0), int(r.get("output") or 0)
+        cr, cw = int(r.get("cache_read") or 0), int(r.get("cache_write") or 0)
         row["input"] += i
+        row["fresh"] += max(0, i - cr - cw)
         row["output"] += o
         row["total"] += i + o
-        row["cache_read"] += int(r.get("cache_read") or 0)
+        row["cache_read"] += cr
+        row["cache_write"] += cw
         row["calls"] += 1
         row["cost"] += float(r.get("cost") or 0.0)
-        row["api_equivalent"] += float(r.get("api_equivalent") or 0.0)
+        row["api_equivalent"] += api_equivalent(r)
         sessions_by_day.setdefault(d, set()).add(r.get("sid"))
     for c in commits:
         d = c.get("date")
         row = per_day.setdefault(d, day_row(d))
+        ins, dele = int(c.get("insertions") or 0), int(c.get("deletions") or 0)
         row["commits"] += 1
-        row["insertions"] += int(c.get("insertions") or 0)
-        row["deletions"] += int(c.get("deletions") or 0)
-        row["lines"] += int(c.get("insertions") or 0) + int(c.get("deletions") or 0)
+        row["insertions"] += ins
+        row["deletions"] += dele
+        row["net"] += ins - dele
+        row["lines"] += ins + dele
+        row["files"] += int(c.get("files") or 0)
         row["pushed" if c.get("pushed") else "unpushed"] += 1
-    for sid in metas:
-        for s, e, elapsed in turn_windows(sid):
-            d = local_date(e or s)
+    for sid, f in facts.items():
+        for s0, e, elapsed, _ in f["turns"]:
+            d = local_date(e or s0)
             row = per_day.setdefault(d, day_row(d))
             row["active_seconds"] += float(elapsed or 0)
             sessions_by_day.setdefault(d, set()).add(sid)
@@ -488,33 +600,66 @@ def full(days: int = 30) -> dict:
         "first_date": all_days[-1]["date"] if all_days else None,
     }
 
-    # breakdowns over the selected window
+    # ---- breakdowns over the selected window ----
     in_window = set(window)
+    win_start = min(in_window)
+
+    def proj_name(sid: str) -> str:
+        meta = metas.get(sid) or {}
+        return (meta.get("project") or {}).get("name") or os.path.basename(meta.get("cwd") or "") or "?"
+
+    def blank(key: str) -> dict:
+        return {"key": key, "input": 0, "fresh": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0, "calls": 0,
+                "cost": 0.0, "api_equivalent": 0.0, "plan": True, "sessions": set(),
+                "commits": 0, "insertions": 0, "deletions": 0, "net": 0, "files": 0}
+
     by_model: dict[str, dict] = {}
     by_provider: dict[str, dict] = {}
     by_project: dict[str, dict] = {}
     by_session: dict[str, dict] = {}
+    model_tokens_by_sid: dict[str, dict] = {}
     for r in usage:
         if r.get("date") not in in_window:
             continue
         i, o = int(r.get("input") or 0), int(r.get("output") or 0)
+        cr, cw = int(r.get("cache_read") or 0), int(r.get("cache_write") or 0)
         cost, plan = float(r.get("cost") or 0.0), bool(r.get("plan"))
-        api_eq = float(r.get("api_equivalent") or 0.0)
-        model = r.get("model") or "?"
+        model = normalize_model(r.get("model"))
         prov = r.get("provider") or "?"
-        meta = metas.get(r.get("sid")) or {}
-        proj = (meta.get("project") or {}).get("name") or os.path.basename(meta.get("cwd") or "") or "?"
-        for table, key in ((by_model, model), (by_provider, prov), (by_project, proj), (by_session, r.get("sid") or "?")):
-            row = table.setdefault(key, {"key": key, "input": 0, "output": 0, "total": 0, "calls": 0, "cost": 0.0,
-                                         "api_equivalent": 0.0, "plan": plan, "sessions": set()})
+        sid = r.get("sid") or "?"
+        model_tokens_by_sid.setdefault(sid, {})[model] = model_tokens_by_sid.setdefault(sid, {}).get(model, 0) + i + o
+        for table, key in ((by_model, model), (by_provider, prov), (by_project, proj_name(sid)), (by_session, sid)):
+            row = table.setdefault(key, blank(key))
             row["input"] += i
+            row["fresh"] += max(0, i - cr - cw)
             row["output"] += o
             row["total"] += i + o
+            row["cache_read"] += cr
+            row["cache_write"] += cw
             row["calls"] += 1
             row["cost"] += cost
-            row["api_equivalent"] += api_eq
+            row["api_equivalent"] += api_equivalent(r)
             row["plan"] = row["plan"] and plan
-            row["sessions"].add(r.get("sid"))
+            row["sessions"].add(sid)
+
+    def dominant_model(sid: str) -> str:
+        mt = model_tokens_by_sid.get(sid)
+        if mt:
+            return max(mt.items(), key=lambda kv: kv[1])[0]
+        return normalize_model((metas.get(sid) or {}).get("model"))
+
+    window_commits = [c for c in commits if c.get("date") in in_window]
+    for c in window_commits:
+        sid = c.get("sid") or "?"
+        ins, dele = int(c.get("insertions") or 0), int(c.get("deletions") or 0)
+        for table, key in ((by_model, dominant_model(sid)), (by_project, c.get("project") or proj_name(sid)), (by_session, sid)):
+            row = table.setdefault(key, blank(key))
+            row["commits"] += 1
+            row["insertions"] += ins
+            row["deletions"] += dele
+            row["net"] += ins - dele
+            row["files"] += int(c.get("files") or 0)
+            row["sessions"].add(sid)
 
     def finish(table: dict, extra=None) -> list:
         rows = []
@@ -523,6 +668,9 @@ def full(days: int = 30) -> dict:
             row["sessions"] = len(row["sessions"])
             row["cost"] = round(row["cost"], 4)
             row["api_equivalent"] = round(row["api_equivalent"], 4)
+            row["cache_hit"] = round(row["cache_read"] / row["input"], 4) if row["input"] else 0.0
+            shipped = row["insertions"] + row["deletions"]
+            row["tokens_per_line"] = round(row["total"] / shipped, 1) if shipped else None
             if extra:
                 row.update(extra(row))
             rows.append(row)
@@ -534,14 +682,105 @@ def full(days: int = 30) -> dict:
 
     def session_extra(row: dict) -> dict:
         meta = metas.get(row["key"]) or {}
+        f = facts.get(row["key"]) or session_facts(row["key"])
         return {"name": meta.get("name"), "title": meta.get("title"),
-                "project": (meta.get("project") or {}).get("name"), "model": meta.get("model"),
+                "project": (meta.get("project") or {}).get("name"), "model": dominant_model(row["key"]),
                 "archived": bool(meta.get("archived")),
-                "turns": len(turn_windows(row["key"])),
-                "active_seconds": round(sum(e for _, _, e in turn_windows(row["key"])))}
+                "turns": len(f["turns"]),
+                "active_seconds": round(sum(e for _, _, e, _ in f["turns"]))}
 
     top_sessions = finish(by_session, session_extra)[:15]
-    window_commits = [c for c in commits if c.get("date") in in_window]
+
+    # ---- cache split (window) ----
+    wu = [r for r in usage if r.get("date") in in_window]
+    cache = {"input": sum(int(r.get("input") or 0) for r in wu),
+             "cache_read": sum(int(r.get("cache_read") or 0) for r in wu),
+             "cache_write": sum(int(r.get("cache_write") or 0) for r in wu)}
+    cache["fresh"] = max(0, cache["input"] - cache["cache_read"] - cache["cache_write"])
+    cache["hit_rate"] = round(cache["cache_read"] / cache["input"], 4) if cache["input"] else 0.0
+    cache["api_equivalent"] = round(sum(api_equivalent(r) for r in wu), 4)
+    cache["plan_api_equivalent"] = round(sum(api_equivalent(r) for r in wu if r.get("plan")), 4)
+    cache["cost"] = round(sum(float(r.get("cost") or 0.0) for r in wu), 4)
+
+    # ---- activity calendar: last 365 days, streaks ----
+    year = _dates_back(365)
+    calendar = [{"date": d, "tokens": (per_day.get(d) or {}).get("total", 0), "lines": (per_day.get(d) or {}).get("lines", 0),
+                 "commits": (per_day.get(d) or {}).get("commits", 0)} for d in reversed(year)]
+    active_days = {r["date"] for r in all_days if r["total"] or r["commits"] or r["active_seconds"]}
+    streak = 0
+    for d in _dates_back(400):
+        if d in active_days:
+            streak += 1
+        elif d != t:          # today not counting yet does not break the streak
+            break
+    longest = run = 0
+    prev = None
+    for d in sorted(active_days):
+        day = dt.date.fromisoformat(d)
+        run = run + 1 if prev is not None and (day - prev).days == 1 else 1
+        longest = max(longest, run)
+        prev = day
+    streaks = {"current": streak, "longest": longest, "active_days": len(active_days)}
+
+    # ---- hour-of-day / day-of-week, parallelism, waiting, tools, health (window) ----
+    hours = [[0.0] * 24 for _ in range(7)]
+    windows_by_day: dict[str, list] = {}
+    waits: list = []
+    tools: dict[str, dict] = {}
+    health = {"interrupts": 0, "undos": 0, "compactions": 0, "sessions_no_commit": 0, "sessions_with_turns": 0}
+    longest_turn = None
+    sids_with_commits = {c.get("sid") for c in window_commits}
+    for sid, f in facts.items():
+        had_turn = False
+        for s0, e, elapsed, result in f["turns"]:
+            if local_date(e) not in in_window:
+                continue
+            had_turn = True
+            _split_hours(s0, e, hours)
+            windows_by_day.setdefault(local_date(e), []).append((s0, e))
+            if longest_turn is None or elapsed > longest_turn["seconds"]:
+                longest_turn = {"sid": sid, "name": (metas.get(sid) or {}).get("name"), "seconds": round(elapsed), "date": local_date(e)}
+        if had_turn:
+            health["sessions_with_turns"] += 1
+            if sid not in sids_with_commits:
+                health["sessions_no_commit"] += 1
+        for ws, secs in f["waits"]:
+            if local_date(ws) in in_window and secs < 24 * 3600:
+                waits.append(secs)
+        for ts, name, err in f["tools"]:
+            if local_date(ts) in in_window:
+                row = tools.setdefault(name, {"name": name, "count": 0, "errors": 0})
+                row["count"] += 1
+                row["errors"] += 1 if err else 0
+        health["interrupts"] += sum(1 for ts in f["interrupts"] if local_date(ts) in in_window)
+        health["undos"] += sum(1 for ts in f["undos"] if local_date(ts) in in_window)
+        health["compactions"] += sum(1 for ts in f["compactions"] if local_date(ts) in in_window)
+    hours = [[round(x) for x in row] for row in hours]
+    par_days = [{"date": d, **_parallelism(w)} for d, w in sorted(windows_by_day.items())]
+    parallel = {"days": par_days,
+                "avg_peak": round(sum(p["peak"] for p in par_days) / len(par_days), 2) if par_days else 0,
+                "max_peak": max((p["peak"] for p in par_days), default=0),
+                "avg_concurrency": round(sum(p["avg"] for p in par_days) / len(par_days), 2) if par_days else 0,
+                "agent_hours": round(sum(p["agent_seconds"] for p in par_days) / 3600, 1)}
+    waiting = {"total_seconds": round(sum(waits)), "median_seconds": round(_median(waits)), "count": len(waits)}
+    tool_rows = sorted(tools.values(), key=lambda r: -r["count"])
+    for r in tool_rows:
+        r["error_rate"] = round(r["errors"] / r["count"], 4) if r["count"] else 0.0
+
+    # ---- records (window) ----
+    biggest = max(window_commits, key=lambda c: int(c.get("insertions") or 0) + int(c.get("deletions") or 0), default=None)
+    win_days = [per_day[d] for d in in_window if d in per_day]
+    most_tokens = max(win_days, key=lambda r: r["total"], default=None)
+    most_lines = max(win_days, key=lambda r: r["lines"], default=None)
+    records = {
+        "biggest_commit": {"sha": biggest["sha"], "lines": int(biggest.get("insertions") or 0) + int(biggest.get("deletions") or 0),
+                           "insertions": biggest.get("insertions"), "deletions": biggest.get("deletions"), "date": biggest.get("date"),
+                           "url": biggest.get("url"), "project": biggest.get("project"), "subject": biggest.get("subject")} if biggest else None,
+        "longest_turn": longest_turn,
+        "most_tokens_day": {"date": most_tokens["date"], "tokens": most_tokens["total"]} if most_tokens and most_tokens["total"] else None,
+        "most_lines_day": {"date": most_lines["date"], "lines": most_lines["lines"]} if most_lines and most_lines["lines"] else None,
+    }
+
     return {
         "days": days,
         "today": t,
@@ -555,5 +794,14 @@ def full(days: int = 30) -> dict:
         "commits": window_commits[:300],
         "commit_totals": {"total": len(window_commits), "pushed": sum(1 for c in window_commits if c["pushed"]),
                           "unpushed": sum(1 for c in window_commits if not c["pushed"])},
-        "generated": time.time(),
+        "cache": cache,
+        "calendar": calendar,
+        "streaks": streaks,
+        "hours": hours,
+        "parallel": parallel,
+        "waiting": waiting,
+        "tools": tool_rows,
+        "health": health,
+        "records": records,
+        "generated": now,
     }

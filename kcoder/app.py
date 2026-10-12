@@ -229,6 +229,22 @@ class WindowApi:
     def is_native(self) -> bool:
         return True
 
+    def start_daemon(self) -> str:
+        """The page found kcoderd down (stopped, crashed, or a restart that never
+        came back): start it. 'running' when it is already up."""
+        from . import client
+        from .daemon import already_running
+        if already_running():
+            return "running"
+        try:
+            if sys.platform == "darwin" and agent_installed() and agent_loaded():
+                agent_start()
+            else:
+                client.spawn_daemon()
+            return "started"
+        except Exception as exc:  # noqa: BLE001
+            return f"failed: {exc}"
+
     def toggle_fullscreen(self) -> bool:
         """Native macOS full screen (the green-button kind)."""
         try:
