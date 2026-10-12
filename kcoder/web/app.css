@@ -252,6 +252,18 @@ a { color: var(--accent-text); }
 .tool .body { border-top: 1px solid var(--line); padding: 6px 10px; }
 .tool pre { margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; font-size: 11.5px; background: var(--code-bg); padding: 6px 8px; border-radius: 4px; }
 .tool .label { color: var(--fg-mute); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; margin: 6px 0 2px; }
+/* a run of tool calls folds into one row ("▸ 15 tool calls (reading files)") that expands on click */
+.tool-group { margin: 4px 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-2); font-size: 12px; }
+.tool-group > summary { cursor: pointer; padding: 3px 10px; color: var(--fg-dim); list-style: none; display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
+.tool-group > summary::-webkit-details-marker { display: none; }
+.tool-group > summary .tri::before { content: "▸"; color: var(--accent); }
+.tool-group[open] > summary .tri::before { content: "▾"; }
+.tool-group > summary .desc { color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.tool-group > summary .res { margin-left: auto; font-size: 11px; color: var(--fg-mute); }
+.tool-group > summary .res.err { color: var(--red); }
+.tool-group > summary .res.pending { color: var(--running); }
+.tool-group-body { border-top: 1px solid var(--line); padding: 2px 6px; }
+.tool-group-body > .tool { margin: 3px 0; }
 .diff { font-size: 11.5px; white-space: pre-wrap; word-break: break-word; background: var(--code-bg); border-radius: 4px; padding: 4px 0; max-height: 400px; overflow: auto; }
 .diff div { padding: 0 8px; }
 .diff .del { background: rgba(248,113,113,.16); color: var(--red); }
@@ -417,6 +429,8 @@ select:hover { border-color: var(--accent); }
 ::highlight(kc-cur-0), ::highlight(kc-cur-1), ::highlight(kc-cur-2) { background-color: #fbbf24; color: var(--on-accent); }
 .sidebar-foot { display: flex; gap: 8px; align-items: center; padding: 6px; border-top: 1px solid var(--line); }
 .sidebar-foot .help { color: var(--fg-mute); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#btn-archived { border: none; background: none; color: var(--fg-dim); font-size: 10.5px; padding: 0; text-decoration: underline dotted; white-space: nowrap; }
+#btn-archived:hover { color: var(--fg); }
 .chat-item .badge { margin-left: 2px; }
 .chat-item .pane-no { background: var(--accent); color: var(--on-accent); border-radius: 3px; font-size: 9.5px; padding: 0 4px; font-weight: 700; }
 .chat-item.in-pane .title { color: var(--accent-text); }

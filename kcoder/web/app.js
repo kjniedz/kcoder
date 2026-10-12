@@ -778,11 +778,57 @@ function renderLogInto(holder, log, sid, store, opts, scroller) {
       }
     }
   }
+  if (!incremental || changed) groupTools(log);
   holder._rendered = { sig: 1, sid, store, optsKey, count: store.list.length, live: store.live, streaming, status, toolSig, toolIds: Object.keys(store.toolLive || {}) };
   const jump = holder.querySelector ? holder.querySelector('.jump') : null;
   if (stick) { scroller.scrollTop = scroller.scrollHeight; if (jump) jump.hidden = true; }
   else if (jump && changed) jump.hidden = false;
 }
+// Consecutive tool calls fold into one row. Runs the same way after a full
+// render and after an incremental append, moving the live elements so an
+// open tool, its kill button and the group's open state all survive.
+const TOOL_GROUP_MIN = 3;
+function toolKind(desc) {
+  if (/^(Read|Grep|Glob|LS|read_file|list_dir)\b/i.test(desc)) return 'read';
+  if (/^(Edit|Write|MultiEdit|NotebookEdit|write_file|edit_file)\b/i.test(desc)) return 'edit';
+  if (/^(WebFetch|WebSearch)\b/.test(desc)) return 'web';
+  if (/^(Bash|run_bash):\s*(cat|sed -n|head|tail|grep|rg|ls|find|wc|pwd|tree|stat|git (log|diff|status|show|branch|blame)|echo)\b/.test(desc)) return 'read';
+  return 'cmd';
+}
+const TOOL_KIND_LABEL = { read: 'reading files', edit: 'editing files', cmd: 'running commands', web: 'searching the web' };
+function groupTools(log) {
+  let run = [];
+  const flush = () => {
+    if (!run.length) return;
+    const tools = []; let group = null;
+    for (const el of run) {
+      if (el.classList.contains('tool-group')) { if (!group) group = el; tools.push(...$$(':scope > .tool-group-body > details.tool', el)); }
+      else tools.push(el);
+    }
+    if (tools.length >= TOOL_GROUP_MIN) {
+      if (!group) { group = document.createElement('details'); group.className = 'tool-group'; group.innerHTML = '<summary><span class="tri"></span><span class="desc"></span><span class="res"></span></summary><div class="tool-group-body"></div>'; run[0].before(group); }
+      const body = $(':scope > .tool-group-body', group);
+      for (const t of tools) body.appendChild(t);
+      for (const el of run) if (el !== group && el.classList.contains('tool-group')) el.remove();
+      const kinds = new Set(tools.map((t) => toolKind(($('.desc', t) || {}).textContent || '')));
+      const pending = tools.filter((t) => $(':scope > summary .res.pending', t)).length;
+      const errs = tools.filter((t) => $(':scope > summary .res.err, :scope > summary .res.declined', t)).length;
+      $(':scope > summary .desc', group).textContent = `${tools.length} tool calls (${['read', 'edit', 'cmd', 'web'].filter((k) => kinds.has(k)).map((k) => TOOL_KIND_LABEL[k]).join(', ')})`;
+      const res = $(':scope > summary .res', group);
+      res.className = 'res' + (pending ? ' pending' : errs ? ' err' : '');
+      res.textContent = pending ? `${pending} running…` : errs ? `${errs} failed` : '✓';
+      if (!group.dataset.user) { group._auto = true; group.open = pending > 0; group._auto = false; }
+    } else if (group) {
+      for (const t of tools) group.before(t);
+      for (const el of run) if (el.classList.contains('tool-group')) el.remove();
+    }
+    run = [];
+  };
+  for (const el of Array.from(log.children)) { if (el.matches('details.tool, details.tool-group')) run.push(el); else flush(); }
+  flush();
+}
+document.addEventListener('toggle', (e) => { const g = e.target; if (g.classList && g.classList.contains('tool-group') && !g._auto) g.dataset.user = '1'; }, true);
+
 function patchTool(log, store, sid, k, cid) {
   const el = log.querySelector(`details.tool[data-cid="${CSS.escape(cid)}"]`); if (!el) return;
   const wasOpen = el.open;
@@ -969,14 +1015,22 @@ function renderSidebar() {
   const groups = new Map();
   for (const c of state.chats) { const pid = (c.project || {}).id || 'other'; if (!groups.has(pid)) groups.set(pid, { project: c.project || { name: 'other', path: '' }, chats: [] }); groups.get(pid).chats.push(c); }
   const collapsed = JSON.parse(localStorage.getItem('kcoder.collapsed') || '{}');
+  const show = showArchived();
+  let hiddenChats = 0, hiddenProjects = 0;
   box.innerHTML = Array.from(groups.entries()).map(([pid, g]) => {
     const active = g.chats.filter((c) => !c.archived);
     const archived = g.chats.filter((c) => c.archived);
+    if (!show) { hiddenChats += archived.length; if (!active.length) { hiddenProjects++; return ''; } }
     const open = !collapsed[pid];
     return `<div class="project" data-pid="${esc(pid)}"><div class="project-head" title="${esc(g.project.path)}"><span>${open ? '▾' : '▸'}</span><span class="name">${esc(g.project.name)}</span><span>${active.length}${archived.length ? '+' + archived.length : ''}</span><button class="add" data-new-in="${esc(g.project.path)}" title="new chat in ${esc(g.project.name)}">+</button></div>` +
-      (open ? active.map(chatItemHtml).join('') + (archived.length ? `<details class="archived-group"><summary class="chat-item archived"><span class="title">${archived.length} archived</span></summary>${archived.map(chatItemHtml).join('')}</details>` : '') : '') + '</div>';
-  }).join('') || '<div class="hit">no chats yet - press + to start one</div>';
+      (open ? active.map(chatItemHtml).join('') + (archived.length && show ? `<details class="archived-group"><summary class="chat-item archived"><span class="title">${archived.length} archived</span></summary>${archived.map(chatItemHtml).join('')}</details>` : '') : '') + '</div>';
+  }).join('') || `<div class="hit">${hiddenChats ? 'no live chats' : 'no chats yet'} - press + to start one</div>`;
+  const b = $('#btn-archived');
+  b.hidden = !show && !hiddenChats;
+  b.textContent = show ? 'hide archived' : `show ${hiddenChats} archived`; b.title = show ? 'Hide archived chats and projects with no live session' : `${hiddenChats} archived chat${hiddenChats === 1 ? '' : 's'}${hiddenProjects ? ` in ${hiddenProjects} project${hiddenProjects === 1 ? '' : 's'} with nothing live` : ''} are hidden`;
 }
+function showArchived() { return localStorage.getItem('kcoder.showArchived') === 'on'; }
+$('#btn-archived').addEventListener('click', () => { localStorage.setItem('kcoder.showArchived', showArchived() ? 'off' : 'on'); renderSidebar(); });
 function chatItemHtml(c) {
   const live = state.sessions.get(c.id);
   const st = c.archived ? 'archived' : (live ? live.status : c.status);

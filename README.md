@@ -494,6 +494,11 @@ something coming out.
   cycle through the shell and the live preview). The layout is remembered
   across restarts. Broadcast (`⇶` next to the picker, shown with 2 or 3
   panes) sends one prompt to every open pane, handy for comparing models.
+- **Tool calls stay out of the way**: three or more consecutive tool calls
+  fold into one row ("▸ 15 tool calls (reading files)") that expands on
+  click, opens itself while a command is still running, and flags failures.
+  The sidebar lists only live chats; projects with nothing running and
+  archived chats sit behind a "show N archived" link at the bottom.
 - **Transcripts are real text**: drag-select across messages, `⌘A` selects
   the focused pane's transcript, `⌘C` copies clean text (whole messages copy
   as their markdown source, code fences included), and every message has a
