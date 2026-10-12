@@ -17,8 +17,8 @@ Sessions live in a local daemon (`kcoderd`), so you can run many agents at
 once, detach and re-attach from any terminal, and nothing is lost if a
 terminal closes. The terminal client is one view onto the daemon; the
 kcoder app (`kcoder app`, or `kcoder ui` for a browser tab) is the other: a
-wall of live session panes, a Claude-style chat view with project history,
-and a terminal view.
+grid of live session panes, or 1 to 3 sessions side by side with project
+history, each pane switchable between a chat and a terminal rendering.
 
 ![Three chats side by side in the kcoder app](docs/chat-3-panes.png)
 
@@ -190,7 +190,7 @@ environment. When Claude Code reports that a limit is reached, or that a
 turn has switched to extra usage credits, kcoder stops the turn at once,
 records the limit until it resets (only that model's limit, so Opus keeps
 working when the weekly Fable limit is used up) and never retries, falls
-back to an API key or spends credits. The header shows `plan ✓`,
+back to an API key or spends credits. The status bar shows `plan ✓`,
 `plan limit` or `connect Claude`; click it to see the account and limits,
 reconnect with one click, or clear a limit you reset yourself. In a
 terminal: `kcoder login` (connect or reconnect) and `kcoder plan`
@@ -305,7 +305,7 @@ the mismatch.
 
 kcoder runs from your git checkout. When the daemon starts (and once a day)
 it fetches the upstream branch and counts new commits; the app offers them
-when it opens, and the header shows "N new commits" until you take them.
+when it opens, and the status bar shows "N new commits" until you take them.
 Accepting pulls with `git pull --ff-only`, reinstalls when `pyproject.toml`
 changed, rebuilds kcoder.app when its files changed, checks that the new code
 imports, and restarts kcoderd. If the new daemon does not come up healthy the
@@ -466,17 +466,32 @@ store history in different formats).
 kcoder ui        # opens http://127.0.0.1:47321/ with the daemon token attached
 ```
 
-Three views of the same sessions, switchable with the header buttons or
-<kbd>alt+1/2/3</kbd>:
+The header holds navigation and the things you act on, nothing else: the
+compact KCODER banner (click it for About), the **Sessions / Tasks / Stats**
+tabs (<kbd>alt+1/2/3</kbd>), a **search or run a command** field (the
+command palette, <kbd>⌘K</kbd>), the **inbox** with a badge for everything
+waiting on you, and **+ new**. Everything informational sits in a one-line
+status bar at the bottom: daemon status, active sessions, tokens and commits
+today, the 7-day sparkline, your Claude plan status and the version; each
+item clicks through to the sessions, stats, the plan dialog or settings
+(<kbd>⌘,</kbd>). Settings also carries the version and copyright, and the
+macOS menu's About kcoder opens the same About panel. Rule: every header
+control has a label or a tooltip, and nothing new goes in the header without
+something coming out.
 
-- **Chat** can show **1, 2 or 3 sessions side by side** in equal panes: `⌘\`
-  adds a pane, `⌘1/2/3` focuses one, `⌘⇧W` closes it, `⌘⇧↩` pops the focused
-  pane out to fill the window and back, and `⌃⌘F` is native full screen. Put a
+- **Sessions** is the grid of every live session, or **1, 2 or 3 sessions
+  side by side** in equal panes: the `grid / 1 / 2 / 3` picker above the
+  sessions switches layouts (`alt+g`, `⌥⇧1/2/3`, `/panes 2`), `⌘\` adds a
+  pane, `⌘1/2/3` focuses one, `⌘⇧W` closes it, `⌘⇧↩` pops the focused pane
+  out to fill the window and back, and `⌃⌘F` is native full screen. Put a
   session in a pane by dragging it from the sidebar or clicking the pane's
   name. Every pane has its own input, model, trust, toolbar (which collapses
-  into the `⋯` menu when the pane is narrow) and streaming. The layout is
-  remembered across restarts. Broadcast (`⇶` in the header) sends one prompt
-  to every open pane, handy for comparing models.
+  into the `⋯` menu when the pane is narrow), streaming, and a **chat /
+  terminal** toggle in its header (<kbd>v</kbd>, or `/terminal`) that renders
+  the same session as a transcript instead of chat bubbles (grid panes also
+  cycle through the shell and the live preview). The layout is remembered
+  across restarts. Broadcast (`⇶` next to the picker, shown with 2 or 3
+  panes) sends one prompt to every open pane, handy for comparing models.
 - **Transcripts are real text**: drag-select across messages, `⌘A` selects
   the focused pane's transcript, `⌘C` copies clean text (whole messages copy
   as their markdown source, code fences included), and every message has a
@@ -484,7 +499,7 @@ Three views of the same sessions, switchable with the header buttons or
   agent is writing, a "jump to latest" button appears instead of yanking you
   down. `⌘F` finds inside a session, `⌘⇧F` searches across sessions, and you
   can drop files onto a pane to attach them to the prompt.
-- **Stats** (header numbers, or `alt+4`): today / 7-day / 30-day / all-time
+- **Stats** (the status bar numbers, or `alt+3`): today / 7-day / 30-day / all-time
   tokens, commits, sessions and active agent time; a sortable daily table
   with CSV export; a daily token chart over 7 / 30 / 90 days; breakdowns by
   model, provider (subscription vs API key, with estimated cost for API use)
@@ -517,8 +532,9 @@ Everywhere: <kbd>n</kbd> new session - pick a repo from the list of local
 git repos and your GitHub repos (via `gh`), or type `owner/name` / a GitHub
 URL and it's cloned into `~/kcoder-projects` on first use - plus model,
 trust level, initial task, follow-up tasks, worktree on/off; <kbd>a</kbd> the approval
-inbox aggregating pending tool approvals from every session (<kbd>y</kbd> /
-<kbd>n</kbd> / <kbd>a</kbd> for all), <kbd>⌘K</kbd> the command palette,
+inbox aggregating pending tool approvals and sessions waiting for an answer
+from every session (<kbd>y</kbd> / <kbd>n</kbd> / <kbd>a</kbd> for all),
+<kbd>⌘K</kbd> the command palette,
 <kbd>?</kbd> keyboard help. The composer behaves like the CLI: Enter sends,
 Shift+Enter newlines, pastes never submit (big ones become chips), images can
 be pasted or dropped, `/` opens the command menu, `@` fuzzy-completes project

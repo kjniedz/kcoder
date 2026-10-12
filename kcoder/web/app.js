@@ -15,8 +15,8 @@ const SLASH = [
   ['/model', 'switch model or provider (all providers)'], ['/provider', 'same picker as /model'], ['/trust', 'auto | write | read | none'], ['/auto', 'toggle auto-approve'],
   ['/title', 'set the chat title'], ['/name', 'rename the session'], ['/queue', 'add a follow-up task'],
   ['/fork', 'fork this chat'], ['/compact', 'summarise history to free context'], ['/export', 'download as markdown'],
-  ['/archive', 'archive this chat'], ['/shell', 'toggle the shell pane'], ['/wall', 'wall view'],
-  ['/chat', 'chat view'], ['/terminal', 'terminal view'],
+  ['/archive', 'archive this chat'], ['/shell', 'toggle the shell pane'], ['/grid', 'sessions: the grid'],
+  ['/panes', 'sessions: 1 to 3 panes (/panes 2)'], ['/terminal', 'toggle this pane between chat and terminal view'],
 ];
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -37,7 +37,8 @@ const state = {
   sessions: new Map(),     // sid -> snapshot (active)
   chats: [], projects: [], stats: {}, providers: null,
   events: new Map(),       // sid -> { list: [], live: '' , loaded: bool }
-  view: localStorage.getItem('kcoder.view') || 'wall',
+  view: (localStorage.getItem('kcoder.view') || 'wall').replace('terminal', 'chat'),
+  cpaneView: new Map(),    // sid -> 'chat' | 'term' (split panes; wall panes use paneView)
   sid: localStorage.getItem('kcoder.sid') || null,     // current chat (chat/terminal views)
   focus: null,             // focused pane sid (wall)
   paneView: new Map(),     // sid -> 'chat' | 'term' | 'shell'
@@ -185,7 +186,7 @@ function applyUrlParams() {
   // ?view=wall|chat|terminal  ?sid=<id or name>  ?focus=1  ?pin=<id,id>  ?open=new|inbox|palette|help|changes (of ?sid)
   const q = new URLSearchParams(location.search);
   if (state._urlApplied) return; state._urlApplied = true;
-  if (q.get('view')) { state.view = q.get('view'); localStorage.setItem('kcoder.view', state.view); }
+  if (q.get('view')) { state.view = q.get('view').replace('terminal', 'chat'); localStorage.setItem('kcoder.view', state.view); }
   const ref = q.get('sid');
   if (ref) { const s = Array.from(state.sessions.values()).find((x) => x.id === ref || x.name === ref) || state.chats.find((x) => x.id === ref || x.name === ref); if (s) { state.sid = s.id; localStorage.setItem('kcoder.sid', s.id); } }
   if (q.get('focus') && state.sid) state.focus = state.sid;
@@ -479,47 +480,86 @@ function buildTermHtml(store, sid, opts = {}) {
 // ----------------------------------------------------------------------
 // header
 // ----------------------------------------------------------------------
+const TAGLINES = ['ten agents, one keyboard.', 'ship it before the coffee cools.', 'parallel by default.', 'less typing, more shipping.', 'every session earns its keep.', 'small commits, big days.'];
+const tabOf = (v) => (v === 'chat' ? 'wall' : v);   // the sessions tab covers the grid and the 1-3 pane layouts
+
 function renderHeader() {
+  // header: navigation and actions only; everything informational is in the status bar
   $('#banner').textContent = BANNER;
+  const big = $('#wall-empty .banner'); if (big && !big.textContent) big.textContent = BANNER;
+  const st = state.stats || {};
+  const n = (st.pending_approvals || []).length;
+  const needs = Math.max(n, st.waiting || 0);   // approvals + sessions waiting on an answer
+  const c = $('#inbox-count'); c.hidden = !needs; c.textContent = needs;
+  $('#btn-inbox').title = needs ? `${needs} waiting on you: approvals and questions  (a)` : 'Inbox: approvals and sessions waiting on you  (a)';
+  const tk = (st.tasks || {}).counts || {}; const openTasks = (tk.queued || 0) + (tk.running || 0);
+  const tc = $('#tasks-count'); if (tc) { tc.hidden = !openTasks; tc.textContent = openTasks; }
+  for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === tabOf(state.view));
+  renderSessionsBar();
+  renderStatusBar();
+  const pinned = state.pins.length;
+  document.title = (needs ? `(${needs}) ` : '') + 'kcoder' + (pinned ? ` · ${pinned} pinned` : '');
+}
+
+function renderSessionsBar() {
+  const bar = $('#sessions-bar'); if (!bar) return;
+  const on = state.view === 'wall' || state.view === 'chat';
+  bar.hidden = !on;
+  if (!on) return;
+  const cur = state.view === 'wall' ? 'grid' : String(state.layout.panes.length);
+  for (const b of $$('.layout-picker button', bar)) b.classList.toggle('active', b.dataset.layout === cur);
+  const bc = $('#btn-broadcast'); bc.classList.toggle('active', !!state.broadcast); bc.hidden = state.view !== 'chat' || state.layout.panes.length < 2;
+  const n = state.order.length;
+  $('#sessions-hint').textContent = state.view === 'wall' ? (n ? `${n} live session${n === 1 ? '' : 's'} · click a pane to focus it · 1-9 jump` : '') : (state.broadcast ? 'broadcast on: a prompt goes to every pane' : 'drag a chat from the sidebar onto a pane');
+}
+
+function renderStatusBar() {
   const st = state.stats || {};
   const today = st.today || {};
   const tokens = (today.input || 0) + (today.output || 0);
   const wk = st.week_tokens || []; const mx = Math.max(1, ...wk);
-  const spark = `<svg class="spark" viewBox="0 0 ${Math.max(1, wk.length) * 7} 18" width="${Math.max(1, wk.length) * 7}" height="18" aria-label="tokens, last 7 days">${wk.map((v, i) => { const h = Math.max(1, Math.round(v / mx * 16)); return `<rect x="${i * 7}" y="${18 - h}" width="5" height="${h}" rx="1"><title>${esc((st.week_dates || [])[i] || '')}: ${fmtInt(v)} tokens</title></rect>`; }).join('')}</svg>`;
-  $('#stats').innerHTML = [
-    `<button class="stat${st.cap_reached ? ' bad' : ''}" data-metric="sessions" title="open stats"><b>${st.sessions || 0}</b><span>active${st.cap_reached ? ' · paused (daily cap)' : ''}</span></button>`,
-    `<button class="stat${st.waiting ? ' warn' : ''}" data-metric="sessions" title="open stats"><b>${st.waiting || 0}</b><span>waiting on you</span></button>`,
-    `<button class="stat" data-metric="tokens" title="open stats"><b>${fmtTokens(tokens)}</b><span>tokens today</span></button>`,
-    `<button class="stat" data-metric="commits" title="open stats"><b>${st.commits_today || 0}</b><span>commits today</span></button>`,
-    `<button class="stat spark" data-metric="tokens" title="tokens, last 7 days"><b>${spark}</b><span>7 days</span></button>`,
-  ].join('');
-  $('#btn-broadcast').classList.toggle('active', !!state.broadcast);
+  const spark = `<svg viewBox="0 0 ${Math.max(1, wk.length) * 6} 12" width="${Math.max(1, wk.length) * 6}" height="12" aria-label="tokens, last 7 days">${wk.map((v, i) => { const h = Math.max(1, Math.round(v / mx * 11)); return `<rect x="${i * 6}" y="${12 - h}" width="4" height="${h}" rx="1"><title>${esc((st.week_dates || [])[i] || '')}: ${fmtInt(v)} tokens</title></rect>`; }).join('')}</svg>`;
+  const items = [
+    `<button class="status-item${st.cap_reached ? ' bad' : ''}" data-go="sessions" title="live sessions · open the sessions grid"><b>${st.sessions || 0}</b> active${st.cap_reached ? ' · paused (daily cap)' : ''}</button>`,
+    `<button class="status-item" data-go="stats:tokens" title="tokens today · open stats"><b>${fmtTokens(tokens)}</b> tokens today</button>`,
+    `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'} today</button>`,
+    `<button class="status-item spark" data-go="stats:tokens" title="tokens, last 7 days · open stats">${spark}</button>`,
+  ];
   const up = st.update || {};
-  if (st.restarting) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn"><b>restarting</b><span>kcoderd</span></div>`);
-  else if (up.available) $('#stats').insertAdjacentHTML('beforeend', `<div class="stat warn" data-upd="1" title="${esc((up.commits || []).join('\n'))}"><b>${up.behind}</b><span>new commit${up.behind === 1 ? '' : 's'}${up.failed ? ' · failed, rolled back' : ' · click'}</span></div>`);
-  const n = (st.pending_approvals || []).length;
-  const c = $('#inbox-count'); c.hidden = !n; c.textContent = n;
-  const tk = (st.tasks || {}).counts || {}; const openTasks = (tk.queued || 0) + (tk.running || 0);
-  const tc = $('#tasks-count'); if (tc) { tc.hidden = !openTasks; tc.textContent = openTasks; }
-  $('#btn-sound').textContent = state.sound ? '🔔' : '🔕';
-  for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === state.view);
-  const pinned = state.pins.length;
-  document.title = (n ? `(${n}) ` : '') + 'kcoder' + (pinned ? ` · ${pinned} pinned` : '');
+  if (st.restarting) items.push(`<span class="status-item warn">restarting kcoderd…</span>`);
+  else if (up.available) items.push(`<button class="status-item warn" data-upd="1" title="${esc((up.commits || []).join('\n'))}">${up.behind} new commit${up.behind === 1 ? '' : 's'}${up.failed ? ' · failed, rolled back' : ' · click to update'}</button>`);
+  $('#status-items').innerHTML = items.join('<span class="sep">·</span>');
+  const v = state.version || {};
+  const vb = $('#btn-version'); vb.textContent = 'kcoder ' + (v.running || ''); vb.title = `kcoder ${v.running || ''}${v.installed && v.installed !== v.running ? ` (${v.installed} on disk, restart to use it)` : ''}${v.dev ? ' · git checkout' : ''} · settings`;
 }
 
 function setView(v) {
+  if (v === 'terminal') v = 'chat';
   state.view = v; localStorage.setItem('kcoder.view', v); syncUiState();
+  if (v === 'wall' || v === 'chat') localStorage.setItem('kcoder.sessionsView', v);
   if (v === 'tasks') setTimeout(() => renderTasksView(true), 0);
   renderViews();
   if (v === 'chat') { if (!focusedSid() && state.order[0]) { state.layout.panes[state.layout.focus] = state.order[0]; saveLayout(); } for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1); syncSid(); }
-  else if (v === 'terminal') { if (!state.sid) state.sid = focusedSid() || state.order[0] || null; if (state.sid) loadEvents(state.sid, -1); }
   else if (v === 'stats') statsData = null;
   renderAll();
-  if (v === 'chat' || v === 'terminal') focusComposer();
+  if (v === 'chat') focusComposer();
 }
 function renderViews() {
   for (const s of $$('.view')) s.hidden = s.id !== 'view-' + state.view;
-  for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === state.view);
+  for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === tabOf(state.view));
+  renderSessionsBar();
+}
+// the sessions tab: the grid of every live session, or 1 to 3 panes side by side
+function openSessions() { if (state.view === 'wall' || state.view === 'chat') return; setView(localStorage.getItem('kcoder.sessionsView') === 'chat' ? 'chat' : 'wall'); }
+function setLayout(which) {
+  if (which === 'grid') { if (state.view !== 'wall') setView('wall'); else renderSessionsBar(); return; }
+  const n = Math.max(1, Math.min(3, Number(which) || 1));
+  const L = state.layout;
+  if (!Array.isArray(L.panes) || !L.panes.length) L.panes = [null];
+  while (L.panes.length < n) L.panes.push(null);
+  if (L.panes.length > n) L.panes = L.panes.slice(0, n);
+  L.focus = Math.min(L.focus || 0, n - 1); L.zoom = null; saveLayout();
+  if (state.view !== 'chat') setView('chat'); else { renderSplit(); renderSidebar(); renderSessionsBar(); }
 }
 
 // ----------------------------------------------------------------------
@@ -928,7 +968,6 @@ function chatItemHtml(c) {
 }
 $('#projects').addEventListener('dragstart', (e) => { const item = e.target.closest('.chat-item[data-sid]'); if (!item) return; state.dragChat = item.dataset.sid; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', item.dataset.sid); });
 $('#projects').addEventListener('dragend', () => { state.dragChat = null; for (const p of $$('.cpane')) p.classList.remove('drop'); });
-$('#btn-split').addEventListener('click', () => splitAdd(null));
 
 $('#projects').addEventListener('click', async (e) => {
   const clear = e.target.closest('[data-clear-search]'); if (clear) { state.searchResults = null; $('#search').value = ''; renderSidebar(); return; }
@@ -980,7 +1019,8 @@ async function chatMenu(sid) {
 // ----------------------------------------------------------------------
 // chat / terminal main areas
 // ----------------------------------------------------------------------
-function renderTitlebars() {
+function renderTitlebars() { /* the terminal view is now a per-pane toggle (see renderCpaneBar) */ }
+function _renderTitlebarsLegacy() {
   const s = state.sid ? (state.sessions.get(state.sid) || state.chats.find((c) => c.id === state.sid)) : null;
   const html = !s ? '<span class="meta">pick a chat on the left, or press n for a new one</span>' :
     `<span class="dot ${s.archived ? 'archived' : s.status}"></span><span class="title">${esc(s.title || s.name)}</span><span class="meta">${esc((s.project || {}).name || '')}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} · ${esc(shortHome(s.cwd))}</span><span class="spacer"></span>` +
@@ -989,33 +1029,11 @@ function renderTitlebars() {
     `<select data-act="model" title="model"></select>` +
     `<button data-act="interrupt" title="Esc" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■</button>` +
     `<button data-act="export" title="export markdown">⤓</button><button data-act="menu" title="more">⋯</button>`;
-  for (const id of ['#term-titlebar']) {
-    const el = $(id); el.innerHTML = html;
-    if (s) { $('select[data-act="trust"]', el).value = s.trust || 'read'; fillModelSelect($('select[data-act="model"]', el), s); }
-  }
-}
-for (const id of ['#term-titlebar']) {
-  $(id).addEventListener('click', (e) => { const b = e.target.closest('button[data-act]'); if (!b || !state.sid) return; if (b.dataset.act === 'menu') chatMenu(state.sid); else handleAction(b, state.sid); });
-  $(id).addEventListener('change', (e) => { const s = e.target.closest('select[data-act]'); if (s && state.sid) handleAction(s, state.sid); });
+  return html;
 }
 
 function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 80; }
-function renderTermLog() {
-  if (state.view !== 'terminal') return;
-  const log = $('#term-log');
-  if (!state.sid) { log.innerHTML = 'no chat selected - press n'; ensureComposer('#term-composer', null); return; }
-  const store = state.events.get(state.sid) || { list: [], live: '' };
-  const stick = nearBottom(log);
-  log.innerHTML = buildTermHtml(store, state.sid, {});
-  if (stick) log.scrollTop = log.scrollHeight;
-  ensureComposer('#term-composer', state.sid, true);
-}
-for (const id of ['#term-log']) {
-  $(id).addEventListener('click', (e) => {
-    const b = e.target.closest('[data-act]'); if (b && state.sid) { handleAction(b, state.sid); return; }
-    if (e.target.dataset.copy) copyCode(e.target);
-  });
-}
+function renderTermLog() { /* terminal rendering lives in each pane now (cpaneView / paneView = 'term') */ }
 function ensureComposer(slotSel, sid, termStyle) {
   const slot = $(slotSel);
   if (!sid) { slot.innerHTML = ''; slot.dataset.sid = ''; return; }
@@ -1246,9 +1264,9 @@ async function slashCommand(sid, line) {
       case '/export': await exportChat(sid); return true;
       case '/archive': await request('archive', { sid }); return true;
       case '/shell': setPaneView(sid, paneViewOf(sid) === 'shell' ? 'chat' : 'shell'); if (state.view !== 'wall') { setView('wall'); } focusPane(sid); return true;
-      case '/wall': setView('wall'); return true;
-      case '/chat': setView('chat'); return true;
-      case '/terminal': setView('terminal'); return true;
+      case '/wall': case '/grid': setLayout('grid'); return true;
+      case '/chat': case '/panes': setLayout(arg && /^[123]$/.test(arg) ? arg : (state.view === 'chat' ? String(state.layout.panes.length) : '1')); return true;
+      case '/terminal': { const p = state.view === 'chat' ? $$('#split .cpane').find((x) => x.dataset.sid === sid) : null; if (p) toggleCpaneView(p); else { setPaneView(sid, paneViewOf(sid) === 'term' ? 'chat' : 'term'); if (state.view !== 'wall') setView('wall'); focusPane(sid); } return true; }
       default: return false;
     }
   } catch (e) { toast(e.message, 'err'); return true; }
@@ -1344,9 +1362,12 @@ function renderInbox() {
     pend.push({ sid: s.id, name: s.name, rid: s.pending_approval, desc: req ? req.description : 'pending tool call', ts: req ? req.ts : 0 });
   }
   pend.sort((a, b) => a.ts - b.ts);
+  const asks = Array.from(state.sessions.values()).filter((s) => s.status === 'waiting' && !s.pending_approval);
   const sel = Math.min(state.inboxSel || 0, Math.max(0, pend.length - 1)); state.inboxSel = sel;
-  const html = `<h2>approval inbox <span class="help">${pend.length} pending · y approve · n decline · a approve all · ↑↓ move · esc close</span><span class="spacer"></span><button data-x="close">✕</button></h2>` +
-    `<div class="list">${pend.length ? pend.map((p, i) => `<div class="item${i === sel ? ' sel' : ''}" data-i="${i}"><span class="sess">${esc(p.name)}</span><code>${esc(p.desc)}</code><span class="meta">${age(p.ts)} ago</span><button class="primary" data-ap="1" data-sid="${p.sid}" data-rid="${esc(p.rid)}">yes</button><button class="danger" data-ap="0" data-sid="${p.sid}" data-rid="${esc(p.rid)}">no</button></div>`).join('') : '<div class="empty-row">nothing waiting on you</div>'}</div>`;
+  const html = `<h2>inbox <span class="help">${pend.length} approval${pend.length === 1 ? '' : 's'}${asks.length ? ` · ${asks.length} question${asks.length === 1 ? '' : 's'}` : ''} · y approve · n decline · a approve all · ↑↓ move · esc close</span><span class="spacer"></span><button data-x="close">✕</button></h2>` +
+    `<div class="list">${pend.map((p, i) => `<div class="item${i === sel ? ' sel' : ''}" data-i="${i}"><span class="sess">${esc(p.name)}</span><code>${esc(p.desc)}</code><span class="meta">${age(p.ts)} ago</span><button class="primary" data-ap="1" data-sid="${p.sid}" data-rid="${esc(p.rid)}">yes</button><button class="danger" data-ap="0" data-sid="${p.sid}" data-rid="${esc(p.rid)}">no</button></div>`).join('')}` +
+    `${asks.map((s) => `<div class="item" data-open="${s.id}"><span class="sess">${esc(s.name)}</span><code>${esc(s.title || 'waiting for your answer')}</code><span class="meta">${age(s.last_activity)} ago</span><button class="primary" data-open="${s.id}">open</button></div>`).join('')}` +
+    `${!pend.length && !asks.length ? '<div class="empty-row">nothing waiting on you</div>' : ''}</div>`;
   state.inboxItems = pend;
   if (state.dialog === 'inbox') { $('#overlay .dialog').innerHTML = html; }
   else openDialog(html, 'inbox');
@@ -1357,6 +1378,8 @@ $('#overlay').addEventListener('click', async (e) => {
   if (e.target.closest('[data-x]')) { closeDialog(); return; }
   const b = e.target.closest('[data-ap]');
   if (b) { await approve(b.dataset.sid, b.dataset.rid, b.dataset.ap === '1'); return; }
+  const o = e.target.closest('[data-open]');
+  if (o) { closeDialog(); state.sid = o.dataset.open; if (state.view === 'chat') assignPane(state.layout.focus, o.dataset.open); else { if (state.view !== 'wall') setView('wall'); focusPane(o.dataset.open); } return; }
   const it = e.target.closest('.item[data-i]'); if (it) { state.inboxSel = Number(it.dataset.i); renderInbox(); }
 });
 async function approve(sid, rid, ok) { try { await request('approve', { sid, rid, approved: ok }); } catch (e) { toast(e.message, 'err'); } setTimeout(() => { if (state.dialog === 'inbox') renderInbox(); }, 150); }
@@ -1434,6 +1457,7 @@ async function openNewSession(pre = {}) {
 function paletteItems() {
   const items = SHORTCUTS.filter((sc) => sc.palette).map((sc) => [sc.palette, () => sc.run({ key: '' }), shortcutKeys(sc)]);
   items.push(
+    ['settings', () => settingsDialog()], ['about kcoder', () => aboutDialog()], ['your Claude plan (connect, limits)', () => claudeDialog()],
     ['connect your AI (sign in to a provider)', () => setupDialog()], ['connect GitHub (commit identity)', () => setupDialog()], 
 ['toggle broadcast (send to all panes)', toggleBroadcast], 
     ['toggle sound', toggleSound], ['enable browser notifications', () => Notification.requestPermission().then((p) => toast('notifications: ' + p))],
@@ -1450,7 +1474,7 @@ function paletteItems() {
   );
   for (const s of state.sessions.values()) {
     items.push([`focus: ${s.name}${s.title ? ' · ' + s.title : ''}`, () => { if (state.view !== 'wall') setView('wall'); focusPane(s.id); }]);
-    items.push([`chat: ${s.name}`, () => { state.sid = s.id; setView('chat'); }]);
+    items.push([`open: ${s.name}`, () => { state.sid = s.id; if (state.view === 'chat') assignPane(state.layout.focus, s.id); else setView('chat'); }]);
     if (s.status === 'working' || s.status === 'waiting') items.push([`interrupt: ${s.name}`, () => request('interrupt', { sid: s.id })]);
     items.push([`archive: ${s.name}`, () => request('archive', { sid: s.id })]);
     items.push([`export: ${s.name}`, () => exportChat(s.id)]);
@@ -1462,18 +1486,23 @@ function paletteItems() {
   for (const c of state.chats.filter((c) => c.archived).slice(0, 50)) items.push([`resume: ${c.title || c.name}`, () => openChat(c.id)]);
   return items;
 }
-function openPalette() {
+function openPalette(initial) {
   const all = paletteItems();
   let sel = 0, shown = all;
-  const d = openDialog(`<div class="palette"><input id="pal-in" placeholder="type a command…"><div class="list" id="pal-list"></div></div>`, 'palette');
+  const d = openDialog(`<div class="palette"><input id="pal-in" placeholder="search sessions, or type a command…"><div class="list" id="pal-list"></div></div>`, 'palette');
   const inp = $('#pal-in', d), list = $('#pal-list', d);
   const render = () => { list.innerHTML = shown.slice(0, 30).map(([l, , k], i) => `<div class="item${i === sel ? ' sel' : ''}" data-i="${i}"><span>${esc(l)}</span>${k ? `<span class="meta"><kbd>${esc(k)}</kbd></span>` : ''}</div>`).join('') || '<div class="empty-row">no match</div>'; const s = $('.sel', list); if (s) s.scrollIntoView({ block: 'nearest' }); };
-  const filter = () => { const q = inp.value.toLowerCase().trim(); shown = q ? all.filter(([l]) => fuzzy(l.toLowerCase(), q)) : all; sel = 0; render(); };
+  const filter = () => {
+    const q = inp.value.toLowerCase().trim();
+    // exact substring matches first (sessions by name, then commands), fuzzy matches after
+    shown = q ? all.map((it, i) => [it, it[0].toLowerCase().includes(q) ? 0 : fuzzy(it[0].toLowerCase(), q) ? 1 : 2, i]).filter((x) => x[1] < 2).sort((a, b) => a[1] - b[1] || a[2] - b[2]).map((x) => x[0]) : all;
+    sel = 0; render();
+  };
   const run = (i) => { const it = shown[i]; closeDialog(); if (it) it[1](); };
   inp.addEventListener('input', filter);
   inp.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { sel = Math.min(shown.length - 1, sel + 1); render(); e.preventDefault(); } else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); } else if (e.key === 'Enter') { run(sel); } else if (e.key === 'Escape') closeDialog(); });
   list.addEventListener('click', (e) => { const it = e.target.closest('[data-i]'); if (it) run(Number(it.dataset.i)); });
-  render();
+  if (typeof initial === 'string' && initial) { inp.value = initial; filter(); } else render();
 }
 function fuzzy(text, q) { let i = 0; for (const ch of q) { i = text.indexOf(ch, i); if (i < 0) return false; i++; } return true; }
 
@@ -1489,6 +1518,53 @@ function renderClaudeButton() {
   b.textContent = !c.on_plan ? 'connect Claude' : lim.length ? `plan limit${lim.some((l) => l.scope === 'all') ? '' : ' · ' + lim.map((l) => l.scope).join(', ')}` : 'plan ✓';
   b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.`;
 }
+function aboutDialog() {
+  const v = state.version || {};
+  const d = openDialog(`<div class="body"><img class="logo" src="icon-192.png" alt=""><pre class="banner" aria-label="KCODER">${esc(BANNER)}</pre>
+    <div class="tagline">${esc(TAGLINES[Math.floor(Math.random() * TAGLINES.length)])}</div>
+    <div class="credits">developed by Kyle Niedzwiecki<br>© 2026 Kyer's Reserve LLC<br><span class="ver">kcoder ${esc(v.running || '')}${v.installed && v.installed !== v.running ? ` · ${esc(v.installed)} on disk` : ''}${v.dev ? ' · git checkout' : ''}</span></div>
+    <div class="row"><button data-x="settings">Settings</button><button data-x="keys">Keyboard shortcuts</button><button class="primary" data-x="close">Close</button></div></div>`, 'about');
+  d.classList.add('about');
+  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; closeDialog(); if (b.dataset.x === 'settings') settingsDialog(); else if (b.dataset.x === 'keys') helpDialog(); });
+}
+
+async function settingsDialog() {
+  try { state.config = (await request('config')).config; } catch {}
+  const cfg = state.config || {}; const v = state.version || {};
+  const chk = (id, on, label, help) => `<label class="setting"><span>${label}${help ? ` <span class="help">${help}</span>` : ''}</span><input type="checkbox" data-set="${id}"${on ? ' checked' : ''}></label>`;
+  const sel = (id, val, label, opts) => `<label class="setting"><span>${label}</span><select data-set="${id}">${opts.map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
+  const d = openDialog(`<h2>settings<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">
+    ${sel('theme', themeChoice(), 'Theme', [['dark', 'dark'], ['light', 'light'], ['system', 'follow the system']])}
+    ${chk('sound', state.sound, 'Sound', 'a ping when a session needs you')}
+    ${sel('default_trust', cfg.default_trust || 'auto', 'Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']])}
+    ${chk('routing_enabled', !(cfg.routing && cfg.routing.enabled === false), 'Model routing', 'auto picks a cheap model for small turns, a strong one for large')}
+    ${sel('review_required', cfg.review_required || 'push', 'Review required before', [['push', 'push - PRs, pushes and merges'], ['commit', 'commit - every commit'], ['none', 'none - review is optional']])}
+    ${chk('auto_publish', cfg.auto_publish === true, 'Auto-publish local folders to GitHub', 'a private repo is created and pushed for folders with no remote')}
+    <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
+    <div class="label-h">accounts</div>
+    <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
+    <div class="label-h">kcoder</div>
+    <div class="links"><button data-x="update">Check for new commits</button><button data-x="restart">Restart kcoderd</button><button data-x="keys">Keyboard shortcuts</button><button data-x="about">About</button><button class="danger" data-x="uninstall">Uninstall…</button></div>
+  </div><div class="foot"><span class="help">kcoder ${esc(v.running || '')}${v.dev ? ' · git checkout' : ''} · © 2026 Kyer's Reserve LLC · developed by Kyle Niedzwiecki</span><button class="primary" data-x="close">Done</button></div>`, 'settings');
+  d.classList.add('settings');
+  d.addEventListener('change', async (e) => {
+    const el = e.target.closest('[data-set]'); if (!el) return;
+    const k = el.dataset.set;
+    try {
+      if (k === 'theme') { setTheme(el.value); toast('theme: ' + el.value, 'ok'); return; }
+      if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
+      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
+      const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  d.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-x]'); if (!b) return;
+    const x = b.dataset.x; closeDialog();
+    ({ claude: claudeDialog, setup: () => setupDialog(), remote: remoteDialog, notif: () => Notification.requestPermission().then((p) => toast('notifications: ' + p)),
+       update: checkUpdates, restart: restartDaemon, keys: helpDialog, about: aboutDialog, uninstall: uninstallDialog }[x] || (() => {}))();
+  });
+}
+
 async function claudeDialog() {
   const d = openDialog(`<h2>your Claude plan<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body setup"><div id="cl-body" class="help plain">checking…</div></div>
     <div class="foot"><span class="help plain" id="cl-status"></span><span class="spacer" style="flex:1"></span><button data-cl="check">Check again</button><button class="primary" data-cl="login">Reconnect Claude</button></div>`, 'claude');
@@ -1981,11 +2057,15 @@ const SHORTCUTS = [
   { id: 'palette', group: 'navigation', combo: 'mod+k', label: 'command palette', scope: 'global', run: () => (state.dialog ? closeDialog() : openPalette()) },
   { id: 'sheet', group: 'navigation', combo: 'mod+/', label: 'keyboard shortcuts (this sheet)', scope: 'global', palette: 'keyboard shortcuts', run: () => (state.dialog === 'keys' ? closeDialog() : helpDialog()) },
   { id: 'sheet2', group: 'navigation', combo: '?', label: 'keyboard shortcuts (outside a text field)', scope: 'plain', run: () => helpDialog() },
-  { id: 'v-wall', group: 'navigation', combo: 'alt+1', label: 'wall view', scope: 'app', palette: 'wall view', run: () => setView('wall') },
-  { id: 'v-chat', group: 'navigation', combo: 'alt+2', label: 'chat view', scope: 'app', palette: 'chat view', run: () => setView('chat') },
-  { id: 'v-term', group: 'navigation', combo: 'alt+3', label: 'terminal view', scope: 'app', palette: 'terminal view', run: () => setView('terminal') },
-  { id: 'v-stats', group: 'navigation', combo: 'alt+4', label: 'stats view', scope: 'app', palette: 'stats view', run: () => setView('stats') },
-  { id: 'v-tasks', group: 'navigation', combo: 'alt+5', label: 'task queue + schedules', scope: 'app', palette: 'task queue + schedules', run: () => setView('tasks') },
+  { id: 'v-sessions', group: 'navigation', combo: 'alt+1', label: 'sessions', scope: 'app', palette: 'sessions', run: () => openSessions() },
+  { id: 'v-tasks', group: 'navigation', combo: 'alt+2', label: 'task queue + schedules', scope: 'app', palette: 'task queue + schedules', run: () => setView('tasks') },
+  { id: 'v-stats', group: 'navigation', combo: 'alt+3', label: 'stats', scope: 'app', palette: 'stats', run: () => setView('stats') },
+  { id: 'l-grid', group: 'navigation', combo: 'alt+g', label: 'sessions: grid of every live session', scope: 'app', palette: 'sessions: grid', run: () => setLayout('grid') },
+  { id: 'l-1', group: 'navigation', keys: '⌥⇧1 … 3', label: 'sessions: 1, 2 or 3 panes side by side', scope: 'app', test: (e) => e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && /^(Digit[123]|[123!@#])$/.test(e.code || e.key), palette: 'sessions: 1 pane', run: (e) => setLayout(e.code ? e.code.replace('Digit', '') : '1') },
+  { id: 'l-2', group: 'navigation', label: 'sessions: 2 panes', scope: 'alias', palette: 'sessions: 2 panes', run: () => setLayout('2') },
+  { id: 'l-3', group: 'navigation', label: 'sessions: 3 panes', scope: 'alias', palette: 'sessions: 3 panes', run: () => setLayout('3') },
+  { id: 'settings', group: 'navigation', combo: 'mod+,', label: 'settings', scope: 'app', palette: 'settings', run: () => settingsDialog() },
+  { id: 'about', group: 'navigation', label: 'about kcoder', scope: 'alias', palette: 'about kcoder', run: () => aboutDialog() },
   { id: 'fullscreen', group: 'navigation', combo: 'ctrl+mod+f', label: 'full screen', scope: 'app', palette: 'full screen', run: () => toggleFullscreen() },
   { id: 'search', group: 'navigation', combo: 'mod+shift+f', label: 'search across sessions', scope: 'app', palette: 'search across sessions', run: () => { toChat(); const si = $('#search'); si.focus(); si.select(); } },
   { id: 'escape', group: 'navigation', combo: 'Escape', label: 'close dialog · back to the grid', scope: 'plain', when: () => !!state.focus, run: () => focusPane(null) },
@@ -1994,7 +2074,7 @@ const SHORTCUTS = [
   { id: 'waiting', group: 'sessions', combo: 'w', label: 'cycle sessions waiting on you', scope: 'plain', palette: 'cycle waiting sessions', run: () => cycleWaiting() },
   { id: 'jump', group: 'sessions', keys: '1 … 9', label: 'jump to pane on the wall', scope: 'plain', test: (e) => !e.metaKey && !e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key), run: (e) => { const s = visibleSessions()[Number(e.key) - 1]; if (s) { if (state.view !== 'wall') setView('wall'); focusPane(s.id); } } },
   { id: 'open', group: 'sessions', combo: 'Enter', label: 'focus the current session on the wall', scope: 'plain', when: () => state.view === 'wall' && !state.focus && !!state.sid, run: () => focusPane(state.sid) },
-  { id: 'view', group: 'sessions', combo: 'v', label: 'cycle pane view: chat → terminal → shell → preview', scope: 'plain', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.sid && state.view !== 'wall') setView(state.view === 'chat' ? 'terminal' : 'chat'); } },
+  { id: 'view', group: 'sessions', combo: 'v', label: 'pane view: chat ↔ terminal (grid panes also: shell → preview)', scope: 'plain', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
   { id: 'pin', group: 'sessions', combo: 'p', label: 'pin the focused session to this window', scope: 'plain', when: () => !!state.focus, run: () => togglePin(state.focus) },
   { id: 'slash', group: 'sessions', combo: '/', label: 'slash commands (/model, /trust, …)', scope: 'plain', when: () => state.view !== 'wall' || !!state.focus, run: () => { focusComposer(); const ta = document.activeElement; if (ta && ta.tagName === 'TEXTAREA') { ta.value = '/'; ta.dispatchEvent(new Event('input')); } } },
   { id: 'send', group: 'sessions', keys: '↩', label: 'send', scope: 'composer' },
@@ -2025,7 +2105,7 @@ const SHORTCUTS = [
   { id: 'undo', group: 'review', keys: '↶ on a message', label: 'undo to here (files + conversation)', scope: 'mouse' },
   { id: 'changes', group: 'review', keys: 'changes', label: 'accept / reject / edit each hunk, then approve', scope: 'mouse' },
   // queue
-  { id: 'queue-view', group: 'queue', combo: 'alt+5', label: 'task queue + schedules', scope: 'alias' },
+  { id: 'queue-view', group: 'queue', combo: 'alt+2', label: 'task queue + schedules', scope: 'alias' },
   { id: 'queue-drag', group: 'queue', keys: 'drag a queued task', label: 'reorder the queue', scope: 'mouse' },
   { id: 'queue-add', group: 'queue', keys: '+ task', label: 'queue a follow-up on a session', scope: 'mouse' },
   { id: 'dialog-submit', group: 'navigation', keys: '⌘↩', label: 'submit a multi-line dialog', scope: 'dialog' },
@@ -2041,7 +2121,7 @@ function comboLabel(c) {
   if (p.plain) return { Escape: 'esc', Enter: '↩', N: '⇧N' }[p.key] ?? p.key;
   return (p.ctrl ? '⌃' : '') + (p.alt ? '⌥' : '') + (p.shift ? '⇧' : '') + (p.mod ? '⌘' : '') + k;
 }
-function shortcutKeys(sc) { return sc.keys || comboLabel(sc.combo); }
+function shortcutKeys(sc) { return sc.keys || (sc.combo ? comboLabel(sc.combo) : ''); }
 function keyHint(id) { const sc = SHORTCUTS.find((x) => x.id === id); return sc ? shortcutKeys(sc) : ''; }
 function comboMatches(c, e) {
   const p = parseCombo(c);
@@ -2071,19 +2151,28 @@ document.addEventListener('keydown', (e) => {
 });
 
 // header buttons
-for (const b of $$('.views button')) b.addEventListener('click', () => setView(b.dataset.view));
+for (const b of $$('.views button')) b.addEventListener('click', () => (b.dataset.view === 'wall' ? openSessions() : setView(b.dataset.view)));
 $('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
-$('#btn-palette').addEventListener('click', openPalette);
-$('#btn-sound').addEventListener('click', toggleSound);
+$('#brand').addEventListener('click', () => aboutDialog());
+// the search field is the command palette's front door: focusing it opens the palette with whatever was typed
+$('#omni').addEventListener('focus', () => { const o = $('#omni'); const q = o.value; o.value = ''; o.blur(); if (!state.dialog) openPalette(q); });
+$('#omni').addEventListener('input', () => { const o = $('#omni'); if (o.value && !state.dialog) { const q = o.value; o.value = ''; o.blur(); openPalette(q); } });
+$('#sessions-bar').addEventListener('click', (e) => { const b = e.target.closest('[data-layout]'); if (b) setLayout(b.dataset.layout); });
+$('#statusbar').addEventListener('click', (e) => {
+  if (e.target.closest('[data-upd]')) { updateNow(); return; }
+  const b = e.target.closest('[data-go]'); if (!b) return;
+  const [where, metric] = b.dataset.go.split(':');
+  if (where === 'sessions') setLayout('grid'); else if (where === 'stats') openStats(metric);
+});
+$('#btn-version').addEventListener('click', () => settingsDialog());
 $('#btn-claude').addEventListener('click', () => claudeDialog());
 document.addEventListener('click', (e) => { if (e.target.closest('[data-fix="claude"]')) claudeDialog(); });
 setInterval(() => { if (state.connected) refreshClaude(); }, 5 * 60 * 1000);
 $('#btn-broadcast').addEventListener('click', toggleBroadcast);
-$('#stats').addEventListener('click', (e) => { const b = e.target.closest('[data-metric]'); if (b) openStats(b.dataset.metric); });
 if (window.addEventListener) window.addEventListener('pywebviewready', () => document.body.classList.add('native'));
 $('#view-wall').addEventListener('click', (e) => { const b = e.target.closest('[data-action="new"]'); if (b) openNewSession(); });
-$('#tagline').textContent = ['ten agents, one keyboard.', 'ship it before the coffee cools.', 'parallel by default.', 'less typing, more shipping.', 'every session earns its keep.', 'small commits, big days.'][Math.floor(Math.random() * 6)];
+$('#tagline').textContent = TAGLINES[Math.floor(Math.random() * TAGLINES.length)];
 document.addEventListener('click', () => { if ('Notification' in window && Notification.permission === 'default' && !localStorage.getItem('kcoder.askedNotif')) { localStorage.setItem('kcoder.askedNotif', '1'); Notification.requestPermission(); } }, { once: true });
 setInterval(() => { renderHeader(); if (state.view === 'wall') for (const p of $$('.pane')) { const s = state.sessions.get(p.dataset.sid); if (s) renderPaneChrome(p, s, state.order.indexOf(s.id) + 1); } }, 15000);
 window.addEventListener('resize', () => { for (const sid of state.shells.keys()) fitShell(sid); });
@@ -2177,15 +2266,29 @@ function renderCpaneBar(pane) {
     const ms = $('select[data-act="model"]', bar); if (ms.dataset.for !== sid + ':' + s.model + ':' + s.provider) { fillModelSelect(ms, s); ms.dataset.for = sid + ':' + s.model + ':' + s.provider; }
     $('button[data-act="interrupt"]', bar).disabled = !(s.status === 'working' || s.status === 'waiting');
   }
+  const tv = cpaneViewOf(sid) === 'term';
+  const vt = $('[data-pane="view"]', bar); vt.textContent = tv ? '▤' : '☰'; vt.title = (tv ? 'terminal view · click for chat' : 'chat view · click for terminal') + '  (v)'; vt.classList.toggle('active', tv);
   $('[data-pane="zoom"]', bar).textContent = state.layout.zoom != null ? '⤡' : '⤢';
   $('[data-pane="zoom"]', bar).hidden = state.layout.panes.length <= 1 && state.layout.zoom == null;
   $('[data-pane="close"]', bar).hidden = state.layout.panes.length <= 1;
 }
 
+function cpaneViewOf(sid) { return (sid && state.cpaneView.get(sid)) || 'chat'; }
+function toggleCpaneView(pane) {
+  const sid = pane.dataset.sid; if (!sid) return;
+  const term = cpaneViewOf(sid) !== 'term';
+  state.cpaneView.set(sid, term ? 'term' : 'chat');
+  pane._rendered = null; $('.chat-log', pane).innerHTML = '';
+  const slot = $('.composer-slot', pane); slot.innerHTML = ''; mountComposer(slot, sid, term);
+  renderCpaneBar(pane); renderCpaneLog(pane); focusComposer();
+}
 function renderCpaneLog(pane) {
   const sid = pane.dataset.sid; const log = $('.chat-log', pane);
+  const term = cpaneViewOf(sid) === 'term';
+  log.classList.toggle('term-log', !!sid && term);
   if (!sid) { log.innerHTML = '<div class="empty"><p>No session in this pane.</p><p><button class="primary" data-pane="pick">Pick a session</button> or drag one from the sidebar.</p></div>'; pane._rendered = null; $('.jump', pane).hidden = true; return; }
   const store = state.events.get(sid) || { list: [], live: '', streaming: false };
+  if (term) { const stick = nearBottom(log); log.innerHTML = buildTermHtml(store, sid, {}); if (stick) log.scrollTop = log.scrollHeight; pane._rendered = null; $('.jump', pane).hidden = true; return; }
   renderLogInto(pane, log, sid, store, {}, log);
   if (pane._find && pane._find.q) runFind(pane, false);
 }
@@ -2202,7 +2305,7 @@ function wireCpane(pane) {
   bar.addEventListener('click', (e) => {
     const sid = pane.dataset.sid;
     const pb = e.target.closest('[data-pane]');
-    if (pb) { const a = pb.dataset.pane; if (a === 'zoom') toggleZoom(idx()); else if (a === 'close') splitClose(idx()); else if (a === 'menu') paneMenu(pane); else if (a === 'find') openFind(pane); return; }
+    if (pb) { const a = pb.dataset.pane; if (a === 'zoom') toggleZoom(idx()); else if (a === 'close') splitClose(idx()); else if (a === 'menu') paneMenu(pane); else if (a === 'find') openFind(pane); else if (a === 'view') toggleCpaneView(pane); return; }
     if (e.target.closest('.picker')) { pickSession(idx()); return; }
     if (e.target.closest('a')) return;
     const b = e.target.closest('[data-act]'); if (b && sid) handleAction(b, sid);
@@ -2422,4 +2525,3 @@ function exportStatsCsv() {
 renderHeader(); renderViews();
 connect();
 
-$('#stats').addEventListener('click', (e) => { if (e.target.closest('[data-upd]')) updateNow(); });

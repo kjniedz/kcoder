@@ -19,37 +19,35 @@
 </head>
 <body>
 <header id="header">
-  <div class="brand">
-    <pre id="banner" class="banner" aria-label="KCODER"></pre>
-    <div class="credit">
-      <span>developed by Kyle Niedzwiecki</span>
-      <span>© 2026 Kyer's Reserve LLC</span>
-      <span id="tagline" class="tagline"></span>
-    </div>
-  </div>
-  <div id="stats" class="stats"></div>
+  <button id="brand" class="brand" title="About kcoder"><pre id="banner" class="banner compact" aria-label="KCODER"></pre><span class="wordmark">kcoder</span></button>
   <nav class="views" role="tablist">
-    <button data-view="wall" title="Wall  (alt+1)">wall</button>
-    <button data-view="chat" title="Chat  (alt+2)">chat</button>
-    <button data-view="terminal" title="Terminal  (alt+3)">terminal</button>
-    <button data-view="stats" title="Stats  (alt+4)">stats</button>
-    <button data-view="tasks" title="Task queue  (alt+5)">tasks <span id="tasks-count" class="count" hidden></span></button>
+    <button data-view="wall" title="Sessions: the grid, or 1 to 3 panes  (alt+1)">sessions</button>
+    <button data-view="tasks" title="Task queue and schedules  (alt+2)">tasks <span id="tasks-count" class="count" hidden></span></button>
+    <button data-view="stats" title="Stats  (alt+3)">stats</button>
   </nav>
+  <input id="omni" class="omni" type="search" placeholder="Search or run a command  ⌘K" autocomplete="off" title="Search sessions or run a command  (⌘K)">
   <div class="tools">
-    <button id="btn-broadcast" title="Broadcast: send one prompt to every open pane">⇶</button>
-    <button id="btn-claude" title="Your Claude plan: connect, reconnect, limits">Claude</button>
-    <button id="btn-inbox" title="Approval inbox  (a)">inbox <span id="inbox-count" class="count" hidden></span></button>
+    <button id="btn-inbox" title="Inbox: approvals and sessions waiting on you  (a)">inbox <span id="inbox-count" class="count" hidden></span></button>
     <button id="btn-new" title="New session  (n)">+ new</button>
-    <button id="btn-palette" title="Command palette  (⌘K)">⌘K</button>
-    <button id="btn-sound" title="Sound on/off">🔔</button>
-    <span id="conn" class="conn" title="daemon connection"></span>
   </div>
 </header>
 
 <main id="main">
+  <div id="sessions-bar" class="sessions-bar" hidden>
+    <div class="layout-picker" role="radiogroup" aria-label="layout">
+      <button data-layout="grid" title="Every live session as a grid">grid</button>
+      <button data-layout="1" title="One session, full width">1</button>
+      <button data-layout="2" title="Two sessions side by side">2</button>
+      <button data-layout="3" title="Three sessions side by side">3</button>
+    </div>
+    <button id="btn-broadcast" title="Broadcast: send one prompt to every open pane">⇶ broadcast</button>
+    <span class="help" id="sessions-hint"></span>
+  </div>
   <section id="view-wall" class="view" hidden>
     <div id="wall" class="wall"></div>
     <div id="wall-empty" class="empty" hidden>
+      <pre class="banner big" aria-label="KCODER"></pre>
+      <p class="tagline" id="tagline"></p>
       <p>No running sessions.</p>
       <p><button class="primary" data-action="new">Start one</button> or press <kbd>n</kbd>.</p>
     </div>
@@ -62,7 +60,7 @@
         <button id="btn-new-chat" title="New chat in this project">+</button>
       </div>
       <div id="projects" class="projects"></div>
-      <div class="sidebar-foot"><button id="btn-split" title="Add a pane (⌘\\)">⫿ split</button><span class="help">drag a chat onto a pane</span></div>
+      <div class="sidebar-foot"><span class="help">drag a chat onto a pane · 1 / 2 / 3 above picks the layout</span></div>
     </aside>
     <div id="split" class="split" data-n="1"></div>
   </section>
@@ -75,12 +73,15 @@
     <div id="tasks-body" class="tasks-body"></div>
   </section>
 
-  <section id="view-terminal" class="view termview" hidden>
-    <div id="term-titlebar" class="chat-titlebar"></div>
-    <div id="term-log" class="term-log"></div>
-    <div id="term-composer" class="composer-slot term-composer"></div>
-  </section>
 </main>
+
+<footer id="statusbar" class="statusbar">
+  <span id="conn" class="conn" title="daemon connection"></span>
+  <span id="status-items" class="status-items"></span>
+  <span class="spacer"></span>
+  <button id="btn-claude" class="status-item" title="Your Claude plan: connect, reconnect, limits">Claude</button>
+  <button id="btn-version" class="status-item dim" title="Version · settings">kcoder</button>
+</footer>
 
 <div id="overlay" class="overlay" hidden></div>
 <div id="toasts" class="toasts"></div>
@@ -92,6 +93,7 @@
       <button class="picker" title="Pick a session for this pane">pick a session ▾</button>
       <span class="meta"></span>
       <span class="spacer"></span>
+      <button data-pane="view" class="view-toggle" title="Chat / terminal view  (v)">☰</button>
       <span class="ctx sec"></span>
       <select data-act="trust" class="sec" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option></select>
       <select data-act="model" class="sec" title="model"></select>

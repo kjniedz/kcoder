@@ -169,6 +169,27 @@ def install_status_item(api, url: str):
             def quit_(self, sender):
                 AppKit.NSApp.terminate_(None)
 
+            def about_(self, sender):
+                """kcoder > About kcoder: the About panel inside the app, not the stock one."""
+                self.showWindow_(sender)
+                try:
+                    self.api.window.evaluate_js("aboutDialog()")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            def patchAbout_(self, sender):
+                """Point the application menu's About item at about: (main thread only)."""
+                try:
+                    main = AppKit.NSApp.mainMenu()
+                    first = main.itemArray()[0].submenu() if main and main.itemArray() else None
+                    for mi in (first.itemArray() if first else []):
+                        if str(mi.action() or "") == "orderFrontStandardAboutPanel:":
+                            mi.setTitle_("About kcoder")
+                            mi.setTarget_(self)
+                            mi.setAction_("about:")
+                except Exception:  # noqa: BLE001
+                    pass
+
         target = _MenuTarget.alloc().initWithApi_url_(api, url)
         bar = AppKit.NSStatusBar.systemStatusBar()
         item = bar.statusItemWithLength_(AppKit.NSVariableStatusItemLength)
@@ -179,7 +200,8 @@ def install_status_item(api, url: str):
             item.button().setImage_(image)
         item.button().setToolTip_("kcoder")
         menu = AppKit.NSMenu.alloc().initWithTitle_("kcoder")
-        for title, sel, key in (("Open kcoder", "showWindow:", "o"), ("New session", "newSession:", "n"), ("Open in browser", "openBrowser:", "b"), (None, None, None), ("Quit kcoder", "quit:", "q")):
+        for title, sel, key in (("Open kcoder", "showWindow:", "o"), ("New session", "newSession:", "n"), ("Open in browser", "openBrowser:", "b"),
+                                (None, None, None), ("About kcoder", "about:", ""), ("Quit kcoder", "quit:", "q")):
             if title is None:
                 menu.addItem_(AppKit.NSMenuItem.separatorItem())
                 continue
@@ -188,6 +210,10 @@ def install_status_item(api, url: str):
             menu.addItem_(mi)
         item.setMenu_(menu)
         api.status_target = target       # keep the ObjC target alive (the item only holds a weak reference)
+        try:   # the application menu exists once the window is shown; re-point its About item then
+            api.window.events.shown += lambda: target.performSelectorOnMainThread_withObject_waitUntilDone_("patchAbout:", None, False)
+        except Exception:  # noqa: BLE001
+            pass
         return item
     except Exception as exc:  # noqa: BLE001 - the window works without a menu bar item
         with open(APP_LOG_PATH, "a", encoding="utf-8") as log:
