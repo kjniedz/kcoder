@@ -185,6 +185,16 @@ waiting on you, <kbd>1</kbd> to <kbd>9</kbd> focus a grid pane, <kbd>esc</kbd>
 back to the grid or interrupt the focused session, <kbd>⌘K</kbd> palette,
 <kbd>⌘,</kbd> settings, <kbd>⌘/</kbd> the full shortcut sheet.
 
+**Voice input.** The microphone button in the composer (⌘⇧M) dictates
+into the message with the browser's speech recognition; click again or
+pause to stop, then edit and send as usual. On the phone approval page a
+tap on "say yes or no" listens for yes / approve / allow or no / deny /
+decline and answers the request (the relay needs a redeploy once).
+
+**Theme and density.** Settings (⌘,) has the theme (dark, light, follow the
+system) and a density switch: comfortable, or compact for tighter spacing
+with more on screen. Both are per browser, like the text font.
+
 **Keyboard-only inbox.** Everything waiting on you is one list: approvals,
 questions, changes to review, errors. <kbd>w</kbd> shows the next item;
 <kbd>y</kbd> approves and <kbd>⇧N</kbd> declines the one on screen, and the

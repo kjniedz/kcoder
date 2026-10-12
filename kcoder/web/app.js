@@ -84,6 +84,10 @@ function applyTheme() {
   for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
 }
 function setTheme(c) { localStorage.setItem('kcoder.theme', c); applyTheme(); }
+// ---- density: comfortable (default) or compact ----
+function densityChoice() { return localStorage.getItem('kcoder.density') || 'comfortable'; }
+function applyDensity() { const c = densityChoice(); if (c === 'compact') document.documentElement.dataset.density = 'compact'; else delete document.documentElement.dataset.density; for (const sh of state.shells.values()) { try { sh.fit.fit(); } catch {} } }
+function setDensity(c) { localStorage.setItem('kcoder.density', c); applyDensity(); }
 // ---- text font: any installed family (falls back to the system monospace) and a size ----
 const FONT_PRESETS = [['', 'system monospace (default)'], ['JetBrains Mono', 'JetBrains Mono'], ['Fira Code', 'Fira Code'], ['Cascadia Code', 'Cascadia Code'], ['SF Mono', 'SF Mono'], ['Menlo', 'Menlo'], ['Consolas', 'Consolas'], ['IBM Plex Mono', 'IBM Plex Mono'], ['Source Code Pro', 'Source Code Pro'], ['Monaco', 'Monaco'], ['Courier New', 'Courier New'], ['system-ui', 'system sans (not monospace)']];
 const FONT_SIZES = [11, 12, 12.5, 13, 14, 15, 16, 18];
@@ -105,6 +109,7 @@ function cssVar(name) { return getComputedStyle(document.documentElement).getPro
 function xtermTheme() { return { background: cssVar('--code-bg'), foreground: cssVar('--fg'), cursor: cssVar('--accent'), selectionBackground: cssVar('--accent-soft') }; }
 applyTheme();
 applyFont();
+applyDensity();
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice() === 'system') applyTheme(); });
 
 // ----------------------------------------------------------------------
@@ -1305,6 +1310,9 @@ function mountComposer(slot, sid, termStyle) {
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + 'px'; };
   ta.addEventListener('input', () => { grow(); updateMenu(comp); });
   ta.addEventListener('keydown', (e) => onComposerKey(e, comp));
+  const mic = $('.mic', form);
+  if (!speechSupported()) mic.hidden = true;
+  else mic.addEventListener('click', () => toggleVoice(comp));
   ta.addEventListener('paste', (e) => onPaste(e, comp));
   form.addEventListener('drop', (e) => { if (state.dragChat) return; const files = Array.from(e.dataTransfer.files || []); if (files.length) { e.preventDefault(); e.stopPropagation(); addFiles(comp, files); } });
   form.addEventListener('dragover', (e) => { if (!state.dragChat) e.preventDefault(); });
@@ -1754,6 +1762,7 @@ function paletteItems() {
     ['set daily spend cap', async () => { const v = await promptDialog('Daily spend cap (USD, 0 = none)', 'Sessions pause when today\'s spend reaches it.', String(state.stats.daily_cap_usd || 0)); if (v != null) await request('config', { daily_cap_usd: Number(v) || 0 }); }],
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
     ['text font and size (settings)', () => settingsDialog()],
+    ['density: comfortable / compact', async () => { const v = await chooseDialog('Density', [['comfortable', 'comfortable (default)'], ['compact', 'compact - tighter spacing, more on screen']]); if (v) { setDensity(v); toast('density: ' + v, 'ok'); } }],
     ['theme: dark / light / system', async () => { const v = await chooseDialog('Theme', [['dark', 'dark (default)'], ['light', 'light'], ['system', 'follow the system setting']]); if (v) { setTheme(v); toast('theme: ' + v, 'ok'); } }],
     ['phone approvals (pair, revoke, enable)', remoteDialog],
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
@@ -1817,6 +1826,27 @@ function renderClaudeButton() {
   if (!lim.length && use.some((u) => u.utilization >= 0.8)) b.className = 'warn';
   b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.` + ((c.usage || []).length ? '\n' + c.usage.map(planUsageText).join('\n') + '\nFrom Claude Code\'s rate-limit reports; updated on every turn. Click for the per-session share.' : '');
 }
+// ---- voice input: the browser's speech recognition dictates into the composer ----
+function speechSupported() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+function toggleVoice(comp) {
+  if (comp._rec) { comp._rec.stop(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('voice input is not available in this browser', 'warn'); return; }
+  const rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = navigator.language || 'en-US';
+  const mic = $('.mic', comp.form); const ta = comp.ta;
+  const base = ta.value ? ta.value.replace(/\s*$/, ' ') : '';
+  let finals = '';
+  rec.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) finals += t.trim() + ' '; else interim += t; }
+    ta.value = base + finals + interim; ta.dispatchEvent(new Event('input'));
+  };
+  rec.onerror = (e) => { if (e.error === 'not-allowed') toast('microphone access was refused; allow it for kcoder and try again', 'err'); else if (e.error !== 'aborted' && e.error !== 'no-speech') toast('voice input: ' + e.error, 'err'); };
+  rec.onend = () => { comp._rec = null; mic.classList.remove('listening'); mic.title = 'Voice input: speak, the words land here; click again or pause to stop (⌘⇧M)'; ta.value = (base + finals).replace(/\s+$/, ''); ta.dispatchEvent(new Event('input')); ta.focus(); };
+  try { rec.start(); } catch (e) { toast('voice input could not start: ' + e.message, 'err'); return; }
+  comp._rec = rec; mic.classList.add('listening'); mic.title = 'Listening… click to stop';
+}
+
 // ---- the morning brief: what every session did, what waits on you, what is in review ----
 async function briefDialog(opts = {}) {
   let r; try { r = await request('brief', { since: opts.since || null }); } catch (e) { toast(e.message, 'err'); return; }
@@ -1920,6 +1950,7 @@ async function settingsDialog() {
   const sel = (id, val, label, opts) => `<label class="setting"><span>${label}</span><select data-set="${id}">${opts.map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
   const d = openDialog(`<h2>settings<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">
     ${sel('theme', themeChoice(), 'Theme', [['dark', 'dark'], ['light', 'light'], ['system', 'follow the system']])}
+    ${sel('density', densityChoice(), 'Density', [['comfortable', 'comfortable'], ['compact', 'compact - tighter spacing, more on screen']])}
     ${(() => { const f = fontChoice(); const known = FONT_PRESETS.some(([k]) => k === f.family); return `<label class="setting"><span>Text font <span class="help">any font installed on this computer; the system monospace is used if it is missing</span></span><select data-set="font">${FONT_PRESETS.map(([k, l]) => `<option value="${esc(k)}"${k === f.family ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="__custom"${known ? '' : ' selected'}>other…</option></select></label>
     <label class="setting" id="font-custom"${known ? ' hidden' : ''}><span>Font name <span class="help">exactly as it is installed, for example "Victor Mono"</span></span><input type="text" data-set="font_custom" value="${esc(known ? '' : f.family)}" placeholder="font family"></label>
     <label class="setting"><span>Text size</span><select data-set="font_size">${FONT_SIZES.map((n) => `<option value="${n}"${n === f.size ? ' selected' : ''}>${n} px</option>`).join('')}</select></label>
@@ -1944,6 +1975,7 @@ async function settingsDialog() {
     const k = el.dataset.set;
     try {
       if (k === 'theme') { setTheme(el.value); toast('theme: ' + el.value, 'ok'); return; }
+      if (k === 'density') { setDensity(el.value); toast('density: ' + el.value, 'ok'); return; }
       if (k === 'font') { const custom = el.value === '__custom'; $('#font-custom', d).hidden = !custom; if (custom) { $('[data-set="font_custom"]', d).focus(); return; } setFont(el.value, null); toast('font: ' + (el.value || 'system monospace'), 'ok'); return; }
       if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
       if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
@@ -2481,6 +2513,7 @@ const SHORTCUTS = [
   { id: 'open', group: 'sessions', combo: 'Enter', label: 'focus the current session on the wall', scope: 'plain', when: () => state.view === 'wall' && !state.focus && !!state.sid, run: () => focusPane(state.sid) },
   { id: 'view', group: 'sessions', combo: 'v', label: 'pane view: chat ↔ terminal (grid panes also: shell → preview)', scope: 'plain', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
   { id: 'pin', group: 'sessions', combo: 'p', label: 'pin the focused session to this window', scope: 'plain', when: () => !!state.focus, run: () => togglePin(state.focus) },
+  { id: 'voice', group: 'sessions', combo: 'mod+shift+m', label: 'voice input into the composer (start / stop)', scope: 'app', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { focusComposer(); const f = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.composer') : null; const form = f || $('.pane.focused .composer') || $('.composer'); if (form && form._comp) toggleVoice(form._comp); } },
   { id: 'slash', group: 'sessions', combo: '/', label: 'slash commands (/model, /trust, …)', scope: 'plain', when: () => state.view !== 'wall' || !!state.focus, run: () => { focusComposer(); const ta = document.activeElement; if (ta && ta.tagName === 'TEXTAREA') { ta.value = '/'; ta.dispatchEvent(new Event('input')); } } },
   { id: 'send', group: 'sessions', keys: '↩', label: 'send', scope: 'composer' },
   { id: 'newline', group: 'sessions', keys: '⇧↩', label: 'newline', scope: 'composer' },

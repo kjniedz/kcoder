@@ -19,7 +19,7 @@ here so any session can pick up where the last one stopped.
 | 14 | **Search across transcripts** with filters (repo, date, free text). | done (`kcoder/search.py`: AND terms, phrases, repo:/since:/until:/date:/who:; search dialog with filter chips, hits jump to the message; sidebar quick results; `kcoder search` flags) |
 | 16 | **Keyboard-only inbox**: next waiting item, approve, next. | done (one waiting list of approvals, questions, reviews, errors; `w` next item, `y` / `⇧N` answer and advance; inbox: j/k, y/n, ↩ open, a all) |
 | 17 | **Export a session as a shareable HTML page**. | done (`chatlog.export_html`: single file, inline styles, vendored marked.js, tool calls and results folded, commits, secrets masked; export chooser on the pane, `kcoder export --html`) |
-| 11 | **Voice input** on the phone approval page and the composer. | next |
-| 15 | **Light-theme pass and a compact density setting**. | |
+| 11 | **Voice input** on the phone approval page and the composer. | done (composer microphone + ⌘⇧M via the Web Speech API; phone page "say yes or no" answers the request; relay redeploy needed for the phone part) |
+| 15 | **Light-theme pass and a compact density setting**. | done (light theme checked, only the preview frame keeps a fixed white; Settings → Density comfortable / compact, `html[data-density]` overrides) |
 
 Dropped from the list: 4 (per-session budgets), 6 (plan-then-fan-out).
