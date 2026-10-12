@@ -688,6 +688,7 @@ class ClaudeCodeBackend:
         streaming = False
         got_result = False
         pending_tools: dict[str, str] = {}
+        prog_in = prog_out = 0      # running token totals for the live status line
 
         def flush_assistant():
             nonlocal blocks
@@ -757,6 +758,11 @@ class ClaudeCodeBackend:
                         if emit:
                             emit("assistant_end", text=text)
                 elif t == "assistant":
+                    mu = (d.get("message") or {}).get("usage") or {}
+                    if mu and hasattr(hooks, "progress"):
+                        prog_in += int(mu.get("input_tokens") or 0) + int(mu.get("cache_read_input_tokens") or 0) + int(mu.get("cache_creation_input_tokens") or 0)
+                        prog_out += int(mu.get("output_tokens") or 0)
+                        hooks.progress(prog_in, prog_out)
                     for b in (d.get("message") or {}).get("content") or []:
                         bt = b.get("type")
                         if bt == "text":

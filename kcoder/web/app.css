@@ -270,6 +270,19 @@ a { color: var(--accent-text); }
 .diff .add { background: rgba(74,222,128,.16); color: var(--green); }
 .diff .ctx { color: var(--fg-dim); }
 .note { color: var(--fg-dim); font-size: 11.5px; margin: 4px 0 8px; }
+/* live status line while a turn runs: spinner · verb · elapsed · tokens · phase · context · hint */
+.statusline { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; max-width: 100%; }
+.statusline .spin { color: var(--accent); display: inline-block; animation: spin 1.1s linear infinite; }
+.statusline.plain .spin { animation: none; color: var(--yellow); }
+.statusline .verb { color: var(--fg); }
+.statusline.plain .verb { color: var(--yellow); }
+.statusline .sep { color: var(--line-2); }
+.statusline .ctx.hot { color: var(--accent-text); font-weight: 600; }
+.statusline .hint { color: var(--fg-mute); }
+.statusline.mini { gap: 4px; font-size: 10px; text-transform: none; letter-spacing: 0; }
+.statusline.mini .verb { color: var(--running); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .statusline .spin { animation: none; } }
 .note.err { color: var(--red); }
 .note.warn { color: var(--yellow); }
 .note.usage { color: var(--fg-mute); }

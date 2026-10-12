@@ -494,6 +494,16 @@ something coming out.
   cycle through the shell and the live preview). The layout is remembered
   across restarts. Broadcast (`⇶` next to the picker, shown with 2 or 3
   panes) sends one prompt to every open pane, handy for comparing models.
+- **A live status line while a turn runs**: `◐ Woobling… 4m 12s · ↑ 384k in ·
+  ↓ 4.8k out · thinking 12s · ctx 40% · esc to interrupt`, with a playful
+  verb that rotates every few seconds (a "long haul" set after ten minutes),
+  the turn's elapsed time and token counts ticking live, the current phase
+  (thinking, running Bash, writing, compacting), and context usage that turns
+  accent-coloured past 80%. Compacting, retries and approvals use plain
+  wording instead of a verb; the spinner is static under reduced motion. The
+  sidebar shows a compact version for each running session. The verb lists
+  are `WORK_VERBS` and `LONG_HAUL_VERBS` at the top of the indicator code in
+  `kcoder/web/app.js`.
 - **Tool calls stay out of the way**: three or more consecutive tool calls
   fold into one row ("▸ 15 tool calls (reading files)") that expands on
   click, opens itself while a command is still running, and flags failures.

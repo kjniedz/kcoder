@@ -39,6 +39,7 @@ const state = {
   events: new Map(),       // sid -> { list: [], live: '' , loaded: bool }
   view: (localStorage.getItem('kcoder.view') || 'wall').replace('terminal', 'chat'),
   cpaneView: new Map(),    // sid -> 'chat' | 'term' (split panes; wall panes use paneView)
+  verbs: new Map(),        // sid -> { verb, at, recent } for the working status line
   sid: localStorage.getItem('kcoder.sid') || null,     // current chat (chat/terminal views)
   focus: null,             // focused pane sid (wall)
   paneView: new Map(),     // sid -> 'chat' | 'term' | 'shell'
@@ -267,6 +268,8 @@ function onEvent(sid, ev) {
   let store = state.events.get(sid);
   if (!store) { store = { list: [], live: '', streaming: false, loaded: false, partial: true }; state.events.set(sid, store); }
   if (ev.t === 'text') { store.live += ev.delta; store.streaming = true; queueRender(sid); return; }
+  if (ev.t === 'progress') { store.turn = { input: ev.input, output: ev.output }; return; }
+  if (ev.t === 'turn_start') store.turn = { input: 0, output: 0 };
   if (ev.t === 'tool_output') { store.toolLive = store.toolLive || {}; store.toolLive[ev.id] = ((store.toolLive[ev.id] || '') + ev.delta).slice(-12000); queueRender(sid); return; }
   if (ev.t === 'tool_result' && store.toolLive) delete store.toolLive[ev.id];
   if (ev.t === 'assistant_start') { store.live = ''; store.streaming = true; }
@@ -292,6 +295,7 @@ function queueRender(sid) {
     state._raf = null;
     const sids = Array.from(state.renderQueued); state.renderQueued.clear();
     for (const s of sids) renderSession(s);
+    tickStatusLines();
   });
 }
 
@@ -302,7 +306,7 @@ function renderSession(sid) {
   if (state.sid === sid && state.view === 'terminal') renderTermLog();
 }
 
-function renderAll() { renderHeader(); renderViews(); renderWall(); renderSidebar(); renderTitlebars(); renderSplit(); renderTermLog(); if (state.view === 'stats') renderStatsView(); }
+function renderAll() { renderHeader(); renderViews(); renderWall(); renderSidebar(); renderTitlebars(); renderSplit(); renderTermLog(); if (state.view === 'stats') renderStatsView(); tickStatusLines(); }
 
 // ----------------------------------------------------------------------
 // markdown, diffs, sanitising
@@ -440,10 +444,83 @@ function buildChatHtml(store, sid, opts = {}) {
   if (!opts.noTail) out.push(trailerHtml(store, sid));
   return out.join('');
 }
+// ---- the working indicator: a live status line with a playful verb ----
+// Edit these lists freely. Verbs rotate every few seconds, never repeating one of the last five;
+// past LONG_HAUL_AFTER the long-haul set takes over. Compacting, retries and approvals use plain wording.
+const WORK_VERBS = ['Wibbling', 'Woobling', 'Noodling', 'Percolating', 'Bamboozling', 'Fiddling', 'Tinkering', 'Schlepping', 'Puttering', 'Boondoggling',
+  'Mining', 'Kickflipping', 'Carving', 'Shredding', 'Hodling', 'Bootstrapping', 'Doodling', 'Brewing', 'Summiting', 'Acclimatizing', 'Traversing',
+  'Sending it', 'Waiting for the lift', 'Sherpaing', 'Grinding', 'Hashing it out', 'Underwriting', 'Rebalancing', 'Compounding'];
+const LONG_HAUL_VERBS = ['Still summiting', 'Above the treeline', 'Are we there yet?', 'Hodling through it', 'Not selling', 'Just one more', 'Second to last lap'];
+const VERB_EVERY_MS = 4000, LONG_HAUL_AFTER_MS = 10 * 60 * 1000;
+function pickVerb(sid, elapsedMs) {
+  const v = state.verbs.get(sid) || { verb: '', at: 0, recent: [] };
+  const pool = elapsedMs >= LONG_HAUL_AFTER_MS ? LONG_HAUL_VERBS : WORK_VERBS;
+  const now = Date.now();
+  if (!v.verb || now - v.at >= VERB_EVERY_MS || !pool.includes(v.verb)) {
+    const cands = pool.filter((x) => !v.recent.includes(x));
+    const from = cands.length ? cands : pool;
+    v.verb = from[Math.floor(Math.random() * from.length)]; v.at = now; v.recent = [v.verb, ...v.recent].slice(0, 5);
+  }
+  state.verbs.set(sid, v);
+  return v.verb;
+}
+function fmtElapsed(ms) { const s = Math.max(0, Math.floor(ms / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60; return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m ${String(r).padStart(2, '0')}s` : `${r}s`; }
+const TOOL_SHORT = { run_bash: 'Bash', read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List' };
+function turnInfo(sid) {
+  const store = state.events.get(sid); const sess = state.sessions.get(sid);
+  if (!store || !sess) return null;
+  const list = store.list; let i = list.length - 1;
+  while (i >= 0 && list[i].t !== 'turn_start') i--;
+  const start = i >= 0 ? list[i].ts : (sess.last_activity || Date.now() / 1000);
+  let phase = 'thinking', since = start, tool = null, retry = null; const open = new Map();
+  for (let k = Math.max(i, 0); k < list.length; k++) {
+    const e = list[k];
+    switch (e.t) {
+      case 'tool_call': open.set(e.id, e); phase = 'tool'; tool = e; since = e.ts; break;
+      case 'tool_result': open.delete(e.id); tool = open.size ? Array.from(open.values()).pop() : null; phase = tool ? 'tool' : 'thinking'; since = e.ts; break;
+      case 'assistant_start': phase = 'writing'; since = e.ts; break;
+      case 'assistant_end': case 'approval_result': case 'compaction': phase = 'thinking'; since = e.ts; break;
+      case 'compaction_start': phase = 'compacting'; since = e.ts; break;
+      case 'retry': phase = 'retry'; retry = e; since = e.ts; break;
+    }
+  }
+  if (store.streaming || store.live) phase = 'writing';
+  if (sess.pending_approval) phase = 'approval';
+  const t = store.turn || {};
+  return { start, phase, since, tool, retry, inTok: t.input || 0, outTok: t.output || 0, ctx: sess.context_tokens || 0, cap: sess.compact_at || 150000 };
+}
+function statusLineHtml(sid, mini) {
+  return `<span class="statusline${mini ? ' mini' : ''}" data-sid="${sid}"><span class="spin">◐</span><span class="verb"></span><span class="elapsed"></span>` +
+    (mini ? '' : `<span class="sep">·</span><span class="tok"></span><span class="sep">·</span><span class="phase"></span><span class="sep">·</span><span class="ctx"></span><span class="sep">·</span><span class="hint">esc to interrupt</span>`) + '</span>';
+}
+function fillStatusLine(el) {
+  const sid = el.dataset.sid; const info = turnInfo(sid); if (!info) return;
+  const now = Date.now() / 1000; const elapsedMs = (now - info.start) * 1000;
+  const sinceS = Math.max(0, now - info.since);
+  const plain = info.phase === 'compacting' ? 'Compacting context' : info.phase === 'approval' ? 'Waiting for your approval'
+    : info.phase === 'retry' ? (info.retry && sinceS < (info.retry.delay || 0) ? `Retrying in ${Math.ceil(info.retry.delay - sinceS)}s (${info.retry.attempt}/${info.retry.max})` : 'Retrying') : '';
+  el.classList.toggle('plain', !!plain);
+  if (el.classList.contains('mini')) {   // sidebar: spinner, verb (or a short plain word), compact elapsed
+    $('.verb', el).textContent = plain ? { compacting: 'compacting', approval: 'needs approval', retry: 'retrying' }[info.phase] : pickVerb(sid, elapsedMs) + '…';
+    $('.elapsed', el).textContent = elapsedMs >= 60000 ? fmtElapsed(elapsedMs).replace(/ \d+s$/, '') : fmtElapsed(elapsedMs);
+    return;
+  }
+  $('.verb', el).textContent = plain || pickVerb(sid, elapsedMs) + '…';
+  $('.elapsed', el).textContent = fmtElapsed(elapsedMs);
+  $('.tok', el).textContent = `↑ ${fmtTokens(info.inTok)} in · ↓ ${fmtTokens(info.outTok)} out`;
+  const name = info.tool ? (TOOL_SHORT[info.tool.name] || info.tool.name || 'tool') : '';
+  $('.phase', el).textContent = info.phase === 'thinking' ? `thinking ${fmtElapsed(sinceS * 1000)}` : info.phase === 'tool' ? `running ${name}${sinceS >= 2 ? ' ' + fmtElapsed(sinceS * 1000) : ''}`
+    : info.phase === 'writing' ? 'writing' : info.phase === 'compacting' ? 'compacting' : info.phase === 'retry' ? (info.retry ? esc(info.retry.reason || 'retrying') : 'retrying') : 'paused for approval';
+  const pct = info.cap ? Math.round(info.ctx / info.cap * 100) : 0;
+  const cx = $('.ctx', el); cx.textContent = `ctx ${pct}%`; cx.title = `${fmtTokens(info.ctx)} of ${fmtTokens(info.cap)} tokens before the context is compacted`; cx.classList.toggle('hot', pct >= 80);
+}
+function tickStatusLines() { for (const el of $$('.statusline')) { const s = state.sessions.get(el.dataset.sid); if (s && s.status === 'working') fillStatusLine(el); } }
+setInterval(tickStatusLines, 1000);
+
 function trailerHtml(store, sid) {
-  if (store.streaming || store.live) return `<div class="msg msg-assistant streaming"><div class="who">kcoder&gt;</div><div class="md">${store.live ? renderMarkdown(store.live) : ''}</div></div>`;
   const sess = state.sessions.get(sid);
-  if (sess && sess.status === 'working') return `<div class="note working"><span class="t-spinner">◐</span> working…</div>`;
+  if (store.streaming || store.live) return `<div class="msg msg-assistant streaming"><div class="who">kcoder&gt;</div><div class="md">${store.live ? renderMarkdown(store.live) : ''}</div></div>` + (sess && sess.status === 'working' ? `<div class="note working">${statusLineHtml(sid)}</div>` : '');
+  if (sess && sess.status === 'working') return `<div class="note working">${statusLineHtml(sid)}</div>`;
   if (sess && sess.status === 'paused') return `<div class="note paused"><b>paused</b> - kcoderd restarted during this turn; nothing was re-run. <button class="primary" data-act="resume">resume</button> <button data-act="dismiss">dismiss</button></div>`;
   return '';
 }
@@ -491,7 +568,7 @@ function buildTermHtml(store, sid, opts = {}) {
     }
   }
   if (store.streaming || store.live) out.push(`<span class="t-k">kcoder&gt;</span>\n${esc(store.live)}<span class="cursor">▍</span>\n`);
-  else if (sess && sess.status === 'working') out.push(`<span class="t-spinner">⠋</span> <span class="t-dim">working…</span>\n`);
+  if (sess && sess.status === 'working') out.push(statusLineHtml(sid) + '\n');
   return out.join('');
 }
 
@@ -1036,7 +1113,7 @@ function chatItemHtml(c) {
   const st = c.archived ? 'archived' : (live ? live.status : c.status);
   const label = st === 'working' ? 'running' : st === 'waiting' ? (live && live.pending_approval ? 'needs approval' : 'needs you') : st === 'error' ? 'error' : st === 'idle' && live ? 'idle' : '';
   const inPane = state.layout.panes.indexOf(c.id);
-  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span></div>`;
+  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${st === 'working' ? `<span class="badge working">${statusLineHtml(c.id, true)}</span>` : label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span></div>`;
 }
 $('#projects').addEventListener('dragstart', (e) => { const item = e.target.closest('.chat-item[data-sid]'); if (!item) return; state.dragChat = item.dataset.sid; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', item.dataset.sid); });
 $('#projects').addEventListener('dragend', () => { state.dragChat = null; for (const p of $$('.cpane')) p.classList.remove('drop'); });

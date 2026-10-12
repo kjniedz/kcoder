@@ -116,6 +116,7 @@ class Session:
         m["pending_approval"] = self.engine.pending_approval()
         m["seq"] = self.seq
         m["context_tokens"] = self.engine.last_input_tokens
+        m["compact_at"] = self.engine.compact_at
         m["messages"] = len(self.engine.messages)
         m["archived"] = False
         m["queue"] = list(self.meta.get("queue") or [])

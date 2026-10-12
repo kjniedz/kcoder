@@ -219,6 +219,9 @@ class Engine:
         self._interrupt = threading.Event()
         self._pending: _Approval | None = None
         self._turn_started = 0.0
+        self.turn_in = 0               # tokens so far in the current turn (for the live status line)
+        self.turn_out = 0
+        self._turn_progress = False    # a backend reports cumulative progress itself (Claude Code)
         self.last_input_tokens = 0
         self._proc = None              # running subprocess (run_bash, or the claude CLI), if any
         self.on_proc = None            # callback(proc | None), e.g. so the daemon can note the pid
@@ -370,6 +373,8 @@ class Engine:
 
     def _run_turn(self, content) -> None:
         self._turn_started = time.monotonic()
+        self.turn_in = self.turn_out = 0
+        self._turn_progress = False
         try:
             self._maybe_compact()
         except Interrupted:
@@ -622,7 +627,19 @@ class Engine:
         )
         if cost is not None:
             fields["cost"] = round(float(cost), 6)
+        if not self._turn_progress:
+            self.turn_in += fields["input"]
+            self.turn_out += fields["output"]
+            self.emit("progress", input=self.turn_in, output=self.turn_out)
         self.emit("usage", **fields)
+
+    def progress(self, input_tokens: int, output_tokens: int) -> None:
+        """Cumulative token counts for the current turn, from a backend that
+        sees them before the final usage (Claude Code's per-message usage).
+        Not persisted; it only feeds the live status line."""
+        self._turn_progress = True
+        self.turn_in, self.turn_out = int(input_tokens or 0), int(output_tokens or 0)
+        self.emit("progress", input=self.turn_in, output=self.turn_out)
 
     def handle_tool_call(self, name: str, tool_input: dict, call_id: str | None = None):
         """Returns (result_content, is_error)."""
