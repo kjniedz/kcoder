@@ -61,7 +61,8 @@ const state = {
   layout: JSON.parse(localStorage.getItem('kcoder.layout') || 'null') || { panes: [localStorage.getItem('kcoder.sid') || null], focus: 0, zoom: null },
   broadcast: localStorage.getItem('kcoder.broadcast') === 'on',
   dragChat: null,          // chat being dragged from the sidebar onto a pane
-  statsDays: Number(localStorage.getItem('kcoder.statsDays') || 30),
+  statsDays: Number(localStorage.getItem('kcoder.statsDays') || 30),   // 1 = today, 0 = all time
+  statsDate: null,            // a single day picked in the stats view (YYYY-MM-DD)
   statsMetric: null,
   statsSort: { key: 'date', dir: -1 },
 };
@@ -2696,17 +2697,20 @@ const verbCountsThisMonth = () => { try { return (JSON.parse(localStorage.getIte
 async function renderStatsView(force) {
   if (state.view !== 'stats') return;
   const box = $('#stats-body');
-  if (force || !statsData || statsData.days !== state.statsDays) {
+  if (force || !statsData || statsData.days !== state.statsDays || (statsData.date || null) !== (state.statsDate || null)) {
     if (!statsData) box.innerHTML = '<div class="empty"><p>loading stats…</p></div>';
-    try { statsData = await request('stats_full', { days: state.statsDays }); } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
+    try { statsData = await request('stats_full', { days: state.statsDays, date: state.statsDate || null }); } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
     if (state.view !== 'stats') return;
   }
   const d = statsData; const S = d.summary; const m = state.statsMetric;
-  const metricCard = (key, title, pick, fmt, foot) => `<div class="card${m === key ? ' hl' : ''}"><h3>${title}</h3><div class="big">${fmt(pick(S.today))}</div><div class="row"><span>7-day avg</span><b>${fmt(pick(S.avg7))}</b></div><div class="row"><span>30-day avg</span><b>${fmt(pick(S.avg30))}</b></div><div class="row"><span>all time${S.first_date ? ' (since ' + fmtDate(S.first_date) + ')' : ''}</span><b>${fmt(pick(S.all))}</b></div>${foot || ''}</div>`;
+  // the period every number on the page is for: a day, today, the last N days, or all time
+  const P = d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days} days`;
+  const PW = S.window || S.today, isDay = !!d.date || d.days === 1;
+  const metricCard = (key, title, pick, fmt, foot) => `<div class="card${m === key ? ' hl' : ''}"><h3>${title} <span class="dim">· ${P}</span></h3><div class="big">${fmt(pick(PW))}</div>${isDay ? '' : `<div class="row"><span>per day (${P})</span><b>${fmt(pick(S.window_avg || PW))}</b></div>`}${d.days === 1 ? '' : `<div class="row"><span>today</span><b>${fmt(pick(S.today))}</b></div>`}<div class="row"><span>7-day avg</span><b>${fmt(pick(S.avg7))}</b></div><div class="row"><span>30-day avg</span><b>${fmt(pick(S.avg30))}</b></div>${d.days === 0 ? '' : `<div class="row"><span>all time${S.first_date ? ' (since ' + fmtDate(S.first_date) + ')' : ''}</span><b>${fmt(pick(S.all))}</b></div>`}${foot || ''}</div>`;
   const linesFmt = (r) => `<span class="ok">+${fmtCompact(r.insertions)}</span> <span class="warn">-${fmtCompact(r.deletions)}</span> <span class="dim">net ${fmtSigned(r.net)}</span>`;
   const summary = [
     metricCard('tokens', 'tokens', (r) => r.total, fmtTokens),
-    metricCard('lines', 'lines of code', (r) => r, linesFmt, `<div class="row"><span>files changed today · all time</span><b>${fmtInt(S.today.files)} · ${fmtInt(S.all.files)}</b></div>`).replace('<div class="card', '<div class="card wide'),
+    metricCard('lines', 'lines of code', (r) => r, linesFmt, `<div class="row"><span>files changed (${P}) · all time</span><b>${fmtInt(PW.files)} · ${fmtInt(S.all.files)}</b></div>`).replace('<div class="card', '<div class="card wide'),
     metricCard('commits', 'commits', (r) => r.commits, fmtNum),
     metricCard('sessions', 'sessions', (r) => r.sessions, fmtNum),
     metricCard('active', 'active agent time', (r) => r.active_seconds, fmtDur),
@@ -2732,7 +2736,7 @@ async function renderStatsView(force) {
   const top = sortableTable('top', [{ k: 'name', label: 'session', f: (r) => `<span class="ell" title="${esc((r.name || r.key) + (r.title ? ' · ' + r.title : ''))}">${esc(r.name || r.key)}${r.title && r.title !== r.name ? ' <span class="dim">· ' + esc(r.title) + '</span>' : ''}</span>${r.archived ? ' <span class="badge archived">archived</span>' : ''}`, cls: 'l name', sort: (r) => r.name || r.key }, { k: 'model', label: 'model', f: (r) => esc(r.model || ''), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'turns', label: 'turns', f: (r) => fmtInt(r.turns) }, { k: 'active_seconds', label: 'active', f: (r) => fmtDur(r.active_seconds) }, { k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'net', label: 'lines', f: (r) => (r.commits ? `${plus(r.insertions)} ${minus(r.deletions)}` : '<span class="dim">-</span>') }, costCol], d.top_sessions, { sort: { key: 'total', dir: -1 }, fixed: true, row: (r) => ` class="click" data-open="${esc(r.key)}" title="open in the focused pane"`, empty: 'no usage in this range' });
   // cache split
   const c = d.cache; const ci = Math.max(1, c.input);
-  const cacheCard = `<div class="card"><h3>input tokens · ${d.days} days</h3><div class="stack"><i class="fresh" style="width:${c.fresh / ci * 100}%" title="fresh input"></i><i class="cread" style="width:${c.cache_read / ci * 100}%" title="cache reads"></i><i class="cwrite" style="width:${c.cache_write / ci * 100}%" title="cache writes"></i></div>
+  const cacheCard = `<div class="card"><h3>input tokens · ${P}</h3><div class="stack"><i class="fresh" style="width:${c.fresh / ci * 100}%" title="fresh input"></i><i class="cread" style="width:${c.cache_read / ci * 100}%" title="cache reads"></i><i class="cwrite" style="width:${c.cache_write / ci * 100}%" title="cache writes"></i></div>
     <div class="row"><span><i class="sw fresh"></i> fresh input</span><b>${fmtTokens(c.fresh)}</b></div><div class="row"><span><i class="sw cread"></i> cache reads</span><b>${fmtTokens(c.cache_read)}</b></div><div class="row"><span><i class="sw cwrite"></i> cache writes</span><b>${fmtTokens(c.cache_write)}</b></div>
     <div class="row"><span>cache hit rate</span><b>${fmtPct(c.hit_rate)}</b></div><div class="row"><span>API equivalent <span class="dim">(estimate)</span></span><b>${fmtUsd(c.api_equivalent)}</b></div>${c.cost ? `<div class="row"><span>actually billed (API keys)</span><b>${fmtUsd(c.cost)}</b></div>` : ''}</div>`;
   // activity calendar
@@ -2741,22 +2745,22 @@ async function renderStatsView(force) {
   const q = (p) => vals[Math.min(vals.length - 1, Math.floor(vals.length * p))] || 0;
   const level = (v) => (!v ? 0 : v <= q(0.25) ? 1 : v <= q(0.5) ? 2 : v <= q(0.75) ? 3 : 4);
   const first = new Date(cal[0].date + 'T00:00:00'); const offset = (first.getDay() + 6) % 7;
-  const cells = cal.map((r, i) => { const n = i + offset; const x = Math.floor(n / 7) * 13, y = (n % 7) * 13; return `<rect class="c l${level(r[key])}" x="${x}" y="${y}" width="11" height="11" rx="2"><title>${fmtDate(r.date)}: ${key === 'tokens' ? fmtInt(r.tokens) + ' tokens' : fmtInt(r.lines) + ' lines'} · ${r.commits} commit${r.commits === 1 ? '' : 's'}</title></rect>`; }).join('');
+  const cells = cal.map((r, i) => { const n = i + offset; const x = Math.floor(n / 7) * 13, y = (n % 7) * 13; return `<rect class="c l${level(r[key])}" data-day="${r.date}" x="${x}" y="${y}" width="11" height="11" rx="2"><title>${fmtDate(r.date)}: ${key === 'tokens' ? fmtInt(r.tokens) + ' tokens' : fmtInt(r.lines) + ' lines'} · ${r.commits} commit${r.commits === 1 ? '' : 's'}</title></rect>`; }).join('');
   const months = []; let lastM = -1; cal.forEach((r, i) => { const dt = new Date(r.date + 'T00:00:00'); if (dt.getMonth() !== lastM) { lastM = dt.getMonth(); if (i > 6) months.push(`<text x="${Math.floor((i + offset) / 7) * 13}" y="-3">${dt.toLocaleDateString(undefined, { month: 'short' })}</text>`); } });
   const weeks = Math.ceil((cal.length + offset) / 7);
   const calendar = `<div class="card"><h3>activity · last year <span class="seg sm" id="cal-toggle"><button data-cal="tokens" class="${key === 'tokens' ? 'active' : ''}">tokens</button><button data-cal="lines" class="${key === 'lines' ? 'active' : ''}">lines</button></span><span class="spacer"></span><span class="dim">current streak <b>${d.streaks.current}</b> day${d.streaks.current === 1 ? '' : 's'} · longest <b>${d.streaks.longest}</b> · active days <b>${d.streaks.active_days}</b></span></h3>
     <div class="cal-wrap"><svg class="cal" viewBox="-2 -14 ${weeks * 13 + 2} ${7 * 13 + 14}" width="${weeks * 13 + 2}" height="${7 * 13 + 14}">${months.join('')}${cells}</svg></div></div>`;
   // hour of day / day of week
   const hm = Math.max(1, ...d.hours.flat()); const dows = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const hours = `<div class="card"><h3>when sessions run · ${d.days} days <span class="dim">(active agent time by local hour)</span></h3><div class="hours"><div class="hrow head"><span></span>${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? h : ''}</span>`).join('')}</div>${d.hours.map((row, i) => `<div class="hrow"><span>${dows[i]}</span>${row.map((v, h) => `<i style="opacity:${v ? 0.15 + 0.85 * v / hm : 0}" title="${dows[i]} ${h}:00 · ${fmtDur(v)}"></i>`).join('')}</div>`).join('')}</div></div>`;
+  const hours = `<div class="card"><h3>when sessions run · ${P} <span class="dim">(active agent time by local hour)</span></h3><div class="hours"><div class="hrow head"><span></span>${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? h : ''}</span>`).join('')}</div>${d.hours.map((row, i) => `<div class="hrow"><span>${dows[i]}</span>${row.map((v, h) => `<i style="opacity:${v ? 0.15 + 0.85 * v / hm : 0}" title="${dows[i]} ${h}:00 · ${fmtDur(v)}"></i>`).join('')}</div>`).join('')}</div></div>`;
   // parallelism, waiting, health, records, verbs
-  const P = d.parallel, Wt = d.waiting, Hh = d.health, R = d.records;
+  const PA = d.parallel, Wt = d.waiting, Hh = d.health, R = d.records;
   const small = (title, rows) => `<div class="card"><h3>${title}</h3>${rows.map(([k, v, hint]) => `<div class="row"${hint ? ` title="${esc(hint)}"` : ''}><span>${k}</span><b>${v}</b></div>`).join('')}</div>`;
-  const parallel = small(`parallelism · ${d.days} days`, [['agent-hours', `${P.agent_hours}h`, 'sum of every session\'s active time'], ['peak concurrent sessions', fmtInt(P.max_peak)], ['avg daily peak', P.avg_peak], ['avg concurrency while busy', P.avg_concurrency, 'active session-seconds divided by wall-clock seconds with at least one session running']]);
-  const waiting = small(`time waiting on you · ${d.days} days`, [['total', fmtDur(Wt.total_seconds)], ['median wait', fmtDur(Wt.median_seconds)], ['times a session waited', fmtInt(Wt.count), 'approvals and questions; waits over a day are not counted']]);
-  const health = small(`session health · ${d.days} days`, [['interrupts (esc)', fmtInt(Hh.interrupts)], ['undos', fmtInt(Hh.undos)], ['compactions', fmtInt(Hh.compactions)], ['sessions ended with no commit', `${fmtInt(Hh.sessions_no_commit)} <span class="dim">of ${fmtInt(Hh.sessions_with_turns)}</span>`]]);
+  const parallel = small(`parallelism · ${P}`, [['agent-hours', `${PA.agent_hours}h`, 'sum of every session\'s active time'], ['peak concurrent sessions', fmtInt(PA.max_peak)], ['avg daily peak', PA.avg_peak], ['avg concurrency while busy', PA.avg_concurrency, 'active session-seconds divided by wall-clock seconds with at least one session running']]);
+  const waiting = small(`time waiting on you · ${P}`, [['total', fmtDur(Wt.total_seconds)], ['median wait', fmtDur(Wt.median_seconds)], ['times a session waited', fmtInt(Wt.count), 'approvals and questions; waits over a day are not counted']]);
+  const health = small(`session health · ${P}`, [['interrupts (esc)', fmtInt(Hh.interrupts)], ['undos', fmtInt(Hh.undos)], ['compactions', fmtInt(Hh.compactions)], ['sessions ended with no commit', `${fmtInt(Hh.sessions_no_commit)} <span class="dim">of ${fmtInt(Hh.sessions_with_turns)}</span>`]]);
   const rec = (label, v) => `<div class="row stack"><span>${label}</span><b>${v || '<span class="dim">-</span>'}</b></div>`;
-  const records = `<div class="card"><h3>records · ${d.days} days</h3>` +
+  const records = `<div class="card"><h3>records · ${P}</h3>` +
     rec('biggest commit', R.biggest_commit && `${R.biggest_commit.url ? `<a href="${esc(R.biggest_commit.url)}" target="_blank" rel="noopener">${R.biggest_commit.sha.slice(0, 7)} ↗</a>` : R.biggest_commit.sha.slice(0, 7)} · ${fmtInt(R.biggest_commit.lines)} lines <span class="dim">· ${esc(R.biggest_commit.project || '')} · ${fmtDate(R.biggest_commit.date)}</span>`) +
     rec('longest turn', R.longest_turn && `${fmtDur(R.longest_turn.seconds)} <span class="dim">· <a href="#" data-open-session="${esc(R.longest_turn.sid)}">${esc(R.longest_turn.name || R.longest_turn.sid)}</a> · ${fmtDate(R.longest_turn.date)}</span>`) +
     rec('most tokens in a day', R.most_tokens_day && `${fmtTokens(R.most_tokens_day.tokens)} <span class="dim">· ${fmtDate(R.most_tokens_day.date)}</span>`) +
@@ -2779,31 +2783,36 @@ async function renderStatsView(force) {
   ], d.commits, { sort: { key: 'ts', dir: -1 }, tall: true, fixed: true, row: (c) => ` data-sha="${esc(c.sha)}"`, empty: 'no commits from sessions in this range' });
   box.innerHTML = `
     <div class="stats-head"><h2>stats</h2>
-      <div class="seg" id="stats-range">${[7, 30, 90].map((n) => `<button data-days="${n}" class="${state.statsDays === n ? 'active' : ''}">${n} days</button>`).join('')}</div>
+      <div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <label class="help day-pick" title="Show one day: pick it here, or click a day in the daily table or the calendar">or a day <input type="date" id="stats-day" max="${d.today}" value="${esc(state.statsDate || '')}"></label>
+      ${state.statsDate ? `<span class="chip day-chip">${fmtDate(state.statsDate)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
       <span class="help">today is ${fmtDate(d.today)} · days roll over at local midnight</span>
       <span class="spacer"></span>
       <button id="stats-csv" title="daily table as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
     </div>
     <div class="summary six">${summary}</div>
-    <div class="two"><div class="card${m === 'tokens' ? ' hl' : ''}"><h3>daily tokens · last ${d.days} days</h3>${tokChart}</div><div class="card${m === 'lines' ? ' hl' : ''}"><h3>daily lines of code · last ${d.days} days</h3>${linesChart}</div></div>
+    ${(d.window || {}).n === 1 ? '' : `<div class="two"><div class="card${m === 'tokens' ? ' hl' : ''}"><h3>daily tokens · ${P}</h3>${tokChart}</div><div class="card${m === 'lines' ? ' hl' : ''}"><h3>daily lines of code · ${P}</h3>${linesChart}</div></div>`}
     <div class="card"><h3>daily</h3><div id="stats-daily"></div></div>
-    <div class="card"><h3>by model · ${d.days} days <span class="dim">(aliases and full ids merged)</span></h3>${byModel}</div>
-    <div class="two"><div class="card"><h3>by provider · ${d.days} days</h3>${byProvider}</div>${cacheCard}</div>
-    <div class="card"><h3>by repo / project · ${d.days} days</h3>${byProject}</div>
-    <div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens · ${d.days} days</h3>${top}</div>
+    <div class="card"><h3>by model · ${P} <span class="dim">(aliases and full ids merged)</span></h3>${byModel}</div>
+    <div class="two"><div class="card"><h3>by provider · ${P}</h3>${byProvider}</div>${cacheCard}</div>
+    <div class="card"><h3>by repo / project · ${P}</h3>${byProject}</div>
+    <div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens · ${P}</h3>${top}</div>
     ${calendar}
     ${hours}
     <div class="summary four">${parallel}${waiting}${health}${records}</div>
-    <div class="two"><div class="card"><h3>tool usage · ${d.days} days</h3>${toolsT}</div>${fun}</div>
-    <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${d.days} days · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
+    <div class="two"><div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>${fun}</div>
+    <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${P} · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
   renderDailyTable();
-  $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
+  $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); state.statsDate = null; localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
+  $('#stats-day').addEventListener('change', (e) => { state.statsDate = e.target.value || null; renderStatsView(true); });
   $('#stats-csv').addEventListener('click', exportStatsCsv);
   $('#stats-refresh').addEventListener('click', () => renderStatsView(true));
   box.onclick = (e) => {
     const th = e.target.closest('th[data-sort]'); const tb = th && th.closest('[data-table]');
     if (th && tb) { const id = tb.dataset.table, k = th.dataset.sort; const cur = state.statsSorts[id]; state.statsSorts[id] = { key: k, dir: cur && cur.key === k ? -cur.dir : -1 }; localStorage.setItem('kcoder.statsSorts', JSON.stringify(state.statsSorts)); renderStatsView(false); return; }
     const cb = e.target.closest('[data-cal]'); if (cb) { state.statsCal = cb.dataset.cal; localStorage.setItem('kcoder.statsCal', state.statsCal); renderStatsView(false); return; }
+    if (e.target.closest('[data-clear-day]')) { state.statsDate = null; renderStatsView(true); return; }
+    const dd = e.target.closest('[data-day]'); if (dd && !e.target.closest('th')) { state.statsDate = dd.dataset.day; renderStatsView(true); return; }
     const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
     if (e.target.closest('a')) return;
     const tr = e.target.closest('tr[data-open]'); if (tr) { assignPane(state.layout.focus, tr.dataset.open); setView('chat'); return; }
@@ -2818,15 +2827,16 @@ const DAILY_COLS = [
 ];
 function renderDailyTable() {
   const el = $('#stats-daily'); if (!el || !statsData) return;
-  const rows = statsData.daily;
+  const w = statsData.window || {}; const rows = statsData.daily.filter((r) => (!w.start || r.date >= w.start) && (!w.end || r.date <= w.end));
   const tot = sumRows(rows); tot.date = `total · ${rows.length} day${rows.length === 1 ? '' : 's'}`;
   const metricCol = { tokens: 'total', commits: 'commits', sessions: 'sessions', active: 'active_seconds', lines: 'net', api: 'api_equivalent' }[state.statsMetric];
-  el.innerHTML = sortableTable('daily', DAILY_COLS, rows, { sort: { key: 'date', dir: -1 }, tall: true, hl: metricCol, empty: 'no history yet', total: rows.length ? { label: tot.date, row: tot } : null, row: (r) => (r.date === statsData.today ? ' class="today"' : '') });
+  el.innerHTML = sortableTable('daily', DAILY_COLS, rows, { sort: { key: 'date', dir: -1 }, tall: true, hl: metricCol, empty: 'nothing in this period', total: rows.length ? { label: tot.date, row: tot } : null, row: (r) => ` data-day="${r.date}" title="show ${fmtDate(r.date)}"` + (r.date === statsData.today ? ' class="today click"' : ' class="click"') });
 }
 function exportStatsCsv() {
   if (!statsData) return;
   const cols = ['date', 'input', 'fresh', 'cache_read', 'cache_write', 'output', 'total', 'calls', 'sessions', 'commits', 'insertions', 'deletions', 'net', 'files', 'active_seconds', 'cost', 'api_equivalent', 'pushed', 'unpushed'];
-  const csv = [cols.join(',')].concat(statsData.daily.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => cols.map((c) => r[c] ?? '').join(','))).join('\n');
+  const w = statsData.window || {}; const days = statsData.daily.filter((r) => (!w.start || r.date >= w.start) && (!w.end || r.date <= w.end));
+  const csv = [cols.join(',')].concat(days.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => cols.map((c) => r[c] ?? '').join(','))).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `kcoder-stats-${statsData.today}.csv`; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);

@@ -517,9 +517,11 @@ def _parallelism(windows: list) -> dict:
     return {"peak": peak, "avg": round(agent / busy, 2) if busy else 0.0, "agent_seconds": round(agent), "busy_seconds": round(busy)}
 
 
-def full(days: int = 30) -> dict:
-    """Everything the stats view shows."""
-    days = max(7, min(int(days or 30), 365))
+def full(days: int = 30, date: str | None = None) -> dict:
+    """Everything the stats view shows. `days`: 1 = today, 0 = all time,
+    else the last N days; `date` (YYYY-MM-DD) = that one day."""
+    days = max(0, min(int(days if days is not None else 30), 3650))
+    date = str(date)[:10] if date and re.match(r"^\d{4}-\d{2}-\d{2}$", str(date)) else None
     usage = usage_rows()
     commits = commits_with_state()
     metas = session_metas()
@@ -574,8 +576,15 @@ def full(days: int = 30) -> dict:
         row["active_seconds"] = round(row["active_seconds"])
 
     all_days = sorted(per_day.values(), key=lambda r: r["date"], reverse=True)
-    window = _dates_back(days)
-    series = [per_day.get(d) or day_row(d) for d in reversed(window)]
+    if date:
+        window = [date]
+    elif days == 0:
+        first = all_days[-1]["date"] if all_days else t
+        span = (dt.date.fromisoformat(t) - dt.date.fromisoformat(first)).days + 1
+        window = _dates_back(max(1, min(span, 3650)))
+    else:
+        window = _dates_back(days)
+    series = [per_day.get(d) or day_row(d) for d in reversed(window)][-365:]
 
     def agg(rows: list) -> dict:
         out = day_row("")
@@ -592,7 +601,10 @@ def full(days: int = 30) -> dict:
         return {k: (v / n if n else 0) for k, v in s.items() if k != "days"}
 
     d7, d30 = _dates_back(7), _dates_back(30)
+    window_totals = agg([per_day.get(d) or day_row(d) for d in window])
     summary = {
+        "window": window_totals,
+        "window_avg": {k: (v / len(window) if window else 0) for k, v in window_totals.items() if k != "days"},
         "today": agg([per_day.get(t) or day_row(t)]),
         "avg7": avg([per_day.get(d) or day_row(d) for d in d7], 7),
         "avg30": avg([per_day.get(d) or day_row(d) for d in d30], 30),
@@ -783,6 +795,8 @@ def full(days: int = 30) -> dict:
 
     return {
         "days": days,
+        "date": date,
+        "window": {"start": window[-1], "end": window[0], "n": len(window)},
         "today": t,
         "summary": summary,
         "series": series,

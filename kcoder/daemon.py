@@ -1345,7 +1345,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {"claude": await asyncio.get_running_loop().run_in_executor(None, setup.claude_status)}
 
     if t == "stats_full":
-        return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") or 30))
+        return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None)
 
     if t == "notify":
         # a desktop notification on behalf of a client that has no Notification

@@ -180,7 +180,10 @@ back to the grid or interrupt the focused session, <kbd>⌘K</kbd> palette,
   trust level and it starts as soon as a slot is free, in its own worktree.
   Finished tasks land in **review**; nothing is pushed on its own. Schedules
   live here too (see [Automation](#automation)).
-- **Stats** (alt+3): today / 7-day / 30-day / all-time tokens, lines of code
+- **Stats** (alt+3): pick the period at the top (today, 7, 30 or 90 days, all
+  time, or any single day from the date picker, the daily table or the
+  calendar) and every number on the page follows it, with today, 7-day,
+  30-day and all-time figures alongside: tokens, lines of code
   (added, removed, net, files), commits, sessions, active agent time and an
   API-equivalent estimate of what plan usage would have cost; daily token and
   lines charts; breakdowns by model (aliases merged, with fresh input, cache
