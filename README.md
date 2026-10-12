@@ -262,9 +262,13 @@ in with your Claude account (not an API key or a cloud account) and strips
 reports a reached limit, or a turn switching to extra-usage credits, kcoder
 stops the turn at once and remembers that limit until it resets (per model,
 so Opus keeps working when the weekly Fable limit is used up). It never
-retries onto an API key. The status bar shows `plan ✓`, `plan limit` or
-`connect Claude`; click it to see the account and limits, reconnect, or
-clear a limit you reset yourself. In a terminal: `kcoder login` and `kcoder
+retries onto an API key. The status bar shows how much of the plan is used
+(`plan 5h 23% · wk 41%`, from the utilization Claude Code reports on every
+turn; it turns amber at 80%), `plan limit` or `connect Claude`; click it for
+every limit with its reset time, the share each session used (the increase
+seen during its turns, approximate when sessions run in parallel), and to
+reconnect or clear a limit you reset yourself. Each session's pane and
+sidebar row show its own share. In a terminal: `kcoder login` and `kcoder
 plan [--clear]`.
 
 **Long-running work.** Shell commands get ten minutes (up to an hour when

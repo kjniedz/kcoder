@@ -41,6 +41,7 @@ UPDATES_DIR = os.path.join(DATA_DIR, "updates")
 UPDATE_LOG_PATH = os.path.join(DATA_DIR, "update.log")
 UI_STATE_PATH = os.path.join(DATA_DIR, "ui-state.json")
 PLAN_LIMITS_PATH = os.path.join(DATA_DIR, "plan-limits.json")
+PLAN_USAGE_PATH = os.path.join(DATA_DIR, "plan-usage.json")     # how much of each Claude plan limit is used (from rate_limit_events)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.environ.get("KCODER_PORT", "47321"))

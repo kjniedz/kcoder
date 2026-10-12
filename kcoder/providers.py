@@ -570,6 +570,42 @@ def _block(scope: str, until: float, limit: str | None, reason: str) -> None:
     _save_limits(data)
 
 
+def _load_usage() -> dict:
+    from . import paths
+    try:
+        with open(paths.PLAN_USAGE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def record_plan_usage(limit: str, utilization: float | None, resets_at: float | None, status: str | None) -> None:
+    """Claude Code reports, with every request, how much of a plan limit is used (0..1)."""
+    if not limit or utilization is None:
+        return
+    from . import paths
+    data = _load_usage()
+    data[limit] = {"utilization": max(0.0, min(1.0, float(utilization))), "resets_at": resets_at, "status": status or "", "seen": time.time(),
+                   "label": _LIMIT_LABEL.get(limit, limit)}
+    tmp = paths.PLAN_USAGE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, paths.PLAN_USAGE_PATH)
+
+
+def plan_usage() -> list:
+    """[{limit, label, utilization, resets_at, seen, stale}] newest window first. A window
+    whose reset time passed is kept at 0 until the next turn reports it."""
+    now = time.time()
+    out = []
+    for k, v in _load_usage().items():
+        stale = bool(v.get("resets_at")) and float(v["resets_at"]) < now
+        out.append({"limit": k, "label": v.get("label") or _LIMIT_LABEL.get(k, k), "utilization": 0.0 if stale else float(v.get("utilization") or 0.0),
+                    "resets_at": None if stale else v.get("resets_at"), "seen": v.get("seen"), "stale": stale, "status": v.get("status")})
+    order = {"five_hour": 0, "seven_day": 1, "seven_day_opus": 2, "seven_day_sonnet": 3, "seven_day_overage_included": 4, "overage": 5}
+    return sorted(out, key=lambda r: order.get(r["limit"], 9))
+
+
 def plan_block_for(model: str | None) -> dict | None:
     lim = plan_limits()
     return lim.get("all") or lim.get(model_family(model))
@@ -746,6 +782,15 @@ class ClaudeCodeBackend:
                     resets = info.get("resetsAt")
                     resets = float(resets) / (1000.0 if resets and float(resets) > 1e11 else 1.0) if resets else None
                     credits = bool(info.get("isUsingOverage"))
+                    util = info.get("utilization")
+                    if util is not None and limit:
+                        try:
+                            prev_global = (_load_usage().get(limit) or {}).get("utilization")
+                            record_plan_usage(limit, float(util), resets, info.get("status"))
+                            if getattr(hooks, "plan_usage", None):
+                                hooks.plan_usage(limit, float(util), resets, info.get("status"), prev_global)
+                        except Exception:  # noqa: BLE001 - bookkeeping never stops a turn
+                            pass
                     if credits or info.get("status") == "rejected":
                         _kill(proc)
                         scope = _LIMIT_SCOPE.get(limit or "", "all")

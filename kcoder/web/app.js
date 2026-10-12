@@ -200,6 +200,7 @@ async function onFrame(msg) {
   if (msg.type === 'chats') { state.chats = msg.chats; state.projects = msg.projects; renderSidebar(); return; }
   if (msg.type === 'event') { onEvent(msg.sid, msg.ev); return; }
   if (msg.type === 'shell') { onShellData(msg.sid, msg.data, msg.exit); return; }
+  if (msg.type === 'plan_usage') { state.claude = { ...(state.claude || {}), usage: msg.usage }; renderClaudeButton(); if (state.dialog === 'claude' && state._renderClaude) state._renderClaude(state.claude); return; }
   if (msg.type === 'notice') { toast(`${msg.title}: ${msg.body}`, 'warn'); notify(msg.title, msg.body, msg.sid, 'wait'); return; }
 }
 
@@ -1213,7 +1214,7 @@ function _renderTitlebarsLegacy() {
   const s = state.sid ? (state.sessions.get(state.sid) || state.chats.find((c) => c.id === state.sid)) : null;
   const html = !s ? '<span class="meta">pick a chat on the left, or press n for a new one</span>' :
     `<span class="dot ${s.archived ? 'archived' : s.status}"></span><span class="title">${esc(s.title || s.name)}</span><span class="meta">${esc((s.project || {}).name || '')}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} · ${esc(shortHome(s.cwd))}</span><span class="spacer"></span>` +
-    `<span class="meta">ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? 'on your plan' : fmtUsd((s.usage || {}).cost || 0)}</span>` +
+    `<span class="meta">ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? (planShareText(s) ? 'plan ' + planShareText(s) : 'on your plan') : fmtUsd((s.usage || {}).cost || 0)}</span>` +
     `<select data-act="trust" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select>` +
     `<select data-act="model" title="model"></select>` +
     `<button data-act="interrupt" title="Esc" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■</button>` +
@@ -1700,17 +1701,24 @@ function openPalette(initial) {
 function fuzzy(text, q) { let i = 0; for (const ch of q) { i = text.indexOf(ch, i); if (i < 0) return false; i++; } return true; }
 
 // first-run setup: connect an AI provider (API key, or Claude Code for a Claude plan)
-async function refreshProviders() { try { const r = await request('providers'); state.providers = r.providers; state.github = r.github || state.github; const c = (r.providers || []).find((p) => p.kind === 'claude'); if (c) { state.claude = { installed: c.installed, logged_in: c.logged_in, email: c.email, on_plan: c.on_plan, method: c.method, problem: c.problem, limits: c.limits || [] }; renderClaudeButton(); } } catch {} return state.providers || []; }
+async function refreshProviders() { try { const r = await request('providers'); state.providers = r.providers; state.github = r.github || state.github; const c = (r.providers || []).find((p) => p.kind === 'claude'); if (c) { state.claude = { usage: c.usage, installed: c.installed, logged_in: c.logged_in, email: c.email, on_plan: c.on_plan, method: c.method, problem: c.problem, limits: c.limits || [] }; renderClaudeButton(); } } catch {} return state.providers || []; }
 async function refreshClaude(clear) { try { state.claude = (await request('claude_plan', clear ? { action: 'clear_limits' } : {})).claude; } catch {} renderClaudeButton(); return state.claude || {}; }
 function claudeLimitText(l) { const when = l.until ? new Date(l.until * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'later'; return `${l.scope === 'all' ? 'all Claude models' : l.scope[0].toUpperCase() + l.scope.slice(1)}: ${l.label || 'plan limit'} · back ${when}`; }
+function planPct(u) { return Math.round((u.utilization || 0) * 100) + '%'; }
+function planWhen(ts) { return ts ? new Date(ts * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'unknown'; }
+const PLAN_SHORT = { five_hour: '5h', seven_day: 'wk', seven_day_opus: 'opus wk', seven_day_sonnet: 'sonnet wk', seven_day_overage_included: 'fable wk', overage: 'extra' };
+function planUsageText(u) { return `${u.label || u.limit}: ${planPct(u)} used${u.stale ? ' (window reset; updates on the next turn)' : u.resets_at ? ', resets ' + planWhen(u.resets_at) : ''}`; }
+function planShareText(s) { const sh = s.plan_share || {}; const parts = Object.keys(PLAN_SHORT).filter((k) => sh[k]).map((k) => `${Math.round(sh[k] * 100)}% of ${PLAN_SHORT[k]}`); return parts.length ? parts.join(', ') : ''; }
 function renderClaudeButton() {
   const b = $('#btn-claude'); const c = state.claude; if (!b) return;
   if (!state.connected) { b.textContent = 'plan ?'; b.className = 'warn'; b.title = 'kcoderd is not running, so the Claude plan status is unknown; it comes back when kcoderd starts'; return; }
   if (!c || !c.installed && !c.logged_in && c.on_plan === undefined) { b.textContent = 'Claude'; b.className = ''; return; }
   const lim = c.limits || [];
   b.className = !c.on_plan ? 'warn' : lim.length ? 'warn' : '';
-  b.textContent = !c.on_plan ? 'connect Claude' : lim.length ? `plan limit${lim.some((l) => l.scope === 'all') ? '' : ' · ' + lim.map((l) => l.scope).join(', ')}` : 'plan ✓';
-  b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.`;
+  const use = (c.usage || []).filter((u) => !u.stale && (u.limit === 'five_hour' || u.limit === 'seven_day'));
+  b.textContent = !c.on_plan ? 'connect Claude' : lim.length ? `plan limit${lim.some((l) => l.scope === 'all') ? '' : ' · ' + lim.map((l) => l.scope).join(', ')}` : use.length ? 'plan ' + use.map((u) => `${PLAN_SHORT[u.limit]} ${planPct(u)}`).join(' · ') : 'plan ✓';
+  if (!lim.length && use.some((u) => u.utilization >= 0.8)) b.className = 'warn';
+  b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.` + ((c.usage || []).length ? '\n' + c.usage.map(planUsageText).join('\n') + '\nFrom Claude Code\'s rate-limit reports; updated on every turn. Click for the per-session share.' : '');
 }
 // ---- what went wrong: the last error of a session, with send-again and a copyable report ----
 function lastErrorText(sid) { const st = state.events.get(sid); if (!st) return ''; for (let i = st.list.length - 1; i >= 0; i--) if (st.list[i].t === 'error') return st.list[i].text || ''; return ''; }
@@ -1826,10 +1834,13 @@ async function claudeDialog() {
     body.innerHTML = `<div class="status"><span>Claude Code: ${c.installed ? '<b class="ok">installed</b>' : '<b class="warn">not installed</b>'}</span>
       <span>Account: ${c.on_plan ? `<b class="ok">your Claude plan${c.email ? ' (' + esc(c.email) + ')' : ''}</b>` : `<b class="warn">${esc(c.problem || 'not connected')}</b>`}</span></div>
       <div class="help plain">kcoder only runs Claude on your subscription. It never uses an API key or extra usage credits: when a limit is reached the turn stops and kcoder waits for the reset.</div>
+      ${(c.usage || []).length ? `<div class="label-h">plan limits in use</div>${c.usage.map((u) => `<div class="row planrow" title="${esc(planUsageText(u))}"><span class="pl">${esc(u.label || u.limit)}</span><span class="meter"><span class="fill ${u.utilization >= 0.8 ? 'hot' : ''}" style="width:${Math.round(u.utilization * 100)}%"></span></span><span class="pv">${planPct(u)}</span><span class="help plain">${u.stale ? 'window reset · updates on the next turn' : u.resets_at ? 'resets ' + esc(planWhen(u.resets_at)) : ''}</span></div>`).join('')}
+        ${(() => { const rows = Array.from(state.sessions.values()).filter((s) => s.plan_share && (s.plan_share.five_hour || s.plan_share.seven_day)).sort((a, b) => ((b.plan_share.five_hour || 0) + (b.plan_share.seven_day || 0)) - ((a.plan_share.five_hour || 0) + (a.plan_share.seven_day || 0))).slice(0, 8); return rows.length ? `<div class="label-h">share by session</div>${rows.map((s) => `<div class="row"><span class="sess">${esc(s.name)}</span><span class="help plain">${esc(planShareText(s))}</span></div>`).join('')}<div class="help plain">The increase in each limit seen during a session's turns. Sessions running at the same time share the credit, so treat it as a guide.</div>` : ''; })()}` : '<div class="help plain">How much of the 5-hour and weekly limits is used appears here after the first Claude turn.</div>'}
       ${lim.length ? `<div class="label-h">limits reached</div>${lim.map((l) => `<div class="row"><span>${esc(claudeLimitText(l))}</span></div>`).join('')}
         <div class="row"><button data-cl="clear">Clear: I reset my limit</button><span class="help plain">Only if you reset it on claude.ai. If it is still used up, the next turn stops again before spending anything.</span></div>` : ''}`;
     $('[data-cl="login"]', d).textContent = !c.installed ? 'Install Claude Code' : c.on_plan ? 'Reconnect Claude' : 'Connect my Claude plan';
   };
+  state._renderClaude = render;
   render(await refreshClaude());
   let poll = null;
   const stopPoll = () => { if (poll) { clearInterval(poll); poll = null; } };
@@ -2516,7 +2527,8 @@ function renderCpaneBar(pane) {
   $('.picker', bar).textContent = s ? (s.title && s.title !== s.name ? `${s.name} · ${s.title}` : s.name) : 'pick a session ▾';
   $('.picker', bar).title = s ? `${s.name}${s.title ? ' · ' + s.title : ''}  (click to switch sessions)` : 'Pick a session for this pane';
   $('.meta', bar).innerHTML = s ? `${esc((s.project || {}).name || shortHome(s.cwd))}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} ${paneChips(s)}` : '';
-  $('.ctx', bar).textContent = s ? `ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? 'plan' : fmtUsd((s.usage || {}).cost || 0)}` : '';
+  $('.ctx', bar).textContent = s ? `ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? (planShareText(s) ? 'plan ' + planShareText(s) : 'plan') : fmtUsd((s.usage || {}).cost || 0)}` : '';
+  $('.ctx', bar).title = s && s.plan ? 'context size · this session\'s share of your Claude plan limits (approximate; click the plan button in the status bar for the whole picture)' : 'context size · spend';
   let errChip = $('.err-chip', bar); if (s && s.status === 'error') { if (!errChip) { errChip = document.createElement('button'); errChip.className = 'err-chip'; errChip.dataset.err = s.id; errChip.title = 'what happened, send again, copy a report'; errChip.textContent = 'error · details'; $('.ctx', bar).before(errChip); } } else if (errChip) errChip.remove();
   for (const el of $$('select[data-act], button[data-act]', bar)) el.disabled = !s;
   if (s) {

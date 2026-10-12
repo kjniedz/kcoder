@@ -28,6 +28,7 @@ def claude_status() -> dict:
     info["path"] = claude_path()
     info["problem"] = _prov.not_on_plan_reason(info)
     info["limits"] = [{"scope": k, **v} for k, v in _prov.plan_limits().items()]
+    info["usage"] = _prov.plan_usage()
     return info
 
 
@@ -43,7 +44,7 @@ def providers_info() -> list:
         if p.kind == "claude":
             st = claude_status()
             row.update(installed=st["installed"], logged_in=st["logged_in"], email=st["email"], on_plan=st["on_plan"],
-                       method=st["method"], problem=st["problem"], limits=st["limits"])
+                       method=st["method"], problem=st["problem"], limits=st["limits"], usage=st.get("usage") or [])
             row["configured"] = st["on_plan"]
         rows.append(row)
     return rows

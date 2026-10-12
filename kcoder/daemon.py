@@ -59,6 +59,7 @@ from . import uninstall as uninstaller
 from . import worktree as wt
 from . import jobs as jobsmod
 from . import rules as rulesmod
+from .providers import plan_usage as providers_plan_usage
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
@@ -132,6 +133,7 @@ class Session:
         m["queue"] = list(self.meta.get("queue") or [])
         m["shell"] = self.shell is not None
         m["plan"] = self.engine.provider.kind == "claude"
+        m["plan_share"] = self.meta.get("plan_share")
         info = self.meta.get("worktree")
         m["worktree_attached"] = bool(info and wt.is_attached(info))
         root = (self.meta.get("project") or {}).get("path") or self.engine.cwd
@@ -1190,6 +1192,13 @@ class Manager:
             self.today["cost"] += event["cost"]
             self.today["calls"] += 1
             self._log_usage(session, event)
+        elif t == "plan":
+            share = session.meta.setdefault("plan_share", {})
+            if event.get("delta"):
+                share[event["limit"]] = round(float(share.get(event["limit"]) or 0.0) + float(event["delta"]), 4)
+            share["seen"] = time.time()
+            share["window"] = {**(share.get("window") or {}), event["limit"]: event.get("resets_at")}
+            self.broadcast_raw(json.dumps({"type": "plan_usage", "usage": providers_plan_usage()}))
         elif t == "fallback":
             session.meta["fallback"] = None if event.get("restored") else {
                 "provider": event.get("provider"), "model": event.get("model"), "since": event.get("since"), "reason": event.get("reason")}

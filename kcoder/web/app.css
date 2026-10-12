@@ -672,3 +672,9 @@ table.grid tr[data-sha] { cursor: pointer; }
 .rules .rule { display: flex; gap: 10px; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 4px; }
 .rules .rtext { color: var(--fg); flex: 0 0 40%; }
 .rules .rwhat { color: var(--fg-dim); }
+
+.planrow { display: grid; grid-template-columns: 130px 1fr 44px auto; gap: 10px; align-items: center; }
+.planrow .meter { height: 8px; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden; }
+.planrow .fill { display: block; height: 100%; background: var(--accent); }
+.planrow .fill.hot { background: var(--warn, #e0b341); }
+.planrow .pv { text-align: right; font-variant-numeric: tabular-nums; }

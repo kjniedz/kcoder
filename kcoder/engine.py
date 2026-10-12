@@ -18,6 +18,7 @@ Events (all carry "t" = type and "ts" = unix time):
     compaction_start  {tokens}
     compaction        {summary, messages_before, tokens_before}
     handoff_start     {tokens}            the daemon then records `handoff` {to, name, summary}
+    plan              {limit, utilization, resets_at, status, delta}   Claude plan limit use (not persisted)
     approval_result   {id, approved}
     tool_output       {id, delta}                  live output of a running command (not persisted)
     tool_result       {id, name, content, is_error, elapsed}
@@ -781,6 +782,18 @@ class Engine:
             elapsed=round(time.monotonic() - started, 2),
         )
         return content, is_error
+
+    def plan_usage(self, limit: str, utilization: float, resets_at: float | None, status: str | None, prev_global: float | None = None) -> None:
+        """Claude Code's per-request plan utilization (0..1). The increase since the
+        last report (this session's, or kcoder's last known value for a first
+        report) is this session's share; approximate when sessions run in parallel."""
+        seen = getattr(self, "_plan_seen", None)
+        if seen is None:
+            seen = self._plan_seen = {}
+        prev = seen.get(limit, prev_global)
+        seen[limit] = utilization
+        delta = max(0.0, utilization - prev) if prev is not None and utilization >= prev else 0.0
+        self.emit("plan", limit=limit, utilization=round(utilization, 4), resets_at=resets_at, status=status or "", delta=round(delta, 4))
 
     def notice(self, message: str) -> None:
         self.emit("notice", text=message)

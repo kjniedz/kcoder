@@ -1185,6 +1185,11 @@ def _print_plan(st: dict) -> None:
     for lim in st.get("limits") or []:
         who = "all Claude models" if lim["scope"] == "all" else lim["scope"].capitalize()
         console.print(f"[yellow]limit reached[/yellow] {who}: {escape(lim.get('label') or 'plan limit')}, back {_when_short(lim.get('until'))}", highlight=False)
+    for u in st.get("usage") or []:
+        pct = int(round(float(u.get("utilization") or 0) * 100))
+        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+        tail = "window reset, updates on the next turn" if u.get("stale") else (f"resets {_when_short(u.get('resets_at'))}" if u.get("resets_at") else "")
+        console.print(f"  {escape(u.get('label') or u.get('limit')):<20} {bar} {pct:>3}%  [dim]{tail}[/dim]", highlight=False)
     console.print("[dim]kcoder never uses an API key or extra usage credits for Claude: at a limit the turn stops.[/dim]")
 
 
