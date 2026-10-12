@@ -227,7 +227,14 @@ accept, reject (undone in the worktree) or edit each hunk, then **approve**.
 The review policy (Settings) says when approval is required: before `push`
 (default; covers merges and PRs even with trust `auto`), before every
 `commit`, or `none`. It is enforced by git hooks in every worktree, so it
-applies to the agent's own `git push` too.
+applies to the agent's own `git push` too. When the agent pushes something
+you have not approved yet, the push waits: a **git push** request appears on
+the pane, in the inbox and on your paired phone ("push to origin: 2 commits
+(+129/-5): …") with **review changes**, **approve** and **decline**. Approve
+within about 90 seconds and the push goes through; later than that the push
+stops, the request stays in the inbox, and when you approve it kcoder tells
+the session to push again (or that it was declined). Approving in the changes
+view answers a waiting push too.
 
 **Checkpoints and undo.** Before every turn the worktree is snapshotted
 together with the conversation position. **↶ undo to here** on any of your

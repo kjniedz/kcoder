@@ -20,6 +20,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import time
 
 
 def hooks_dir_for(worktree_path: str) -> str:
@@ -64,6 +65,55 @@ def _block(title: str, body: str) -> int:
     return 1
 
 
+REVIEW_WAIT_SECONDS = int(os.environ.get("KCODER_REVIEW_WAIT") or 90)   # inside the Bash tool's 120s timeout
+
+
+def _ask_review(a, kind: str, trees: list, description: str, wait_s: int = REVIEW_WAIT_SECONDS) -> dict | None:
+    """Post an approval request for this push/commit in kcoder and wait for
+    the answer. Returns the daemon's reply, or None when kcoderd is unreachable."""
+    import json
+    try:
+        from websockets.sync.client import connect as ws_connect, unix_connect
+        from . import paths
+        with open(paths.DAEMON_INFO_PATH, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        with open(paths.TOKEN_PATH, "r", encoding="utf-8") as f:
+            token = f.read().strip()
+        sock = info.get("socket")
+        ws = unix_connect(sock, uri="ws://kcoderd/ws", open_timeout=5) if sock and os.path.exists(sock) else ws_connect(f"ws://{info['host']}:{info['port']}/ws", open_timeout=5)
+        with ws:
+            ws.send(json.dumps({"type": "auth", "token": token, "id": 0}))
+            hello = json.loads(ws.recv(timeout=10))
+            if not hello.get("ok"):
+                return None
+            ws.send(json.dumps({"type": "review_wait", "id": 1, "sid": a.sid, "kind": kind, "trees": trees, "description": description, "wait": wait_s}))
+            deadline = time.monotonic() + wait_s + 15
+            while time.monotonic() < deadline:
+                m = json.loads(ws.recv(timeout=max(1, deadline - time.monotonic())))
+                if m.get("type") == "reply" and m.get("id") == 1:
+                    return m if m.get("ok", True) else None
+    except Exception:  # noqa: BLE001 - any failure falls back to the plain block
+        return None
+    return None
+
+
+def _gate(a, kind: str, trees: list, description: str) -> int:
+    """The review gate: 0 to let the git operation through, 1 to stop it."""
+    reply = _ask_review(a, kind, trees, description)
+    verb = "push" if kind == "push" else "commit"
+    if reply is None:
+        return _block(f"{verb} blocked: review required before {verb}",
+                      f"Open this session's changes view in kcoder, accept or reject each hunk, and approve; then {verb} again.\n"
+                      "(review_required in ~/.config/kcoder/config.json: push | commit | none)")
+    if reply.get("approved"):
+        return 0
+    if reply.get("pending"):
+        return _block(f"{verb} paused: waiting for approval in kcoder",
+                      f"The {verb} is in the kcoder inbox (and on the paired phone, if any). Do not retry on your own: "
+                      f"when it is approved, kcoder sends this session a message to {verb} again; if it is declined you will be told.")
+    return _block(f"{verb} declined in kcoder", reply.get("reason") or f"The {verb} was not approved. Ask what should change, or stop here.")
+
+
 def pre_commit(a) -> int:
     from . import secrets as sec
     cwd = os.getcwd()
@@ -82,9 +132,8 @@ def pre_commit(a) -> int:
         from . import review
         tree = _git(cwd, "write-tree").strip()
         if not review.is_approved(a.sid, a.data_dir, tree, cwd):
-            return _block("commit blocked: review required before commit",
-                          "Open this session's changes view in kcoder, accept or reject each hunk, and approve; then commit again.\n"
-                          "(review_required in ~/.config/kcoder/config.json: push | commit | none)")
+            stat = _git(cwd, "diff", "--cached", "--shortstat").strip() or "no changes"
+            return _gate(a, "commit", [tree], f"commit: {stat}")
     return 0
 
 
@@ -118,12 +167,20 @@ def pre_push(a, stdin_text: str) -> int:
                       sec.describe(findings) + "\nRewrite the commits without them (or allowlist a false positive) and push again.")
     if _policy(a.data_dir) == "push" and not os.environ.get("KCODER_SKIP_REVIEW"):
         from . import review
-        for sha, _ in ranges:
+        unapproved = []
+        parts = []
+        for sha, rng in ranges:
             tree = _git(cwd, "rev-parse", f"{sha}^{{tree}}").strip()
-            if not review.is_approved(a.sid, a.data_dir, tree, cwd):
-                return _block("push blocked: review required before push",
-                              "Open this session's changes view in kcoder, accept or reject each hunk, and approve; then push again.\n"
-                              "(review_required in ~/.config/kcoder/config.json: push | commit | none)")
+            if review.is_approved(a.sid, a.data_dir, tree, cwd):
+                continue
+            unapproved.append(tree)
+            subjects = [l for l in _git(cwd, "log", "--format=%h %s", *rng).splitlines() if l.strip()]
+            stat = _git(cwd, "diff", "--shortstat", *([rng[0]] if len(rng) == 1 and ".." in rng[0] else [])).strip()
+            parts.append(f"{len(subjects)} commit{'s' if len(subjects) != 1 else ''}" + (f" ({stat})" if stat else "") + ": " +
+                         "; ".join(s[:70] for s in subjects[:4]) + (" …" if len(subjects) > 4 else ""))
+        if unapproved:
+            remote = (a.rest[0] if a.rest else "origin")
+            return _gate(a, "push", unapproved, f"push to {remote}: " + " | ".join(parts)[:600])
     return 0
 
 

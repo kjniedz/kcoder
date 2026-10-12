@@ -99,6 +99,7 @@ class Session:
         self.dir = session_dir(self.id)
         self._events_file = None
         self.shell = None   # phase 6: attached pty
+        self.pending_review = None   # a push/commit waiting for approval: {rid, kind, trees, description, ts, future}
         self.preview = None  # running dev server (kcoder.preview.Preview)
 
     @property
@@ -109,11 +110,14 @@ class Session:
         """Public view of the session, sent to clients."""
         m = dict(self.meta)
         m["status"] = "paused" if (self.meta.get("interrupted") and self.engine.status == "idle") else self.engine.status
+        if self.pending_review:
+            m["status"] = "waiting"
+        m["pending_review"] = {k: self.pending_review[k] for k in ("rid", "kind", "description")} if self.pending_review else None
         m["model"] = self.engine.model
         m["cwd"] = self.engine.cwd
         m["trust"] = self.engine.trust
         m["auto_approve"] = self.engine.auto_approve
-        m["pending_approval"] = self.engine.pending_approval()
+        m["pending_approval"] = self.engine.pending_approval() or (self.pending_review["rid"] if self.pending_review else None)
         m["seq"] = self.seq
         m["context_tokens"] = self.engine.last_input_tokens
         m["compact_at"] = self.engine.compact_at
@@ -359,8 +363,8 @@ class Manager:
             self._load_today()
         by_status = collections.Counter(s.engine.status for s in self.sessions.values())
         pending = [
-            {"sid": s.id, "name": s.meta["name"], "rid": s.engine.pending_approval()}
-            for s in self.sessions.values() if s.engine.pending_approval()
+            {"sid": s.id, "name": s.meta["name"], "rid": s.engine.pending_approval() or s.pending_review["rid"]}
+            for s in self.sessions.values() if s.engine.pending_approval() or s.pending_review
         ]
         return {
             "sessions": len(self.sessions),
@@ -400,6 +404,42 @@ class Manager:
 
     def busy_names(self) -> list:
         return [s.meta["name"] for s in self.sessions.values() if s.engine.busy]
+
+    def resolve_review(self, session: Session, approved: bool, reason: str = "") -> None:
+        """Answer a push/commit waiting for review (from the inbox, the pane,
+        the phone, or the changes view's approve). Records the trees as
+        reviewed when approved; if the git hook has already given up waiting,
+        tells the session to try again (or that it was declined)."""
+        pr = session.pending_review
+        if not pr:
+            return
+        session.pending_review = None
+        verb = pr["kind"]
+        if approved:
+            for tree in pr["trees"]:
+                review.approve_tree(session.dir, tree)
+            session.meta["needs_review"] = False
+        self._record(session, {"t": "approval_result", "ts": time.time(), "id": pr["rid"], "approved": bool(approved)})
+        self._record(session, {"t": "system", "ts": time.time(), "text": f"review: {verb} {'approved' if approved else 'declined'}" + (f" ({reason})" if reason else "")})
+        if self.remote.enabled():
+            self.loop.run_in_executor(None, self.remote.resolve, pr["rid"], "approved" if approved else "denied")
+        fut = pr.get("future")
+        if fut is not None and not fut.done():
+            fut.set_result({"approved": bool(approved), "reason": reason})
+        else:
+            # the hook stopped waiting: close the loop with a message to the session
+            text = (f"Your git {verb} was approved in kcoder. Run the same git {verb} again now." if approved
+                    else f"Your git {verb} was declined in kcoder{(': ' + reason) if reason else ''}. Do not {verb}; ask what should change.")
+            if session.engine.busy:
+                session.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+            else:
+                try:
+                    self.record_user(session, text, [])
+                    session.engine.send(text, [])
+                except EngineBusy:
+                    session.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+        session.save_meta()
+        self.broadcast_sessions()
 
     def _kill_orphan(self, pid: int, name: str | None = None) -> None:
         """A turn's subprocess (the claude CLI or a shell) that outlived the
@@ -1740,6 +1780,8 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             elif action == "approve":
                 tree = await loop.run_in_executor(None, review.approve, session.dir, engine.cwd, req.get("base"))
                 session.meta["needs_review"] = False
+                if session.pending_review:
+                    manager.resolve_review(session, True, "approved in the changes view")
                 session.save_meta()
                 manager._record(session, {"t": "system", "ts": time.time(), "text": f"review: changes approved (tree {tree[:10]})"})
                 manager.broadcast_sessions()
@@ -1814,10 +1856,40 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {}
 
     if t == "approve":
+        if session.pending_review and req.get("rid") == session.pending_review["rid"]:
+            manager.resolve_review(session, bool(req.get("approved")), str(req.get("reason") or ""))
+            return {}
         ok = engine.approve(req.get("rid"), bool(req.get("approved")))
         if not ok:
             raise RequestError("no such pending approval")
         return {}
+
+    if t == "review_wait":
+        # a git hook asking whether this push/commit may go ahead. Posts an approval
+        # request like a tool call (pane, inbox, phone) and waits up to `wait` seconds.
+        kind = "commit" if req.get("kind") == "commit" else "push"
+        trees = [str(x) for x in (req.get("trees") or []) if x]
+        if not trees:
+            raise RequestError("no trees to review")
+        if session.pending_review:
+            manager.resolve_review(session, False, "superseded by a newer request")
+        rid = "rev-" + uuid.uuid4().hex[:12]
+        fut = asyncio.get_running_loop().create_future()
+        desc = str(req.get("description") or f"git {kind}")[:600]
+        session.pending_review = {"rid": rid, "kind": kind, "trees": trees, "description": desc, "ts": time.time(), "future": fut}
+        ev = {"t": "approval_request", "ts": time.time(), "id": rid, "name": f"git {kind}", "description": desc, "kind": "review", "input": {"trees": trees}}
+        manager._record(session, ev)
+        manager.broadcast_sessions()
+        manager.notify(f"{session.meta['name']} wants to {kind}", desc[:200], session.id)
+        if manager.remote.enabled():
+            manager.loop.run_in_executor(None, manager._remote_notify, session, ev)
+        try:
+            result = await asyncio.wait_for(asyncio.shield(fut), timeout=max(1, min(int(req.get("wait") or 90), 600)))
+        except asyncio.TimeoutError:
+            if session.pending_review and session.pending_review["rid"] == rid:
+                session.pending_review["future"] = None     # the hook has given up: a late answer messages the session instead
+            return {"approved": False, "pending": True, "rid": rid}
+        return {"approved": bool(result.get("approved")), "reason": result.get("reason") or "", "rid": rid}
 
     if t == "interrupt":
         return {"interrupted": engine.interrupt()}

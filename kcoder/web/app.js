@@ -444,7 +444,7 @@ function buildChatHtml(store, sid, opts = {}) {
         const decided = approvals.has(e.id) || results.has(e.id);
         const sess = state.sessions.get(sid);
         const live = !decided && sess && sess.pending_approval === e.id;
-        if (live) out.push(`<div class="approval" data-rid="${esc(e.id)}"><span>Allow</span><code>${esc(e.description)}</code><button class="primary" data-act="approve">yes <kbd>y</kbd></button><button class="danger" data-act="decline">no <kbd>n</kbd></button></div>`);
+        if (live) out.push(`<div class="approval${e.kind === 'review' ? ' review' : ''}" data-rid="${esc(e.id)}"><span>${e.kind === 'review' ? 'Review' : 'Allow'}</span><code>${esc(e.description)}</code>${e.kind === 'review' ? '<button data-act="changes" title="see the diff first">review changes</button>' : ''}<button class="primary" data-act="approve">${e.kind === 'review' ? 'approve' : 'yes'} <kbd>y</kbd></button><button class="danger" data-act="decline">${e.kind === 'review' ? 'decline' : 'no'} <kbd>n</kbd></button></div>`);
         break;
       }
       case 'usage':

@@ -174,7 +174,11 @@ def load_state(session_dir: str) -> dict:
 
 def approve(session_dir: str, cwd: str, base: str | None = None) -> str:
     """Record the current working tree as reviewed. Returns its tree sha."""
-    tree = worktree_tree(cwd)
+    return approve_tree(session_dir, worktree_tree(cwd), base)
+
+
+def approve_tree(session_dir: str, tree: str, base: str | None = None) -> str:
+    """Record one tree sha (a commit's, for a push approved from the inbox) as reviewed."""
     state = load_state(session_dir)
     approved = dict(state.get("approved") or {})
     approved[tree] = time.time()

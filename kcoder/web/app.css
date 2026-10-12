@@ -453,6 +453,8 @@ select:hover { border-color: var(--accent); }
 .badge.waiting { background: var(--accent-soft); color: var(--accent-text); }
 .badge.idle { color: var(--fg-mute); }
 .badge.error { background: rgba(248,113,113,.18); color: var(--red); }
+.approval.review { border-color: var(--accent); }
+.approval.review > span:first-child { color: var(--accent-text); font-weight: 700; }
 button.badge.error { border: none; cursor: pointer; font: inherit; font-size: 10px; } button.badge.error:hover { background: rgba(248,113,113,.32); }
 .pane-status .errlabel { color: var(--red); }
 .err-chip { background: rgba(248,113,113,.18); color: var(--red); border: none; border-radius: 8px; padding: 0 7px; font-size: 10.5px; }
