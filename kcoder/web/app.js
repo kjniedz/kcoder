@@ -1128,7 +1128,8 @@ function renderSidebar() {
   const box = $('#projects');
   if (state.searchResults) {
     box.innerHTML = `<div class="project search-results"><div class="project-head"><span class="name">search results</span><button class="add" data-clear-search="1">✕</button></div>` +
-      (state.searchResults.length ? state.searchResults.map((c) => chatItemHtml(c) + (c.hits || []).map((h) => `<div class="hit"><b>${esc(h.who)}:</b> ${esc(h.snippet)}</div>`).join('')).join('') : '<div class="hit">no matches</div>') + '</div>';
+      (state.searchResults.length ? state.searchResults.map((c) => chatItemHtml(c) + (c.hits || []).map((h) => `<div class="hit" data-jump="${esc(c.id)}:${h.turn || 0}" title="open at this message"><b>${esc(h.who)}:</b> ${esc(h.snippet)}</div>`).join('')).join('') : '<div class="hit">no matches</div>') +
+      `<div class="hit"><button data-search-all="1" title="filters: repo, date, who; every hit opens the message">all results + filters ⏎</button></div></div>`;
     return;
   }
   const groups = new Map();
@@ -1162,6 +1163,8 @@ $('#projects').addEventListener('dragend', () => { state.dragChat = null; for (c
 
 $('#projects').addEventListener('click', async (e) => {
   const clear = e.target.closest('[data-clear-search]'); if (clear) { state.searchResults = null; $('#search').value = ''; renderSidebar(); return; }
+  const jmp = e.target.closest('[data-jump]'); if (jmp) { const [sid, turn] = jmp.dataset.jump.split(':'); jumpTo(sid, Number(turn)); return; }
+  if (e.target.closest('[data-search-all]')) { searchDialog($('#search').value.trim()); return; }
   const add = e.target.closest('[data-new-in]'); if (add) { openNewSession({ cwd: add.dataset.newIn }); e.stopPropagation(); return; }
   const head = e.target.closest('.project-head'); if (head) { const pid = head.parentElement.dataset.pid; const c = JSON.parse(localStorage.getItem('kcoder.collapsed') || '{}'); c[pid] = !c[pid]; localStorage.setItem('kcoder.collapsed', JSON.stringify(c)); renderSidebar(); return; }
   const item = e.target.closest('.chat-item[data-sid]'); if (item) openChat(item.dataset.sid);
@@ -1177,7 +1180,51 @@ $('#search').addEventListener('input', () => {
   if (!q) { state.searchResults = null; renderSidebar(); return; }
   searchTimer = setTimeout(async () => { try { state.searchResults = (await request('search', { q })).results; renderSidebar(); } catch {} }, 250);
 });
+$('#search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); searchDialog($('#search').value.trim()); } });
 $('#btn-new-chat').addEventListener('click', () => openNewSession());
+
+// open a session at a given user turn (search hits)
+async function jumpTo(sid, turn) {
+  state.sid = sid;
+  if (state.view !== 'chat') setView('chat');
+  await loadEvents(sid, -1);
+  assignPane(state.layout.focus, sid);
+  setTimeout(() => {
+    const pane = $$('.pane[data-sid]').find((p) => p.dataset.sid === sid); if (!pane) return;
+    const el = pane.querySelector(`.msg-user[data-turn="${turn}"]`) || pane.querySelector('.msg-user');
+    if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); }
+  }, 250);
+}
+
+// search across transcripts, with filters (repo, date, who)
+async function searchDialog(initial = '') {
+  const projects = (state.projects || []).map((p) => p.name).filter(Boolean).sort();
+  const d = openDialog(`<h2>search <span class="help">words, "phrases", repo:name, since:2026-10-01, date:today | yesterday | 7d, who:me | agent</span><span class="spacer"></span><button data-x="close">✕</button></h2>
+    <div class="body search">
+      <div class="row"><input id="sd-q" placeholder="what are you looking for?" value="${esc(initial)}" autocomplete="off" style="flex:1">
+        <select id="sd-repo" title="repo"><option value="">any repo</option>${projects.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}</select>
+        <select id="sd-date" title="date"><option value="">any time</option><option value="today">today</option><option value="yesterday">yesterday</option><option value="7d">last 7 days</option><option value="30d">last 30 days</option></select>
+        <select id="sd-who" title="who"><option value="">anyone</option><option value="me">me</option><option value="agent">kcoder</option></select></div>
+      <div id="sd-results" class="list"><div class="empty-row">type to search</div></div>
+    </div>`, 'search');
+  d.classList.add('wide');
+  const q = $('#sd-q', d), out = $('#sd-results', d);
+  let timer = null, seq = 0;
+  const run = async () => {
+    const text = q.value.trim(); const my = ++seq;
+    const date = $('#sd-date', d).value; const f = { q: text, repo: $('#sd-repo', d).value || null, who: $('#sd-who', d).value || null, since: date || null, until: date === 'yesterday' ? 'yesterday' : null, limit: 80 };
+    if (!text && !f.repo && !f.since) { out.innerHTML = '<div class="empty-row">type to search</div>'; return; }
+    let r; try { r = await request('search', f); } catch (e) { out.innerHTML = `<div class="empty-row">${esc(e.message)}</div>`; return; }
+    if (my !== seq) return;
+    const res = r.results || [];
+    out.innerHTML = res.length ? res.map((c) => `<div class="sr"><div class="h"><button class="link" data-jump="${esc(c.id)}:0">${esc(c.title || c.name)}</button><span class="meta">${esc((c.project || {}).name || '')} · ${esc(c.status || '')} · ${c.last_activity ? age(c.last_activity) + ' ago' : ''}</span></div>${(c.hits || []).map((h) => `<div class="hit" data-jump="${esc(c.id)}:${h.turn || 0}" title="open at this message"><span class="k">turn ${(h.turn || 0) + 1} · ${esc(h.who)}</span>${esc(h.snippet)}</div>`).join('')}</div>`).join('') + `<div class="help plain">${res.length} session(s)${res.length >= 80 ? ' (first 80)' : ''}</div>` : '<div class="empty-row">no matches</div>';
+  };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });
+  for (const id of ['sd-repo', 'sd-date', 'sd-who']) $('#' + id, d).addEventListener('change', run);
+  d.addEventListener('click', (e) => { if (e.target.closest('[data-x]')) { closeDialog(); return; } const j = e.target.closest('[data-jump]'); if (j) { const [sid, turn] = j.dataset.jump.split(':'); closeDialog(); jumpTo(sid, Number(turn)); } });
+  setTimeout(() => q.focus(), 20);
+  if (initial) run();
+}
 
 async function openChat(sid) {
   state.events.delete(sid);
@@ -1660,6 +1707,7 @@ function paletteItems() {
   const items = SHORTCUTS.filter((sc) => sc.palette).map((sc) => [sc.palette, () => sc.run({ key: '' }), shortcutKeys(sc)]);
   items.push(
     ['brief: what every session did, what waits on you, what is in review', () => briefDialog()],
+    ['search transcripts with filters (repo, date, who)', () => searchDialog($('#search').value.trim())],
     ['settings', () => settingsDialog()], ['about kcoder', () => aboutDialog()], ['your Claude plan (connect, limits)', () => claudeDialog()],
     ['connect your AI (sign in to a provider)', () => setupDialog()], ['connect GitHub (commit identity)', () => setupDialog()], 
 ['toggle broadcast (send to all panes)', toggleBroadcast], 

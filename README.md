@@ -166,6 +166,13 @@ archive, export or delete it. Transcripts are real text: select across
 messages, ⌘C copies clean markdown, ⌘F finds in a session, ⌘⇧F searches all
 of them, and files dropped on a pane attach to the prompt.
 
+**Search across transcripts.** The sidebar box finds sessions as you type;
+Enter (or ⌘K → search) opens the full search with filters: repo, date
+(today, yesterday, 7 or 30 days) and who said it (you or kcoder). The query
+takes words, `"phrases"`, `repo:name`, `since:2026-10-01`, `until:…`,
+`date:yesterday` and `who:me`. Every hit opens the session at that message.
+`kcoder search <query> [--repo] [--since] [--who]` in a terminal.
+
 Keys: <kbd>n</kbd> new session, <kbd>a</kbd> inbox, <kbd>w</kbd> next session
 waiting on you, <kbd>1</kbd> to <kbd>9</kbd> focus a grid pane, <kbd>esc</kbd>
 back to the grid or interrupt the focused session, <kbd>⌘K</kbd> palette,

@@ -694,3 +694,16 @@ table.grid tr[data-sha] { cursor: pointer; }
 .brief button.link { background: none; border: none; color: var(--accent-text); padding: 0; font: inherit; font-weight: 600; cursor: pointer; }
 .brief .list .item { display: flex; gap: 10px; align-items: center; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .brief .list .item code { flex: 1; white-space: normal; }
+
+.search-results .hit[data-jump] { cursor: pointer; }
+.search-results .hit[data-jump]:hover { color: var(--fg); }
+.msg-user.flash .bubble { outline: 2px solid var(--accent); transition: outline .3s; }
+.search .row { display: flex; gap: 8px; }
+.search .row input, .search .row select { background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; padding: 5px 8px; color: var(--fg); font: inherit; }
+.search .sr { border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12px; }
+.search .sr .h { display: flex; gap: 8px; align-items: baseline; }
+.search .sr .h .meta { margin-left: auto; color: var(--fg-dim); }
+.search .sr .hit { padding: 3px 0 3px 8px; color: var(--fg-dim); cursor: pointer; border-left: 2px solid var(--line-2); margin-top: 4px; }
+.search .sr .hit:hover { color: var(--fg); border-color: var(--accent); }
+.search .sr .hit .k { color: var(--accent-text); margin-right: 8px; font-size: 10px; text-transform: uppercase; }
+.search button.link { background: none; border: none; color: var(--accent-text); padding: 0; font: inherit; font-weight: 600; cursor: pointer; }

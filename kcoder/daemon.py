@@ -61,6 +61,7 @@ from . import jobs as jobsmod
 from . import rules as rulesmod
 from . import issues as issuesmod
 from . import brief as briefmod
+from . import search as searchmod
 from .providers import plan_usage as providers_plan_usage
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
@@ -1644,7 +1645,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
                 "projects": manager.project_list()}
 
     if t == "search":
-        return {"results": manager.search(req.get("q") or "", req.get("project"), int(req.get("limit") or 50))}
+        return await asyncio.get_running_loop().run_in_executor(
+            None, lambda: searchmod.run(manager, req.get("q") or "", req.get("project"), int(req.get("limit") or 50),
+                                        repo=req.get("repo"), since=req.get("since"), until=req.get("until"), who=req.get("who")))
 
     if t == "create":
         provider = req.get("provider") or auth.default_provider()

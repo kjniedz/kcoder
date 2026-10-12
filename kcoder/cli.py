@@ -995,7 +995,7 @@ def cmd_history(args) -> int:
 def cmd_search(args) -> int:
     with DaemonClient.connect() as client:
         proj = None if args.all else projects.project_id(projects.project_root(os.getcwd()))
-        results = client.request("search", q=" ".join(args.query), project=proj)["results"]
+        results = client.request("search", 120, q=" ".join(args.query), project=proj, repo=args.repo, since=args.since, until=args.until, who=args.who)["results"]
         if not results:
             console.print("[dim]no matches[/dim]")
             return 0
@@ -1004,7 +1004,7 @@ def cmd_search(args) -> int:
                           f"{escape((r.get('project') or {}).get('name', ''))} · {_age(r.get('last_activity', 0))} ago[/dim]",
                           highlight=False)
             for h in r.get("hits", []):
-                console.print(f"  [dim]{h['who']}:[/dim] {escape(h['snippet'])}", highlight=False)
+                console.print(f"  [dim]turn {h.get('turn', 0) + 1} · {h['who']}:[/dim] {escape(h['snippet'])}", highlight=False)
     return 0
 
 
@@ -1687,9 +1687,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_history)
 
-    p = sub.add_parser("search", help="full-text search across chats")
+    p = sub.add_parser("search", help="search across transcripts: words, \"phrases\", repo:name, since:/until:/date:, who:me|agent")
     p.add_argument("query", nargs="+")
     p.add_argument("--all", action="store_true", help="all projects (default: this project)")
+    p.add_argument("--repo", help="project name or folder contains this")
+    p.add_argument("--since", help="sessions active since (YYYY-MM-DD, today, yesterday, 7d)")
+    p.add_argument("--until", help="sessions started before (YYYY-MM-DD)")
+    p.add_argument("--who", choices=["me", "agent"], help="only your messages, or only kcoder's")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("export", help="print a chat as markdown")
