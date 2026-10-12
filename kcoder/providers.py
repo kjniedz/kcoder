@@ -423,7 +423,7 @@ def claude_available() -> bool:
     return claude_path() is not None
 
 
-def _spawn_claude(args: list, cwd: str, attempts: int = 4):
+def _spawn_claude(args: list, cwd: str, attempts: int = 4, env: dict | None = None):
     """Popen the claude CLI, retrying briefly when the binary is missing.
 
     Claude Code updates itself by replacing its binary in place, so for a
@@ -435,7 +435,7 @@ def _spawn_claude(args: list, cwd: str, attempts: int = 4):
         args[0] = claude_path() or CLAUDE_BIN
         try:
             return subprocess.Popen(
-                args, cwd=cwd, env=_claude_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                args, cwd=cwd, env=env or _claude_env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **compat.own_group(),
             )
         except FileNotFoundError as exc:
@@ -462,6 +462,9 @@ def _claude_env() -> dict:
             env.pop(k, None)   # nested Claude Code sessions refuse to start (also drops CLAUDE_CODE_USE_BEDROCK/VERTEX)
         elif k in _PAID_AUTH_ENV:
             env.pop(k, None)   # plan only: never hand Claude Code an API key
+    # shell tools get ten minutes (an hour when the model asks); longer work goes through `kcoder job`
+    env.setdefault("BASH_DEFAULT_TIMEOUT_MS", "600000")
+    env.setdefault("BASH_MAX_TIMEOUT_MS", "3600000")
     return env
 
 
@@ -606,7 +609,7 @@ def _claude_settings(sid: str | None = None) -> str | None:
         settings.update({"includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
     if sid:
         cmd = f"{_shlex.quote(sys.executable)} -P -m kcoder.permit --sid {_shlex.quote(str(sid))} --data-dir {_shlex.quote(paths.DATA_DIR)}"
-        settings["hooks"] = {"PreToolUse": [{"matcher": "mcp__.*", "hooks": [{"type": "command", "command": cmd, "timeout": 300}]}]}
+        settings["hooks"] = {"PreToolUse": [{"matcher": "mcp__.*", "hooks": [{"type": "command", "command": cmd, "timeout": 600}]}]}
     return _json.dumps(settings) if settings else None
 
 
@@ -672,7 +675,10 @@ class ClaudeCodeBackend:
         if settings:
             args += ["--settings", settings]
         cwd = getattr(hooks, "cwd", None) or os.getcwd()
-        proc = _spawn_claude(args, cwd)
+        env = _claude_env()
+        if getattr(hooks, "session_env", None):
+            env.update({k: v for k, v in hooks.session_env().items() if v})
+        proc = _spawn_claude(args, cwd, env=env)
         if hasattr(hooks, "proc"):
             hooks.proc = proc
         try:

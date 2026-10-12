@@ -65,7 +65,7 @@ def _block(title: str, body: str) -> int:
     return 1
 
 
-REVIEW_WAIT_SECONDS = int(os.environ.get("KCODER_REVIEW_WAIT") or 90)   # inside the Bash tool's 120s timeout
+REVIEW_WAIT_SECONDS = int(os.environ.get("KCODER_REVIEW_WAIT") or 480)   # inside the Bash tool's 10-minute timeout
 
 
 def ask_daemon(sid: str, payload: dict, wait_s: int) -> dict | None:

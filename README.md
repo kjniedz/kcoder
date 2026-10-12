@@ -259,6 +259,15 @@ retries onto an API key. The status bar shows `plan ✓`, `plan limit` or
 clear a limit you reset yourself. In a terminal: `kcoder login` and `kcoder
 plan [--clear]`.
 
+**Long-running work.** Shell commands get ten minutes (up to an hour when
+the model asks). For anything longer, the agent runs `kcoder job run --
+<command>`: kcoderd starts it in the session's folder as a background job,
+the pane shows it with live output and a **stop** button, the agent gets the
+output back when it finishes, or, if it has moved on, a message with the
+result and the last lines of output when the job ends. `kcoder job ls / tail
+/ wait / stop` work from the session's shell. Jobs do not survive a daemon
+restart; the pane marks them lost.
+
 **Connector approvals.** Claude sessions can use the connectors on your
 claude.ai account (Gmail, Calendar, Drive, Linear and whatever else you have
 connected). Reads run by themselves. Anything that sends or changes (an

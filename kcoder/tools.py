@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-DEFAULT_BASH_TIMEOUT = int(os.environ.get("KCODER_BASH_TIMEOUT", "120"))
+DEFAULT_BASH_TIMEOUT = int(os.environ.get("KCODER_BASH_TIMEOUT", "600"))
 
 # Tools that mutate state and therefore require user approval
 # (unless auto-approve mode is on).
@@ -212,7 +212,7 @@ def _shell_popen(command: str, cwd: str, env: dict):
 
 
 def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
-             on_output=None, proc_slot=None, env: dict | None = None) -> str:
+             on_output=None, proc_slot=None, env: dict | None = None, env_extra: dict | None = None) -> str:
     """Run a shell command, streaming combined output through `on_output`
     (if given) while it runs. `proc_slot` (any object) gets a `.proc`
     attribute so the caller can kill a runaway command."""
@@ -222,6 +222,8 @@ def run_bash(command: str, timeout: int = DEFAULT_BASH_TIMEOUT, cwd: str = ".",
         if env is None:
             from . import identity
             env = identity.git_env()
+        if env_extra:
+            env = dict(env, **{k: v for k, v in env_extra.items() if v})
         proc = _shell_popen(command, cwd, env)
     except OSError as exc:
         return f"Error: {exc}"
@@ -330,7 +332,7 @@ def describe_tool_call(name: str, tool_input: dict) -> str:
 
 
 def execute_tool(name: str, tool_input: dict, cwd: str | None = None,
-                 on_output=None, proc_slot=None, scope: str | None = None) -> str:
+                 on_output=None, proc_slot=None, scope: str | None = None, env_extra: dict | None = None) -> str:
     """Dispatch a tool call against `cwd` (defaults to the process cwd).
 
     Raises on unknown tool; tool errors propagate.
@@ -349,6 +351,7 @@ def execute_tool(name: str, tool_input: dict, cwd: str | None = None,
             tool_input["command"],
             timeout=tool_input.get("timeout", DEFAULT_BASH_TIMEOUT),
             cwd=cwd,
+            env_extra=env_extra,
             on_output=on_output,
             proc_slot=proc_slot,
         )

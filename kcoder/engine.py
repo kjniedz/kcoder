@@ -68,7 +68,21 @@ multiple steps, work through them with tool calls until it's complete,
 then summarize what you did.
 
 Keep responses concise and terminal-friendly. Use markdown for structure
-and code blocks for code.\
+and code blocks for code.
+
+# Long-running commands
+
+A shell command is killed after ten minutes. For builds, test suites,
+installs, deploys, or anything that may run longer than a minute, run it as
+a background job instead:
+
+    kcoder job run -- <command>
+
+It returns the output when the command finishes, or, after a minute, says
+the job is still running and shows the output so far; keep working on other
+things and kcoder sends you the result as a message when the job ends.
+`kcoder job tail <id>`, `kcoder job wait <id>` and `kcoder job stop <id>`
+check on it, wait for it, or stop it.\
 """
 
 # Tool results are stored in history in full, but events carry a bounded
@@ -281,6 +295,12 @@ class Engine:
         if self.trust == TRUST_NONE:
             return True
         return tool_name in DANGEROUS_TOOLS  # TRUST_READ
+
+    def session_env(self) -> dict:
+        """Environment that lets `kcoder job` (and hooks) find this session and the daemon."""
+        from . import paths
+        sid = getattr(self, "sid", None)
+        return {"KCODER_SESSION": sid, "KCODER_DATA_DIR": paths.DATA_DIR, "KCODER_PORT": str(paths.DEFAULT_PORT)} if sid else {}
 
     def system_prompt(self) -> str:
         from . import identity
@@ -667,7 +687,7 @@ class Engine:
                 last_emit[0] = now
 
         try:
-            content = execute_tool(name, tool_input, self.cwd, on_output=on_output, proc_slot=self, scope=self.scope)
+            content = execute_tool(name, tool_input, self.cwd, on_output=on_output, proc_slot=self, scope=self.scope, env_extra=self.session_env())
             is_error = False
         except Exception as exc:  # noqa: BLE001 - tool errors go back to the model
             content = f"Error: {exc}"

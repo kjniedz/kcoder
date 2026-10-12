@@ -6,9 +6,9 @@ here so any session can pick up where the last one stopped.
 
 | # | Feature | Status |
 |---|---|---|
-| 1 | **Connector approvals**: connector reads run by themselves; anything that sends or changes (email, calendar, Drive, Linear writes) waits for an approval that shows exactly what would go out. Same inbox / pane / phone flow as tool and push approvals. | done (PreToolUse hook `kcoder/permit.py`; reads by verb, unknown tools ask; 240s wait, 10-minute grants for a late approval) |
-| 2 | **Long-running work**: commands that outlive the Bash tool's two-minute limit become background jobs with live output, a stop button and a result the session picks up when the job ends. Also lets the push gate wait longer. | in progress |
-| 3 | **Dry-run sessions**: the agent plans and shows the diff it would make without touching files. | |
+| 1 | **Connector approvals**: connector reads run by themselves; anything that sends or changes (email, calendar, Drive, Linear writes) waits for an approval that shows exactly what would go out. Same inbox / pane / phone flow as tool and push approvals. | done (PreToolUse hook `kcoder/permit.py`; reads by verb, unknown tools ask; 8-minute wait, 10-minute grants for a late approval) |
+| 2 | **Long-running work**: commands that outlive the Bash tool's two-minute limit become background jobs with live output, a stop button and a result the session picks up when the job ends. Also lets the push gate wait longer. | done (`kcoder job run -- <cmd>`, `kcoder/jobs.py`; Bash timeouts 10 min / 1 h; review and connector waits 8 min) |
+| 3 | **Dry-run sessions**: the agent plans and shows the diff it would make without touching files. | next |
 | 5 | **Per-repo rules in plain English** (`KCODER.md`): "never touch migrations", "run the tests before committing", enforced as checks. | |
 | 12 | **Automatic handoff**: at the compaction point kcoder writes the handoff summary and starts a fresh session instead of carrying a giant context. | |
 | 13 | **Plan-limit awareness**: how much of the 5-hour and weekly limits a session is using. | |

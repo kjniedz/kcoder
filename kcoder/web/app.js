@@ -40,6 +40,8 @@ const state = {
   view: (localStorage.getItem('kcoder.view') || 'wall').replace('terminal', 'chat'),
   cpaneView: new Map(),    // sid -> 'chat' | 'term' (split panes; wall panes use paneView)
   verbs: new Map(),        // sid -> { verb, at, recent } for the working status line
+  jobTails: new Map(),     // 'sid:jobid' -> last output of a background job
+  jobOpen: null,
   statsSorts: JSON.parse(localStorage.getItem('kcoder.statsSorts') || '{}'),   // stats tables: id -> { key, dir }
   statsCal: localStorage.getItem('kcoder.statsCal') || 'tokens',
   sid: localStorage.getItem('kcoder.sid') || null,     // current chat (chat/terminal views)
@@ -289,6 +291,8 @@ function onEvent(sid, ev) {
   if (!store) { store = { list: [], live: '', streaming: false, loaded: false, partial: true }; state.events.set(sid, store); }
   if (ev.t === 'text') { store.live += ev.delta; store.streaming = true; queueRender(sid); return; }
   if (ev.t === 'progress') { store.turn = { input: ev.input, output: ev.output }; return; }
+  if (ev.t === 'job_output') { state.jobTails.set(sid + ':' + ev.id, ((state.jobTails.get(sid + ':' + ev.id) || '') + ev.delta).slice(-60000)); if (state.dialog === 'job' && state.jobOpen === sid + ':' + ev.id) renderJobDialogTail(); return; }
+  if (ev.t === 'job') { if (state.dialog === 'job' && state.jobOpen === sid + ':' + ev.id) setTimeout(() => jobDialog(sid, ev.id), 200); }
   if (ev.t === 'turn_start') store.turn = { input: 0, output: 0 };
   if (ev.t === 'tool_output') { store.toolLive = store.toolLive || {}; store.toolLive[ev.id] = ((store.toolLive[ev.id] || '') + ev.delta).slice(-12000); queueRender(sid); return; }
   if (ev.t === 'tool_result' && store.toolLive) delete store.toolLive[ev.id];
@@ -459,6 +463,7 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'compaction_start': out.push(`<div class="note">✂ compacting context (${fmtInt(e.tokens)} tokens)…</div>`); break;
       case 'queue': out.push(`<div class="note">▶ queued task started (${e.remaining} left): ${esc(e.started)}</div>`); break;
       case 'git': out.push(`<div class="note">${esc(e.text || '')}</div>`); break;
+      case 'job': out.push(`<div class="note job ${esc(e.status || '')}">${e.status === 'running' ? '▶' : e.status === 'done' ? '✓' : '✗'} ${esc(e.text || '')} <button data-job="${e.id}" title="output, stop">output</button></div>`); break;
     }
   }
   if (!opts.noTail) out.push(trailerHtml(store, sid));
@@ -581,7 +586,7 @@ function buildTermHtml(store, sid, opts = {}) {
       case 'tool_result': if (e.is_error) out.push(`<span class="t-dim">  ✗ ${esc(stripAnsi(e.content || '').split('\n')[0])}</span>\n`); break;
       case 'error': case 'notice': out.push(`<span class="t-err">${esc(e.text)}</span>\n`); break;
       case 'retry': out.push(`<span class="t-warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</span>\n`); break;
-      case 'info': case 'system': case 'git': out.push(`<span class="t-dim">${esc(e.text || '')}</span>\n`); break;
+      case 'info': case 'system': case 'git': case 'job': out.push(`<span class="t-dim">${esc(e.text || '')}</span>\n`); break;
       case 'compaction': out.push(`<span class="t-dim">✂ compacted ${e.messages_before} messages into a summary</span>\n`); break;
       case 'compaction_start': out.push(`<span class="t-dim">✂ context at ${fmtInt(e.tokens)} tokens - compacting…</span>\n`); break;
       case 'queue': out.push(`<span class="t-dim">▶ next queued task (${e.remaining} left): ${esc(e.started)}</span>\n`); break;
@@ -1725,6 +1730,21 @@ async function errorDialog(sid) {
 }
 document.addEventListener('click', (e) => { const b = e.target.closest('[data-err]'); if (b && !e.target.closest('a')) { e.stopPropagation(); errorDialog(b.dataset.err); } }, true);
 
+// ---- background jobs: output and a stop button ----
+async function jobDialog(sid, id) {
+  let r;
+  try { r = await request('job_tail', { sid, job: id, lines: 400 }); } catch (e) { toast(e.message, 'err'); return; }
+  const j = r.job; state.jobOpen = sid + ':' + id;
+  if (!state.jobTails.get(state.jobOpen)) state.jobTails.set(state.jobOpen, r.tail || '');
+  const live = j.status === 'running' || j.status === 'stopping';
+  const d = openDialog(`<h2>job ${j.id} · ${esc(j.name)}<span class="help" id="job-status">${esc(j.status)}${j.exit != null ? ' · exit ' + j.exit : ''} · ${fmtElapsed(j.seconds * 1000)}</span><span class="spacer"></span>${live ? '<button class="danger" data-x="stop">■ stop</button>' : ''}<button data-x="close">✕</button></h2>
+    <div class="body"><code class="dim">${esc(j.cmd)}</code><pre class="joblog" id="job-log"></pre><div class="help plain">log: ${esc(j.log)}</div></div>`, 'job');
+  renderJobDialogTail();
+  d.addEventListener('click', async (e) => { const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'stop') { try { await request('job_stop', { sid, job: id }); toast('stopping job ' + id, 'warn'); } catch (err) { toast(err.message, 'err'); } } else { state.jobOpen = null; closeDialog(); } });
+}
+function renderJobDialogTail() { const pre = $('#job-log'); if (!pre) return; const stick = nearBottom(pre); pre.textContent = state.jobTails.get(state.jobOpen) || '(no output yet)'; if (stick) pre.scrollTop = pre.scrollHeight; }
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-job]'); if (!b) return; const pane = b.closest('[data-sid]'); const sid = (pane && pane.dataset.sid) || state.sid; if (sid) { e.stopPropagation(); jobDialog(sid, Number(b.dataset.job)); } }, true);
+
 function aboutDialog() {
   const v = state.version || {};
   const d = openDialog(`<div class="body"><img class="logo" src="icon-192.png" alt=""><pre class="banner" aria-label="KCODER">${esc(BANNER)}</pre>
@@ -1893,6 +1913,7 @@ async function setupDialog(pid) {
 // ---- pane chips: instruction file, PR + CI, review flag ----
 function paneChips(s) {
   let h = '';
+  for (const j of (s.jobs || []).filter((j) => j.status === 'running' || j.status === 'stopping')) h += `<span class="chip job" data-job="${j.id}" title="background job: ${esc(j.cmd)} (click for output, stop)">▶ ${esc(j.name.slice(0, 28))} · ${fmtElapsed((Date.now() / 1000 - j.started) * 1000)}</span>`;
   const ins = s.instructions || [];
   h += `<span class="chip" data-act="instructions" title="${ins.length ? 'instruction file(s) loaded for every turn: ' + esc(ins.join(', ')) + ' (click to edit)' : 'no instruction file in this repo (click to create KCODER.md)'}">${ins.length ? '📄 ' + esc(ins[0]) + (ins.length > 1 ? ' +' + (ins.length - 1) : '') : '📄 none'}</span>`;
   if (s.pr && s.pr.url) {

@@ -17,7 +17,7 @@ import os
 import re
 import sys
 
-CONNECTOR_WAIT_SECONDS = int(os.environ.get("KCODER_CONNECTOR_WAIT") or 240)   # inside the hook's 300s timeout
+CONNECTOR_WAIT_SECONDS = int(os.environ.get("KCODER_CONNECTOR_WAIT") or 480)   # inside the hook's 600s timeout
 
 # first word of the tool name (after mcp__<server>__) that only reads
 READ_VERBS = {

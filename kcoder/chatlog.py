@@ -52,12 +52,15 @@ def assistant_text(msg: dict) -> str:
     return ""
 
 
+KCODER_MESSAGE_PREFIXES = ("Background job ", "Your push ", "Your commit ", "Your connector request ")
+
+
 def auto_title(messages: list, fallback: str = "") -> str:
     for m in messages:
         if is_user_turn(m):
             text = user_text(m).strip()
-            if not text:
-                continue
+            if not text or text.startswith(KCODER_MESSAGE_PREFIXES):
+                continue        # messages kcoder sends itself (job results, approvals) do not name a session
             first = text.splitlines()[0].strip()
             first = re.sub(r"\s+", " ", first)
             first = re.sub(r"^[#>*\-\s]+", "", first)

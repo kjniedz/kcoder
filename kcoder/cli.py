@@ -1215,6 +1215,71 @@ def cmd_plan(args) -> int:
     return 0
 
 
+def cmd_job(args) -> int:
+    """`kcoder job run -- <cmd>` and friends: background jobs managed by kcoderd.
+    Meant to be run by an agent from inside a session (KCODER_SESSION is set
+    for it), but works from any shell with --sid."""
+    sid = args.sid or os.environ.get("KCODER_SESSION")
+    if not sid:
+        print("kcoder job: run this inside a kcoder session, or pass --sid <session id>", file=sys.stderr)
+        return 2
+    try:
+        client = DaemonClient.connect(autostart=False, reconcile=False)
+    except DaemonUnavailable as exc:
+        print(f"kcoder job: kcoderd is not running ({exc})", file=sys.stderr)
+        return 2
+    with client:
+        def show(j, tail=""):
+            print(f"job {j['id']} · {j['status']}" + (f" · exit {j['exit']}" if j.get('exit') is not None else "") + f" · {j['seconds']}s · {j['cmd']}")
+            if tail:
+                print(tail)
+        try:
+            if args.action in ("tail", "wait", "stop"):
+                if len(args.rest) != 1 or not args.rest[0].isdigit():
+                    print(f"kcoder job {args.action}: give the job id (kcoder job ls lists them)", file=sys.stderr)
+                    return 2
+                args.id = int(args.rest[0])
+            if args.action == "run":
+                cmd = " ".join(args.rest).strip()
+                if not cmd:
+                    print("kcoder job run: give the command after --", file=sys.stderr)
+                    return 2
+                j = client.request("job_start", sid=sid, cmd=cmd, name=args.name or "")["job"]
+                r = client.request("job_wait", args.wait + 30, sid=sid, job=j["id"], lines=args.lines, wait=args.wait)
+                j = r["job"]
+                if r["done"]:
+                    print(r["tail"])
+                    print(f"[kcoder job {j['id']} {j['status']}: exit {j['exit']} after {j['seconds']}s]")
+                    return int(j["exit"] or 0)
+                print(r["tail"])
+                print(f"[kcoder job {j['id']} is still running after {args.wait}s. Carry on with other work: kcoder sends you a message "
+                      f"with the result when it finishes. `kcoder job tail {j['id']}` shows progress, `kcoder job wait {j['id']}` waits, "
+                      f"`kcoder job stop {j['id']}` stops it. Log: {j['log']}]")
+                return 0
+            if args.action == "ls":
+                for j in client.request("job_list", sid=sid)["jobs"]:
+                    show(j)
+                return 0
+            if args.action == "tail":
+                r = client.request("job_tail", sid=sid, job=args.id, lines=args.lines)
+                show(r["job"], r["tail"])
+                return 0
+            if args.action == "wait":
+                r = client.request("job_wait", args.wait + 30, sid=sid, job=args.id, lines=args.lines, wait=args.wait)
+                show(r["job"], r["tail"])
+                if not r["done"]:
+                    print(f"[still running after {args.wait}s; kcoder sends you the result when it finishes]")
+                    return 0
+                return int(r["job"]["exit"] or 0)
+            if args.action == "stop":
+                show(client.request("job_stop", sid=sid, job=args.id)["job"])
+                return 0
+        except ClientError as exc:
+            print(f"kcoder job: {exc}", file=sys.stderr)
+            return 1
+    return 0
+
+
 def cmd_update(args) -> int:
     from . import updater
     running = already_running()
@@ -1536,7 +1601,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
 # entry point
 # ----------------------------------------------------------------------
 
-SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall", "login", "plan"}
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall", "login", "plan", "job"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1608,6 +1673,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--clear", action="store_true", help="forget recorded limits (after you reset one on claude.ai)")
     p.set_defaults(func=cmd_plan)
 
+    p = sub.add_parser("job", help="background jobs for long commands (run inside a session: kcoder job run -- <cmd>)")
+    p.add_argument("action", choices=["run", "ls", "tail", "wait", "stop"])
+    p.add_argument("rest", nargs="*", help="tail / wait / stop: the job id; run: the command (put it after -- so its own options are kept)")
+    p.add_argument("--sid", help="session id (default: $KCODER_SESSION)")
+    p.add_argument("--name", help="run: a short label for the job")
+    p.add_argument("--wait", type=int, default=60, help="run / wait: seconds to wait before returning (default 60)")
+    p.add_argument("--lines", type=int, default=60, help="how many output lines to show (default 60)")
+    p.set_defaults(func=cmd_job)
+
     p = sub.add_parser("update", help="check your kcoder checkout for new commits, or pull them")
     p.add_argument("--now", action="store_true", help="pull, rebuild and restart kcoderd")
     p.add_argument("--force", action="store_true", help="with --now: even while sessions are working")
@@ -1635,7 +1709,13 @@ def main() -> None:
     if not argv or argv[0] not in SUBCOMMANDS | {"chat", "-h", "--help", "--version"}:
         argv = ["chat"] + argv
     parser = build_parser()
+    cmd_after_dashes = None
+    if argv[:1] == ["job"] and "--" in argv:        # kcoder job run [options] -- <command ...>
+        cut = argv.index("--")
+        cmd_after_dashes, argv = argv[cut + 1:], argv[:cut]
     args = parser.parse_args(argv)
+    if cmd_after_dashes is not None:
+        args.rest = cmd_after_dashes
     try:
         code = args.func(args)
     except DaemonUnavailable as exc:

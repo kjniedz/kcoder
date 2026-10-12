@@ -56,6 +56,7 @@ from . import secrets as secretsmod
 from . import tasks as tasksmod
 from . import uninstall as uninstaller
 from . import worktree as wt
+from . import jobs as jobsmod
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
@@ -67,7 +68,7 @@ PERSISTED_EVENTS = {       # streamed text deltas are rebuilt from assistant_end
     "turn_start", "assistant_start", "assistant_end", "usage", "tool_call",
     "approval_request", "approval_result", "tool_result", "notice", "info",
     "error", "status", "turn_end", "user", "system", "retry", "compaction_start",
-    "compaction", "history_reset", "queue", "git", "fallback",
+    "compaction", "history_reset", "queue", "git", "fallback", "job",
 }
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -100,7 +101,8 @@ class Session:
         self._events_file = None
         self.shell = None   # phase 6: attached pty
         engine.sid = self.id          # for the connector-approval hook's command line
-        self.pending_review = None   # a push/commit waiting for approval: {rid, kind, trees, description, ts, future}
+        self.pending_review = None
+        self.jobs: dict = {}          # background jobs (kcoder.jobs.Job) by id   # a push/commit waiting for approval: {rid, kind, trees, description, ts, future}
         self.preview = None  # running dev server (kcoder.preview.Preview)
 
     @property
@@ -114,6 +116,7 @@ class Session:
         if self.pending_review:
             m["status"] = "waiting"
         m["pending_review"] = {k: self.pending_review[k] for k in ("rid", "kind", "description")} if self.pending_review else None
+        m["jobs"] = jobsmod.jobs_info(self) if self.jobs else [j for j in (self.meta.get("jobs") or []) if j.get("status") in ("running", "stopping", "lost")][-5:]
         m["model"] = self.engine.model
         m["cwd"] = self.engine.cwd
         m["trust"] = self.engine.trust
@@ -265,6 +268,7 @@ class Manager:
                     # an answer. Never re-run it silently - offer a resume.
                     resume_text = chatlog.user_text(messages.pop())
                     was_busy = True
+                jobsmod.mark_lost(meta)
                 orphan = meta.pop("turn_pid", None)
                 owner = meta.pop("turn_daemon", None)
                 if orphan and _turn_owner_alive(owner):
@@ -405,6 +409,54 @@ class Manager:
 
     def busy_names(self) -> list:
         return [s.meta["name"] for s in self.sessions.values() if s.engine.busy]
+
+    def start_job(self, session: Session, cmd: str, name: str = "") -> dict:
+        jid = int(session.meta.get("job_seq") or 0) + 1
+        session.meta["job_seq"] = jid
+        env = dict(os.environ)
+        try:
+            env.update(identity.git_env())
+        except Exception:  # noqa: BLE001
+            pass
+        env.update(KCODER_SESSION=session.id, KCODER_DATA_DIR=paths.DATA_DIR, KCODER_PORT=str(paths.DEFAULT_PORT), FORCE_COLOR="0", CI="1")
+        env.pop("KCODER_SOCKET", None)
+        job = jobsmod.Job(self, session, jid, cmd, name, session.engine.cwd, env)
+        job.start()
+        session.jobs[jid] = job
+        session.meta["jobs"] = jobsmod.jobs_info(session)
+        session.save_meta()
+        self._record(session, {"t": "job", "ts": time.time(), "id": jid, "name": job.name, "cmd": cmd, "status": "running",
+                               "text": f"job {jid} started: {job.name}"})
+        self.broadcast_sessions()
+        return job.info()
+
+    def on_job_end(self, session: Session, job) -> None:
+        """Runs on the event loop when a job's process exits."""
+        session.meta["jobs"] = jobsmod.jobs_info(session)
+        session.save_meta()
+        secs = round((job.ended or time.time()) - job.started)
+        tail = job.tail_text(40)
+        self._record(session, {"t": "job", "ts": time.time(), "id": job.id, "name": job.name, "cmd": job.cmd, "status": job.status,
+                               "exit": job.exit, "seconds": secs, "text": f"job {job.id} {job.status}: {job.name} (exit {job.exit}, {secs}s)"})
+        for fut in job.waiters:
+            if not fut.done():
+                fut.set_result(True)
+        job.waiters = []
+        if job.notify:
+            text = (f"Background job {job.id} ({job.name}) {job.status} with exit code {job.exit} after {secs}s. "
+                    f"Last lines of its output:\n```\n{tail[-3000:]}\n```\nFull log: {job.log_path}")
+            if session.engine.busy:
+                session.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+            else:
+                try:
+                    self.record_user(session, text, [])
+                    session.engine.send(text, [])
+                except EngineBusy:
+                    session.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+            session.save_meta()
+        if job.status != "done":
+            self.notify(f"{session.meta['name']}: job {job.status}", f"{job.name} (exit {job.exit})", session.id)
+        self.broadcast_sessions()
 
     def resolve_review(self, session: Session, approved: bool, reason: str = "") -> None:
         """Answer a push/commit waiting for review (from the inbox, the pane,
@@ -2082,6 +2134,34 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t in ("shell_open", "shell_input", "shell_resize", "shell_close", "shell_kill_tool"):
         from . import shell
         return shell.handle_request(manager, session, t, req)
+
+    if t == "job_start":
+        cmd = str(req.get("cmd") or "").strip()
+        if not cmd:
+            raise RequestError("empty command")
+        running = [j for j in session.jobs.values() if j.status == "running"]
+        if len(running) >= 8:
+            raise RequestError("8 jobs are already running in this session; wait for or stop one")
+        return {"job": manager.start_job(session, cmd, str(req.get("name") or ""))}
+    if t == "job_list":
+        return {"jobs": jobsmod.jobs_info(session)}
+    if t in ("job_tail", "job_wait", "job_stop"):
+        job = session.jobs.get(int(req.get("job") or 0))     # "id" is the request id on the wire
+        if job is None:
+            raise RequestError("no such job in this session (jobs do not survive a daemon restart)")
+        if t == "job_stop":
+            job.stop()
+            return {"job": job.info()}
+        if t == "job_wait" and job.status in ("running", "stopping"):
+            fut = asyncio.get_running_loop().create_future()
+            job.waiters.append(fut)
+            try:
+                await asyncio.wait_for(asyncio.shield(fut), timeout=max(1, min(int(req.get("wait") or 60), 600)))
+            except asyncio.TimeoutError:
+                job.notify = True     # the caller moved on: message the session when it ends
+                if fut in job.waiters:
+                    job.waiters.remove(fut)
+        return {"job": job.info(), "done": job.status not in ("running", "stopping"), "tail": job.tail_text(int(req.get("lines") or 60))}
 
     raise RequestError(f"unknown request type: {t}")
 
