@@ -667,3 +667,8 @@ table.grid tr[data-sha] { cursor: pointer; }
 .palette .item.off span:first-child { color: var(--fg-mute); }
 .keys-q { flex: 0 1 260px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; padding: 3px 8px; font-size: 12px; color: var(--fg); text-transform: none; letter-spacing: 0; }
 .keys-q:focus { outline: none; border-color: var(--focus); }
+
+.rules { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.rules .rule { display: flex; gap: 10px; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 4px; }
+.rules .rtext { color: var(--fg); flex: 0 0 40%; }
+.rules .rwhat { color: var(--fg-dim); }

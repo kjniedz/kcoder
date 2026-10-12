@@ -57,6 +57,7 @@ from . import tasks as tasksmod
 from . import uninstall as uninstaller
 from . import worktree as wt
 from . import jobs as jobsmod
+from . import rules as rulesmod
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS
@@ -134,6 +135,7 @@ class Session:
         m["worktree_attached"] = bool(info and wt.is_attached(info))
         root = (self.meta.get("project") or {}).get("path") or self.engine.cwd
         m["instructions"] = [os.path.basename(p) for p in projects.instruction_files(root)]
+        m["rules"] = len(rulesmod.load(root, self.engine.cwd))
         m["review_policy"] = self.manager.cfg.get("review_required", "push")
         m["active_model"] = self.engine.active_label()
         m["fallback"] = self.meta.get("fallback")
@@ -1623,7 +1625,8 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         files = [{"path": p, "name": os.path.basename(p), "text": open(p, "r", encoding="utf-8", errors="replace").read(60_000)}
                  for p in projects.instruction_files(root)]
         return {"root": root, "files": files, "names": list(projects.INSTRUCTIONS_FILES[:1] + projects.AGENT_FILES),
-                "path": projects.instructions_path(root), "text": projects.load_instructions(root, meta.get("cwd"))}
+                "path": projects.instructions_path(root), "text": projects.load_instructions(root, meta.get("cwd")),
+                "rules": rulesmod.summary(root, meta.get("cwd"))}
 
     if t == "schedules":
         action = req.get("action") or "list"

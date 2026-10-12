@@ -298,6 +298,26 @@ never written to logs or history.
 `AGENTS.md` and `CLAUDE.md` when present. The pane header shows which file is
 active; click it to edit or create one.
 
+**Rules in plain English.** Bullet lines in those files that read like a
+rule are enforced as checks, not just read by the model:
+
+- `never touch migrations`, `do not change src/legacy/ or *.lock files`:
+  no write, edit, commit or push touches a matching path.
+- `only change files under src/ and tests/`: writes anywhere else are
+  refused.
+- `never commit .env files`: matching files cannot be staged or pushed.
+- `never run git push --force`, `do not run rm -rf`: shell commands
+  containing that text are refused.
+- `run the tests before committing`, `run npm run lint before pushing`: the
+  command runs in the git hook and a failure blocks the commit or push
+  ("the tests" resolves to `npm test`, `pytest`, `go test`, `cargo test` or
+  `make test`, whichever the repo has).
+
+A refusal names the rule and the file so the agent explains instead of
+retrying. The checks run in kcoder's own tools, in Claude Code's Edit, Write
+and Bash tools, and in the worktree's git hooks. The instructions dialog lists
+every rule it understood and what it does; the pane chip shows the count.
+
 ## Automation
 
 - **Task queue**: described above. `max_concurrent` caps how many sessions

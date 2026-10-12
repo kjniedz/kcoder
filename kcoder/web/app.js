@@ -583,7 +583,7 @@ function buildTermHtml(store, sid, opts = {}) {
         break;
       }
       case 'approval_result': out.push(`<span class="t-dim">  ${e.approved ? '✓ approved' : '✗ declined'}</span>\n`); break;
-      case 'tool_result': if (e.is_error) out.push(`<span class="t-dim">  ${e.dry_run ? '◌ dry run: not executed' : '✗ ' + esc(stripAnsi(e.content || '').split('\n')[0])}</span>\n`); break;
+      case 'tool_result': if (e.is_error) out.push(`<span class="t-dim">  ${e.dry_run ? '◌ dry run: not executed' : (e.rule ? '⛔ ' : '✗ ') + esc(stripAnsi(e.content || '').split('\n')[0])}</span>\n`); break;
       case 'error': case 'notice': out.push(`<span class="t-err">${esc(e.text)}</span>\n`); break;
       case 'retry': out.push(`<span class="t-warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</span>\n`); break;
       case 'info': case 'system': case 'git': case 'job': out.push(`<span class="t-dim">${esc(e.text || '')}</span>\n`); break;
@@ -1922,7 +1922,7 @@ function paneChips(s) {
   let h = '';
   for (const j of (s.jobs || []).filter((j) => j.status === 'running' || j.status === 'stopping')) h += `<span class="chip job" data-job="${j.id}" title="background job: ${esc(j.cmd)} (click for output, stop)">▶ ${esc(j.name.slice(0, 28))} · ${fmtElapsed((Date.now() / 1000 - j.started) * 1000)}</span>`;
   const ins = s.instructions || [];
-  h += `<span class="chip" data-act="instructions" title="${ins.length ? 'instruction file(s) loaded for every turn: ' + esc(ins.join(', ')) + ' (click to edit)' : 'no instruction file in this repo (click to create KCODER.md)'}">${ins.length ? '📄 ' + esc(ins[0]) + (ins.length > 1 ? ' +' + (ins.length - 1) : '') : '📄 none'}</span>`;
+  h += `<span class="chip" data-act="instructions" title="${ins.length ? 'instruction file(s) loaded for every turn: ' + esc(ins.join(', ')) + (s.rules ? ' · ' + s.rules + ' plain-English rule' + (s.rules === 1 ? '' : 's') + ' enforced as checks' : '') + ' (click to edit)' : 'no instruction file in this repo (click to create KCODER.md)'}">${ins.length ? '📄 ' + esc(ins[0]) + (ins.length > 1 ? ' +' + (ins.length - 1) : '') + (s.rules ? ' · ' + s.rules + ' rule' + (s.rules === 1 ? '' : 's') : '') : '📄 none'}</span>`;
   if (s.pr && s.pr.url) {
     const ck = s.pr.checks || 'none'; const icon = ck === 'success' ? '✓' : ck === 'failure' ? '✗' : ck === 'pending' ? '◐' : '';
     h += `<a class="chip pr ${esc(ck)}" href="${esc(s.pr.url)}" target="_blank" rel="noopener" title="${esc(s.pr.title || '')} · ${esc((s.pr.state || '').toLowerCase())}${s.pr.draft ? ' · draft' : ''} · checks: ${esc(ck)}">PR #${esc(s.pr.number)}${s.pr.draft ? ' draft' : ''} ${icon}</a>`;
@@ -1993,7 +1993,7 @@ async function instructionsDialog(sid) {
   const names = info.files.length ? info.files.map((f) => f.name) : ['KCODER.md'];
   let cur = names[0];
   const d = openDialog(`<h2>instructions · ${esc((s.project || {}).name || s.name || '')}<span class="spacer"></span><button data-x="close">✕</button></h2>
-    <div class="body"><div class="seg" id="ins-tabs"></div><p class="help plain" id="ins-help"></p><textarea id="ins-text" style="min-height:46vh;font-family:ui-monospace,monospace"></textarea></div>
+    <div class="body"><div class="seg" id="ins-tabs"></div><p class="help plain" id="ins-help"></p><textarea id="ins-text" style="min-height:40vh;font-family:ui-monospace,monospace"></textarea><div id="ins-rules" class="rules"></div></div>
     <div class="foot"><span class="help" id="ins-path"></span><span class="spacer" style="flex:1"></span><button data-x="cancel">cancel</button><button class="primary" data-x="save">save</button></div>`, 'instructions');
   const tabs = $('#ins-tabs', d), ta = $('#ins-text', d);
   const show = () => {
@@ -2002,6 +2002,9 @@ async function instructionsDialog(sid) {
     ta.value = f ? f.text : '';
     $('#ins-path', d).textContent = f ? f.path : `${info.root}/${cur} (new)`;
     $('#ins-help', d).textContent = cur === 'CLAUDE.md' && s.provider === 'claude' ? 'Claude Code reads CLAUDE.md itself, so kcoder does not append it a second time.' : 'Loaded into the system prompt of every turn in this repo. Saving writes the project root and, for this session, its worktree.';
+    const rules = (info.rules || []).filter((r) => r.source === cur);
+    $('#ins-rules', d).innerHTML = `<div class="help">rules enforced as checks${rules.length ? '' : ' · none yet'}: bullet lines like "never touch migrations", "only change files under src/", "never commit .env files", "never run git push --force", "run the tests before committing", "run npm run lint before pushing"</div>` +
+      rules.map((r) => `<div class="rule"><span class="rtext">${esc(r.text)}</span><span class="rwhat">${esc(r.what)}</span></div>`).join('');
   };
   tabs.addEventListener('click', (e) => { const b = e.target.closest('[data-n]'); if (b) { cur = b.dataset.n; show(); } });
   d.addEventListener('click', async (e) => { const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x !== 'save') { closeDialog(); return; }

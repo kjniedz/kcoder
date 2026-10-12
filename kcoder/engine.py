@@ -44,7 +44,7 @@ import uuid
 import anthropic
 import openai
 
-from . import projects, routing
+from . import projects, routing, rules as repo_rules
 from .providers import NotOnPlan, PlanLimitReached, ProviderOutage
 from .tools import DANGEROUS_TOOLS, DRY_RUN_NOTE, READ_ONLY_TOOLS, describe_tool_call, dry_run_allowed, execute_tool
 
@@ -309,6 +309,21 @@ class Engine:
         if self.trust == TRUST_DRY:
             return False                    # nothing to approve: writes are refused outright
         return tool_name in DANGEROUS_TOOLS  # TRUST_READ
+
+    def _rule_block(self, name: str, tool_input: dict) -> str | None:
+        """The repo's KCODER.md rules (kcoder.rules): a refusal message or None."""
+        try:
+            rs = repo_rules.load(self.project_root, self.cwd)
+            if not rs:
+                return None
+            if name in ("write_file", "edit_file"):
+                path = str((tool_input or {}).get("path") or "")
+                return repo_rules.check_write(rs, os.path.join(self.cwd, path) if not os.path.isabs(path) else path, self.scope or self.project_root or self.cwd)
+            if name == "run_bash":
+                return repo_rules.check_command(rs, str((tool_input or {}).get("command") or ""))
+        except Exception as exc:  # noqa: BLE001 - a broken rules file must not stop work
+            logging.getLogger("kcoderd").warning("rules check failed: %s", exc)
+        return None
 
     def session_env(self) -> dict:
         """Environment that lets `kcoder job` (and hooks) find this session and the daemon."""
@@ -685,6 +700,11 @@ class Engine:
         call_id = call_id or uuid.uuid4().hex[:12]
         description = describe_tool_call(name, tool_input)
         self.emit("tool_call", id=call_id, name=name, input=tool_input, description=description)
+
+        blocked = self._rule_block(name, tool_input)
+        if blocked:
+            self.emit("tool_result", id=call_id, name=name, content=blocked, truncated=False, is_error=True, elapsed=0.0, rule=True)
+            return blocked, True
 
         if self.trust == TRUST_DRY and not dry_run_allowed(name, tool_input):
             self.emit("tool_result", id=call_id, name=name, content=DRY_RUN_NOTE, truncated=False, is_error=True, elapsed=0.0, dry_run=True)

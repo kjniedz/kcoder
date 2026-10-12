@@ -600,7 +600,8 @@ def _claude_settings(sid: str | None = None) -> str | None:
     """Inline settings for `claude --settings`: no AI attribution on commits
     (unless the user configured a trailer), and the connector-approval hook
     that routes every `mcp__*` tool call through kcoder (reads pass, writes
-    wait for approval)."""
+    wait for approval); the same hook applies KCODER.md rules to Edit / Write /
+    Bash."""
     import json as _json
     import shlex as _shlex
     from . import identity, paths
@@ -609,7 +610,8 @@ def _claude_settings(sid: str | None = None) -> str | None:
         settings.update({"includeCoAuthoredBy": False, "attribution": {"commit": "", "pr": ""}})
     if sid:
         cmd = f"{_shlex.quote(sys.executable)} -P -m kcoder.permit --sid {_shlex.quote(str(sid))} --data-dir {_shlex.quote(paths.DATA_DIR)}"
-        settings["hooks"] = {"PreToolUse": [{"matcher": "mcp__.*", "hooks": [{"type": "command", "command": cmd, "timeout": 600}]}]}
+        settings["hooks"] = {"PreToolUse": [{"matcher": "mcp__.*", "hooks": [{"type": "command", "command": cmd, "timeout": 600}]},
+                                            {"matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{"type": "command", "command": cmd, "timeout": 30}]}]}
     return _json.dumps(settings) if settings else None
 
 

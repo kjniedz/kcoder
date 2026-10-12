@@ -1,4 +1,4 @@
-"""Connector approvals: Claude Code's PreToolUse hook for MCP tools.
+"""Connector approvals and repo rules: Claude Code's PreToolUse hook.
 
 Claude Code runs `python -m kcoder.permit --sid <sid> --data-dir <dir>` before
 every `mcp__*` tool call (kcoder passes the hook in `--settings`). Reads run by
@@ -98,7 +98,7 @@ def decide(a, hook_input: dict) -> str | None:
         return None
     tool_name = str(hook_input.get("tool_name") or "")
     if not tool_name.startswith("mcp__"):
-        return None
+        return rules_decision(tool_name, hook_input.get("tool_input") or {})
     if classify(tool_name) == "read":
         return decision("allow")
     from . import config
@@ -119,6 +119,26 @@ def decide(a, hook_input: dict) -> str | None:
     return decision("deny", "The user declined this action in kcoder" + (f": {reply.get('reason')}" if reply.get("reason") else "") + ". Do not retry it; ask what they would like instead.")
 
 
+FILE_TOOLS = {"Edit": "file_path", "Write": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
+
+
+def rules_decision(tool_name: str, tool_input: dict) -> str | None:
+    """KCODER.md rules for Claude Code's own tools (Edit / Write / Bash): deny with the rule, or None."""
+    from . import rules as R
+    cwd = os.getcwd()
+    rs = R.load(cwd)
+    if not rs:
+        return None
+    reason = None
+    if tool_name in FILE_TOOLS:
+        path = str(tool_input.get(FILE_TOOLS[tool_name]) or "")
+        if path:
+            reason = R.check_write(rs, path if os.path.isabs(path) else os.path.join(cwd, path), cwd)
+    elif tool_name == "Bash":
+        reason = R.check_command(rs, str(tool_input.get("command") or ""))
+    return decision("deny", reason) if reason else None
+
+
 def main(argv: list | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m kcoder.permit")
     p.add_argument("--sid", required=True)
@@ -132,7 +152,7 @@ def main(argv: list | None = None) -> int:
     try:
         out = decide(a, hook_input)
     except Exception as exc:  # noqa: BLE001 - never let a hook crash into an unreviewed write
-        out = decision("deny", f"kcoder's connector check failed ({exc}); ask the user to do this by hand.") if str(hook_input.get("tool_name") or "").startswith("mcp__") else None
+        out = decision("deny", f"kcoder's connector check failed ({exc}); ask the user to do this by hand.") if str(hook_input.get("tool_name") or "").startswith("mcp__") else None   # a broken rules file never blocks Edit / Bash
     if out:
         print(out)
     return 0

@@ -133,6 +133,16 @@ def pre_commit(a) -> int:
     if findings:
         return _block("commit blocked: this commit would add secrets",
                       sec.describe(findings) + f"\nRemove them (or add an entry to {sec.ALLOWLIST_REL} for a false positive) and commit again.")
+    from . import rules as R
+    rs = R.load(cwd)
+    if rs:
+        msg = R.check_commit_paths(rs, staged)
+        if msg:
+            return _block("commit blocked by this repo's rules", msg + "\nUnstage them and commit again, or ask the user to change the rule.")
+        if not os.environ.get("KCODER_SKIP_RULES"):
+            msg = R.run_before(rs, R.BEFORE_COMMIT, cwd)
+            if msg:
+                return _block("commit blocked by this repo's rules", msg)
     if _policy(a.data_dir) == "commit" and not os.environ.get("KCODER_SKIP_REVIEW"):
         from . import review
         tree = _git(cwd, "write-tree").strip()
@@ -170,6 +180,19 @@ def pre_push(a, stdin_text: str) -> int:
     if findings:
         return _block("push blocked: these commits contain secrets",
                       sec.describe(findings) + "\nRewrite the commits without them (or allowlist a false positive) and push again.")
+    from . import rules as R
+    rs = R.load(cwd)
+    if rs and ranges:
+        pushed = set()
+        for _, rng in ranges:
+            pushed |= set(_git(cwd, "log", "--format=", "--name-only", "--diff-filter=ACMRD", *rng).split())
+        msg = R.check_commit_paths(rs, sorted(pushed))
+        if msg:
+            return _block("push blocked by this repo's rules", msg + "\nRewrite the commits without them, or ask the user to change the rule.")
+        if not os.environ.get("KCODER_SKIP_RULES"):
+            msg = R.run_before(rs, R.BEFORE_PUSH, cwd)
+            if msg:
+                return _block("push blocked by this repo's rules", msg)
     if _policy(a.data_dir) == "push" and not os.environ.get("KCODER_SKIP_REVIEW"):
         from . import review
         unapproved = []
