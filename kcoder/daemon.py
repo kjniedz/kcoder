@@ -815,7 +815,7 @@ class Manager:
                 root = projects.project_root(cwd)
                 if not projects.git_toplevel(root) and self.cfg.get("worktrees", True):
                     await loop.run_in_executor(None, repos.init_repo, root)
-                provider = task.get("provider") or auth.load_config().get("default_provider")
+                provider = task.get("provider") or auth.default_provider()
                 if provider not in PROVIDERS:
                     raise ValueError(f"unknown provider: {provider}")
                 session = self.create(cwd=cwd, provider=provider, model=task.get("model"),
@@ -1400,7 +1400,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {"results": manager.search(req.get("q") or "", req.get("project"), int(req.get("limit") or 50))}
 
     if t == "create":
-        provider = req.get("provider") or auth.load_config().get("default_provider")
+        provider = req.get("provider") or auth.default_provider()
         if provider not in PROVIDERS:
             raise RequestError(f"unknown provider: {provider}")
         if manager.cap_reached():

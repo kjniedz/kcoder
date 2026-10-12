@@ -62,6 +62,16 @@ def delete_credentials() -> bool:
         return False
 
 
+def default_provider() -> str | None:
+    """The configured default provider; with none configured, Claude Code
+    (your Claude plan) when it is installed, as the README promises."""
+    pid = load_config().get("default_provider")
+    if pid:
+        return pid
+    from .providers import claude_available
+    return "claude" if claude_available() else None
+
+
 def set_default_provider(provider_id: str) -> None:
     config = load_config()
     config["default_provider"] = provider_id

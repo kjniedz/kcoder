@@ -627,8 +627,7 @@ def ensure_credentials(provider_id: str) -> bool:
 
 
 def choose_provider(requested: str | None) -> str | None:
-    config = auth.load_config()
-    provider_id = requested or config.get("default_provider")
+    provider_id = requested or auth.default_provider()
     if provider_id is not None and provider_id not in PROVIDERS:
         console.print(f"[red]Unknown provider: {provider_id}[/red]", highlight=False)
         return None
@@ -1486,8 +1485,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
     are declined unless -y is given. The session is deleted afterwards
     unless --keep is set.
     """
-    config_data = auth.load_config()
-    provider_id = args.provider or config_data.get("default_provider")
+    provider_id = args.provider or auth.default_provider()
     if provider_id not in PROVIDERS or not auth.has_credentials(provider_id):
         print(
             f"kcoder: no credentials for provider {provider_id or '(none)'}; "
