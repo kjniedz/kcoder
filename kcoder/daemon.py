@@ -60,6 +60,7 @@ from . import worktree as wt
 from . import jobs as jobsmod
 from . import rules as rulesmod
 from . import issues as issuesmod
+from . import brief as briefmod
 from .providers import plan_usage as providers_plan_usage
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
@@ -1401,6 +1402,16 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
 
     if t == "stats":
         return {"stats": manager.stats()}
+
+    if t == "brief":
+        # the morning brief: what every session did since `since` (default 24h), what waits on you, what is in review
+        since = req.get("since")
+        try:
+            since = float(since) if since else None
+        except (TypeError, ValueError):
+            since = None
+        data = await asyncio.get_running_loop().run_in_executor(None, briefmod.build, manager, since)
+        return {"brief": data, "markdown": briefmod.to_markdown(data)}
 
     if t == "templates":
         # session templates: one-click starts with repo, provider, model, trust, first task and queue

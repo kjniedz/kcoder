@@ -332,6 +332,13 @@ every rule it understood and what it does; the pane chip shows the count.
 
 - **Task queue**: described above. `max_concurrent` caps how many sessions
   run at once; drag to reorder, pause, cancel.
+- **Morning brief**: the first time you open kcoder each day it shows what
+  every session did since yesterday (what you asked, its last reply, commits
+  with files and lines, PR and checks, running jobs), what is waiting on you
+  (approvals, questions, errors) and what is in review (changes, open PRs
+  with their checks), plus the task queue and your plan usage. Every item
+  opens the session. Any time: ⌘K → brief, or `kcoder brief` (`--since 72`
+  for three days); **copy** gives it as markdown.
 - **Auto-fix on CI failure**: kcoder polls the checks of every open PR a
   session opened. When one goes red, it fetches the failing job's log
   (`gh run view --log-failed`) and sends it to that session with "fix the

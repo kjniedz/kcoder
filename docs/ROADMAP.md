@@ -15,8 +15,8 @@ here so any session can pick up where the last one stopped.
 | 9 | **GitHub issues in**: an issue URL as a task; the PR links back and closes it. | done (`kcoder/issues.py`: URL or owner/name#N in a task or first message; repo defaults to the issue's; issue chip; PR title from the issue, body starts with Closes #N, comment on the issue with the PR link) |
 | 8 | **Session templates**: one-click starts with repo, model, trust and first prompt. | done (saved from the new-session dialog into config `templates`; template picker there, ⌘K `start: name`, `kcoder start <name>`; daemon request `templates` list / save / remove / run) |
 | 7 | **Auto-fix on CI failure**: a red check on a draft PR opens a session with the failing log; the fix lands in review. | done (PR poll loop: `pr.failure_report` via gh pr checks + gh run view --log-failed, sent to the owning session once per head commit, max three per PR; the push goes through the review gate; Settings toggle `ci_autofix`) |
-| 10 | **Morning brief**: what every session did, what is waiting, what is in review. | next |
-| 14 | **Search across transcripts** with filters (repo, date, free text). | |
+| 10 | **Morning brief**: what every session did, what is waiting, what is in review. | done (`kcoder/brief.py`; request `brief`; dialog opens once a day on the first visit and from ⌘K; `kcoder brief`; copy as markdown) |
+| 14 | **Search across transcripts** with filters (repo, date, free text). | next |
 | 16 | **Keyboard-only inbox**: next waiting item, approve, next. | |
 | 17 | **Export a session as a shareable HTML page**. | |
 | 11 | **Voice input** on the phone approval page and the composer. | |

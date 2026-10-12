@@ -214,6 +214,7 @@ async function onConnected() {
     try { const r = await request('ui_state'); if (r.state) { if (r.state.layout) { state.layout = r.state.layout; localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); } if (Array.isArray(r.state.order)) { state.order = r.state.order; localStorage.setItem('kcoder.order', JSON.stringify(state.order)); } } } catch {}
   }
   applyUrlParams();
+  setTimeout(maybeMorningBrief, 1500);
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
   for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1);
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
@@ -1658,6 +1659,7 @@ async function openNewSession(pre = {}) {
 function paletteItems() {
   const items = SHORTCUTS.filter((sc) => sc.palette).map((sc) => [sc.palette, () => sc.run({ key: '' }), shortcutKeys(sc)]);
   items.push(
+    ['brief: what every session did, what waits on you, what is in review', () => briefDialog()],
     ['settings', () => settingsDialog()], ['about kcoder', () => aboutDialog()], ['your Claude plan (connect, limits)', () => claudeDialog()],
     ['connect your AI (sign in to a provider)', () => setupDialog()], ['connect GitHub (commit identity)', () => setupDialog()], 
 ['toggle broadcast (send to all panes)', toggleBroadcast], 
@@ -1730,6 +1732,44 @@ function renderClaudeButton() {
   if (!lim.length && use.some((u) => u.utilization >= 0.8)) b.className = 'warn';
   b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.` + ((c.usage || []).length ? '\n' + c.usage.map(planUsageText).join('\n') + '\nFrom Claude Code\'s rate-limit reports; updated on every turn. Click for the per-session share.' : '');
 }
+// ---- the morning brief: what every session did, what waits on you, what is in review ----
+async function briefDialog(opts = {}) {
+  let r; try { r = await request('brief', { since: opts.since || null }); } catch (e) { toast(e.message, 'err'); return; }
+  const b = r.brief, t = b.totals;
+  const when = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  const item = (x) => `<div class="item" data-open="${esc(x.sid)}"><span class="sess">${esc(x.name)}</span><code>${esc(x.kind)}: ${esc(x.text)}${x.checks ? ' · checks ' + esc(x.checks) : ''}${x.draft ? ' · draft' : ''}</code><span class="meta">${x.ts ? age(x.ts) + ' ago' : ''}</span>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">open PR</a>` : ''}<button data-open="${esc(x.sid)}">open</button></div>`;
+  const sess = (s) => `<div class="brief-s"><div class="h"><button class="link" data-open="${esc(s.sid)}">${esc(s.name)}</button>${s.title && s.title !== s.name ? ` · ${esc(s.title)}` : ''}<span class="meta">${esc(s.project)} · ${esc(s.status)} · ${s.last_activity ? age(s.last_activity) + ' ago' : ''}</span></div>
+      ${s.asked ? `<div class="l"><span class="k">asked</span>${esc(s.asked)}</div>` : ''}${s.did ? `<div class="l"><span class="k">last reply</span>${esc(s.did)}</div>` : ''}
+      ${s.commit_count ? `<div class="l"><span class="k">commits</span>${s.commit_count} · ${s.files} file(s) · <span class="add">+${s.added}</span> <span class="del">-${s.removed}</span>: ${esc(s.commits.map((c) => c.subject.slice(0, 70)).join('; '))}</div>` : ''}
+      ${s.pr ? `<div class="l"><span class="k">PR</span><a href="${esc(s.pr.url)}" target="_blank" rel="noopener">#${esc(s.pr.number)}</a> · checks ${esc(s.pr.checks || 'none')}</div>` : ''}${s.needs_review ? `<div class="l"><span class="k">review</span>changes wait for your review <button data-changes="${esc(s.sid)}">changes</button></div>` : ''}
+      ${s.jobs.length ? `<div class="l"><span class="k">jobs</span>${esc(s.jobs.map((j) => j.name + ' (' + j.status + ')').join(', '))}</div>` : ''}${s.handed_off_to ? `<div class="l"><span class="k">handoff</span>continued in a fresh session</div>` : ''}
+      <div class="l dim">${s.turns} turn(s) · ${fmtTokens(s.tokens)} tokens${s.cost ? ' · ' + fmtUsd(s.cost) : ''}</div></div>`;
+  const d = openDialog(`<h2>brief <span class="help">since ${esc(when(b.since))}</span><span class="spacer"></span><button data-b="24">24h</button><button data-b="72">3 days</button><button data-b="168">week</button><button data-b="copy" title="copy as markdown">copy</button><button data-x="close">✕</button></h2>
+    <div class="body brief">
+      <div class="status"><span><b>${t.sessions}</b> session(s)</span><span><b>${t.turns}</b> turn(s)</span><span><b>${fmtTokens(t.tokens)}</b> tokens</span><span><b>${t.commits}</b> commit(s) · ${t.files} file(s) · <span class="add">+${t.added}</span> <span class="del">-${t.removed}</span></span>${t.cost ? `<span>${fmtUsd(t.cost)} on API keys</span>` : ''}${(b.plan || []).map((p) => `<span>${esc(p.label)} <b>${Math.round(p.utilization * 100)}%</b></span>`).join('')}</div>
+      <div class="label-h">waiting on you · ${b.waiting.length}</div><div class="list">${b.waiting.map(item).join('') || '<div class="empty-row">nothing</div>'}</div>
+      <div class="label-h">in review · ${b.review.length}</div><div class="list">${b.review.map(item).join('') || '<div class="empty-row">nothing</div>'}</div>
+      ${(b.tasks.queued || b.tasks.running || b.tasks.review || b.tasks.failed) ? `<div class="help plain">task queue: ${b.tasks.running} running · ${b.tasks.queued} queued · ${b.tasks.review} in review · ${b.tasks.failed} failed${b.tasks.paused ? ' · paused' : ''} <button data-tasks="1">open</button></div>` : ''}
+      <div class="label-h">sessions · ${b.sessions.length}</div>${b.sessions.map(sess).join('') || '<div class="empty-row">no session was active</div>'}
+    </div>`, 'brief');
+  d.classList.add('wide');
+  localStorage.setItem('kcoder.brief.seen', String(Date.now()));
+  d.addEventListener('click', async (e) => {
+    const bb = e.target.closest('[data-b]'); if (bb) { if (bb.dataset.b === 'copy') { try { await navigator.clipboard.writeText(r.markdown); toast('brief copied as markdown', 'ok'); } catch { toast('copy failed', 'err'); } } else { closeDialog(); briefDialog({ since: Date.now() / 1000 - Number(bb.dataset.b) * 3600 }); } return; }
+    if (e.target.closest('[data-x]')) { closeDialog(); return; }
+    const c = e.target.closest('[data-changes]'); if (c) { closeDialog(); changesDialog(c.dataset.changes); return; }
+    if (e.target.closest('[data-tasks]')) { closeDialog(); setView('tasks'); return; }
+    const o = e.target.closest('[data-open]'); if (o) { closeDialog(); state.sid = o.dataset.open; if (state.view === 'chat') assignPane(state.layout.focus, o.dataset.open); else { if (state.view !== 'wall') setView('wall'); focusPane(o.dataset.open); } }
+  });
+}
+function maybeMorningBrief() {
+  // once a day, on the first open: show the brief when something happened or waits
+  const seen = Number(localStorage.getItem('kcoder.brief.seen') || 0);
+  if (seen && new Date(seen).toDateString() === new Date().toDateString()) return;
+  if (state.dialog) return;
+  request('brief', {}).then((r) => { const b = r.brief; if (!b.sessions.length && !b.waiting.length && !b.review.length) { localStorage.setItem('kcoder.brief.seen', String(Date.now())); return; } if (!state.dialog) briefDialog(); }).catch(() => {});
+}
+
 // ---- what went wrong: the last error of a session, with send-again and a copyable report ----
 function lastErrorText(sid) { const st = state.events.get(sid); if (!st) return ''; for (let i = st.list.length - 1; i >= 0; i--) if (st.list[i].t === 'error') return st.list[i].text || ''; return ''; }
 async function errorDialog(sid) {

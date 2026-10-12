@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import re
@@ -1220,6 +1221,23 @@ def cmd_plan(args) -> int:
     return 0
 
 
+def cmd_brief(args) -> int:
+    """`kcoder brief`: what every session did since yesterday, what waits on you, what is in review."""
+    try:
+        client = DaemonClient.connect()
+    except DaemonUnavailable as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
+        return 1
+    with client:
+        reply = client.request("brief", 120, since=time.time() - float(args.since) * 3600 if args.since else None)
+    if args.json:
+        print(json.dumps(reply["brief"], indent=2))
+        return 0
+    from rich.markdown import Markdown
+    console.print(Markdown(reply["markdown"]))
+    return 0
+
+
 def cmd_start(args) -> int:
     """`kcoder start <template>`: start a session from a saved template (repo, model, trust, first task)."""
     try:
@@ -1635,7 +1653,7 @@ def cmd_oneshot(args, prompt_text: str) -> int:
 # entry point
 # ----------------------------------------------------------------------
 
-SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall", "login", "plan", "job", "start"}
+SUBCOMMANDS = {"ls", "list", "attach", "rm", "ui", "app", "daemon", "help", "history", "search", "export", "update", "uninstall", "login", "plan", "job", "start", "brief"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1702,6 +1720,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("login", help="connect or reconnect your Claude plan (subscription sign-in, never an API key)")
     p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("brief", help="the morning brief: what every session did, what waits on you, what is in review")
+    p.add_argument("--since", type=float, metavar="HOURS", help="window in hours (default 24)")
+    p.add_argument("--json", action="store_true", help="raw data instead of text")
+    p.set_defaults(func=cmd_brief)
 
     p = sub.add_parser("start", help="start a session from a saved template (kcoder start with no name lists them)")
     p.add_argument("template", nargs="?", help="template name")

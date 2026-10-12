@@ -682,3 +682,15 @@ table.grid tr[data-sha] { cursor: pointer; }
 .tplrow { align-items: flex-end; }
 .tplrow label { flex: 1; }
 .tplrow button { margin-bottom: 2px; }
+
+.brief .brief-s { border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12px; }
+.brief .brief-s .h { display: flex; gap: 8px; align-items: baseline; font-weight: 600; }
+.brief .brief-s .h .meta { font-weight: 400; color: var(--fg-dim); margin-left: auto; }
+.brief .brief-s .l { display: flex; gap: 8px; margin-top: 3px; line-height: 1.4; }
+.brief .brief-s .l .k { flex: 0 0 70px; color: var(--fg-dim); text-transform: uppercase; font-size: 10px; letter-spacing: .05em; padding-top: 2px; }
+.brief .brief-s .l.dim { color: var(--fg-dim); }
+.brief .add { color: var(--ok, #6fc276); }
+.brief .del { color: var(--err, #e06c75); }
+.brief button.link { background: none; border: none; color: var(--accent-text); padding: 0; font: inherit; font-weight: 600; cursor: pointer; }
+.brief .list .item { display: flex; gap: 10px; align-items: center; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.brief .list .item code { flex: 1; white-space: normal; }
