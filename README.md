@@ -332,6 +332,13 @@ every rule it understood and what it does; the pane chip shows the count.
 
 - **Task queue**: described above. `max_concurrent` caps how many sessions
   run at once; drag to reorder, pause, cancel.
+- **Auto-fix on CI failure**: kcoder polls the checks of every open PR a
+  session opened. When one goes red, it fetches the failing job's log
+  (`gh run view --log-failed`) and sends it to that session with "fix the
+  cause, run the tests, push to the same branch". The push goes through the
+  usual review gate, so the fix lands in review, not straight on the PR.
+  Once per failing commit, at most three rounds per PR; off switch in
+  Settings.
 - **GitHub issues in**: paste an issue URL (or `owner/name#123`) as a task,
   or as a new session's first message. kcoder reads the issue (`gh` when
   signed in, the public API otherwise), writes the task from its title, body

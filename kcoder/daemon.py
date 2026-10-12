@@ -1452,6 +1452,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if "connector_approvals" in req:
             manager.cfg["connector_approvals"] = bool(req["connector_approvals"])
             config.save({"connector_approvals": bool(req["connector_approvals"])})
+        if "ci_autofix" in req:
+            manager.cfg["ci_autofix"] = bool(req["ci_autofix"])
+            config.save({"ci_autofix": bool(req["ci_autofix"])})
         if "handoff" in req:
             manager.cfg["handoff"] = bool(req["handoff"])
             config.save({"handoff": bool(req["handoff"])})
@@ -2690,7 +2693,7 @@ async def _pr_loop(manager: Manager) -> None:
     loop = asyncio.get_running_loop()
     while not manager.stop.is_set():
         try:
-            await asyncio.wait_for(manager.stop.wait(), timeout=90)
+            await asyncio.wait_for(manager.stop.wait(), timeout=float(os.environ.get("KCODER_PR_POLL") or 90))
             return
         except asyncio.TimeoutError:
             pass
@@ -2710,8 +2713,45 @@ async def _pr_loop(manager: Manager) -> None:
                 manager._record(session, {"t": "git", "ts": time.time(),
                                           "text": f"PR #{fresh.get('number')}: {fresh.get('state', '').lower()}, checks {fresh.get('checks')}"})
                 changed = True
+            if fresh and fresh.get("checks") == "failure" and manager.cfg.get("ci_autofix", True) is not False:
+                changed = await _ci_autofix(manager, session, fresh) or changed
         if changed:
             manager.broadcast_sessions()
+
+
+async def _ci_autofix(manager: Manager, session: Session, fresh: dict) -> bool:
+    """A red check on the session's PR: fetch the failing log once per head
+    commit (at most three times per PR) and ask the session to fix it. Its
+    push goes through the usual review gate, so the fix lands in review."""
+    pr = session.meta.get("pr") or fresh
+    head = fresh.get("head") or ""
+    if not head or pr.get("autofix_head") == head or int(pr.get("autofix_count") or 0) >= 3:
+        return False
+    try:
+        report = await asyncio.get_running_loop().run_in_executor(None, prmod.failure_report, fresh, session.engine.cwd)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ci autofix: log fetch failed for %s: %s", session.meta.get("name"), exc)
+        return False
+    pr = {**fresh, "autofix_head": head, "autofix_count": int(pr.get("autofix_count") or 0) + 1}
+    session.meta["pr"] = pr
+    session.save_meta()
+    if not report:
+        return False
+    text = (f"CI failed on PR #{pr.get('number')} ({pr.get('title') or ''}) at commit {head[:7]}.\n\n{report}\n\n"
+            "Fix the cause (not the test, unless the test is wrong), run the relevant tests here, commit, and push to the same branch; "
+            "the PR updates itself. If the failure is unrelated to this change, say so and stop.")
+    manager._record(session, {"t": "git", "ts": time.time(), "text": f"PR #{pr.get('number')}: a check failed at {head[:7]}; the failing log was sent to this session to fix"})
+    if session.engine.busy:
+        session.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+    else:
+        try:
+            manager.record_user(session, text, [])
+            session.engine.send(text, [])
+        except EngineBusy:
+            session.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+    session.save_meta()
+    manager.notify(f"{session.meta['name']}: CI failed", f"PR #{pr.get('number')}: fixing the failing check", session.id)
+    return True
 
 
 async def _update_loop(manager: Manager) -> None:

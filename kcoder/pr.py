@@ -229,7 +229,7 @@ def refresh_status(pr: dict, cwd: str) -> dict | None:
     """Current state + CI rollup of a PR via gh. None when gh is unavailable."""
     if not shutil.which("gh") or not pr.get("url"):
         return None
-    r = subprocess.run(["gh", "pr", "view", pr["url"], "--json", "state,isDraft,statusCheckRollup,mergeable,title,url,number"],
+    r = subprocess.run(["gh", "pr", "view", pr["url"], "--json", "state,isDraft,statusCheckRollup,mergeable,title,url,number,headRefOid"],
                        cwd=cwd if os.path.isdir(cwd) else None, capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         return None
@@ -249,4 +249,39 @@ def refresh_status(pr: dict, cwd: str) -> dict | None:
         checks = "success"
     return {**pr, "state": d.get("state") or pr.get("state"), "draft": bool(d.get("isDraft")), "checks": checks,
             "mergeable": d.get("mergeable"), "title": d.get("title") or pr.get("title"), "updated": time.time(),
-            "checks_total": len(rollup)}
+            "checks_total": len(rollup), "head": d.get("headRefOid") or pr.get("head")}
+
+
+def failure_report(pr: dict, cwd: str, max_lines: int = 250) -> str | None:
+    """What failed on a PR's checks, with the failing log lines (GitHub Actions
+    via gh run view --log-failed). None when nothing failed or gh cannot tell."""
+    if not shutil.which("gh") or not pr.get("url"):
+        return None
+    r = subprocess.run(["gh", "pr", "checks", pr["url"], "--json", "name,state,bucket,link,workflow,description"],
+                       cwd=cwd if os.path.isdir(cwd) else None, capture_output=True, text=True, timeout=60)
+    try:
+        checks = json.loads(r.stdout) if r.stdout.strip() else []
+    except json.JSONDecodeError:
+        checks = []
+    failed = [c for c in checks if str(c.get("bucket") or "").lower() == "fail" or str(c.get("state") or "").upper() in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE")]
+    if not failed:
+        return None
+    parts = []
+    for c in failed[:4]:
+        name = " / ".join(x for x in (c.get("workflow"), c.get("name")) if x)
+        head = f"### {name or 'check'} failed" + (f" ({c.get('description')})" if c.get("description") else "") + (f"\n{c.get('link')}" if c.get("link") else "")
+        log = ""
+        m = re.search(r"/actions/runs/(\d+)(?:/job/(\d+))?", str(c.get("link") or ""))
+        if m:
+            args = ["gh", "run", "view", m.group(1), "--log-failed"]
+            if m.group(2):
+                args = ["gh", "run", "view", "--job", m.group(2), "--log-failed"]
+            try:
+                lr = subprocess.run(args, cwd=cwd if os.path.isdir(cwd) else None, capture_output=True, text=True, timeout=120)
+                lines = [l for l in (lr.stdout or "").splitlines() if l.strip()]
+                if lines:
+                    log = "\n".join(lines[-max_lines:])
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        parts.append(head + ("\n```\n" + log[-12000:] + "\n```" if log else "\n(no log available through gh; open the link above)"))
+    return "\n\n".join(parts)

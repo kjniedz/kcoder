@@ -49,6 +49,7 @@ DEFAULTS = {
     "fallback": {"enabled": True, "order": []},  # next provider on rate limit / outage; never from the Claude plan to a paid API
     "preview_idle_minutes": 20,   # stop a session's dev server after this long idle
     "pr_screenshots": True,       # attach desktop + mobile screenshots to PRs of web projects
+    "ci_autofix": True,           # a red check on a session's PR sends the failing log to that session to fix (the push lands in review)
     "remote": {"ttl_minutes": 10},  # phone approvals (opt-in via the UI; relay + tokens live in remote.json)
     "default_trust": "auto",   # auto | write | read | none | dry - what new sessions run without asking (dry = plan only)
     "projects_dir": "~/kcoder-projects",   # where GitHub repos are cloned
