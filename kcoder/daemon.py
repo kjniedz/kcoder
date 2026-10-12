@@ -32,6 +32,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -69,7 +70,7 @@ PERSISTED_EVENTS = {       # streamed text deltas are rebuilt from assistant_end
     "turn_start", "assistant_start", "assistant_end", "usage", "tool_call",
     "approval_request", "approval_result", "tool_result", "notice", "info",
     "error", "status", "turn_end", "user", "system", "retry", "compaction_start",
-    "compaction", "history_reset", "queue", "git", "fallback", "job",
+    "compaction", "history_reset", "queue", "git", "fallback", "job", "handoff", "handoff_start",
 }
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -698,6 +699,8 @@ class Manager:
         engine.before_turn = lambda idx, sid=sid: self._checkpoint(sid, idx)
         engine.router = lambda text, ctx, prov=provider: routing.pick(prov, text, ctx, self.cfg)
         engine.fallback_candidates = lambda tier, sid=sid: self.fallbacks(sid, tier)
+        if self.cfg.get("handoff", True) is not False:
+            engine.on_handoff = lambda summary, text, images, sid=sid: self.loop.call_soon_threadsafe(self._handoff, sid, summary, text, images)
         if hasattr(backend, "session_id"):
             backend.session_id = meta.get("claude_session")
         meta["archived"] = False
@@ -878,6 +881,70 @@ class Manager:
         self.broadcast_sessions()
         self.broadcast_chats()
         self.loop.create_task(self.schedule_tasks())
+
+    # -- automatic handoff -----------------------------------------------
+
+    def _handoff(self, sid: str, summary: str, text: str, images: list) -> None:
+        """The session reached its compaction point: continue in a fresh
+        session (same folder, same worktree and branch, same settings) that
+        starts from the handoff summary plus the message that was pending.
+        The old session is archived; its queue moves over."""
+        old = self.sessions.get(sid)
+        if old is None:
+            return
+        meta = old.meta
+        info = meta.get("worktree")
+        base = re.sub(r"-\d+$", "", meta["name"]) or meta["name"]
+        try:
+            new = self.create(cwd=info["root"] if info else meta["cwd"], provider=meta["provider"], model=old.engine.model,
+                              name=base, trust=old.engine.trust, title=meta.get("title") or "", worktree=False)
+        except Exception as exc:  # noqa: BLE001
+            self._record(old, {"t": "error", "ts": time.time(), "text": f"handoff failed, continuing here: {exc}"})
+            return
+        if info:                       # the worktree moves to the new session
+            meta.pop("worktree", None)
+            new.meta["worktree"] = info
+            new.meta["cwd"] = info["path"]
+            new.engine.cwd = info["path"]
+            new.engine.scope = info["path"]
+            new.meta["project"] = meta.get("project") or new.meta.get("project")
+            self._install_hooks(new.meta)
+        new.meta["handed_off_from"] = {"sid": sid, "name": meta["name"], "tokens": old.engine.last_input_tokens}
+        meta["handed_off_to"] = new.id          # messages sent here from now on go to the new session
+        old.engine.on_handoff = None
+        new.meta["queue"] = list(meta.get("queue") or [])
+        meta["queue"] = []
+        for k in ("pinned", "instructions_note"):
+            if k in meta:
+                new.meta[k] = meta[k]
+        tokens = old.engine.last_input_tokens
+        self._record(old, {"t": "handoff", "ts": time.time(), "to": new.id, "name": new.meta["name"], "tokens": tokens, "summary": summary,
+                           "text": f"context reached {tokens:,} tokens: handed off to {new.meta['name']} with a summary; this session is archived"})
+        self._record(new, {"t": "system", "ts": time.time(), "kind": "handoff", "from": sid,
+                           "text": f"continued from {meta['name']} (context was {tokens:,} tokens); the first message is its handoff summary"})
+        new.save_meta()
+        old.save_meta()
+        first = ("[Handoff from an earlier session of this same task. Its summary of the work so far:]\n\n" + summary.strip() +
+                 "\n\n---\n\nContinue with this request:\n\n" + (text.strip() or "Carry on with the next steps from the summary."))
+        try:
+            self.record_user(new, first, images)
+            new.engine.send(first, images)
+        except EngineBusy:
+            new.meta.setdefault("queue", []).insert(0, {"text": first, "added": time.time()})
+            new.save_meta()
+        self.notify(f"{meta['name']}: handed off", f"continuing as {new.meta['name']} with a fresh context", new.id)
+        self.broadcast_sessions()
+        self.broadcast_chats()
+
+        def finish():
+            if old.engine.busy:
+                self.loop.call_later(1.0, finish)
+                return
+            try:
+                self.archive(sid)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("handoff: archive of %s failed: %s", sid, exc)
+        self.loop.call_later(0.5, finish)
 
     def _install_hooks(self, meta: dict) -> None:
         info = meta.get("worktree")
@@ -1339,6 +1406,11 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if "connector_approvals" in req:
             manager.cfg["connector_approvals"] = bool(req["connector_approvals"])
             config.save({"connector_approvals": bool(req["connector_approvals"])})
+        if "handoff" in req:
+            manager.cfg["handoff"] = bool(req["handoff"])
+            config.save({"handoff": bool(req["handoff"])})
+            for s_ in manager.sessions.values():
+                s_.engine.on_handoff = (lambda summary, text, images, sid=s_.id: manager.loop.call_soon_threadsafe(manager._handoff, sid, summary, text, images)) if req["handoff"] else None
         if req.get("commit_email") in ("noreply", "public"):
             manager.cfg["commit_email"] = req["commit_email"]
             config.save({"commit_email": req["commit_email"]})
@@ -1769,6 +1841,11 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     engine = session.engine
 
     if t == "send":
+        seen = set()
+        while session.meta.get("handed_off_to") in manager.sessions and session.id not in seen:   # a handed-off session forwards to its successor
+            seen.add(session.id)
+            session = manager.sessions[session.meta["handed_off_to"]]
+            engine = session.engine
         text = req.get("text") or ""
         images = _save_images(session, req.get("images") or [])
         if not text.strip() and not images:

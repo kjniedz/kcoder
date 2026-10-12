@@ -340,9 +340,13 @@ every rule it understood and what it does; the pane chip shows the count.
   Worker with Web Push). Pair a phone by scanning a QR code; approvals expire
   after ten minutes; revoking a device is one click.
 - **Daily spend cap**: sessions on paid API keys pause when today's spend
-  reaches it. **Context compaction**: when a prompt reaches `compact_at`
-  tokens (150k) the history is summarised before the next turn; `/compact`
-  does it on demand.
+  reaches it. **Automatic handoff**: when a prompt reaches `compact_at`
+  tokens (150k) the session writes a handoff summary (goal, what changed
+  where, decisions, state, next steps) and continues as a fresh session in
+  the same worktree and branch, with the pending message and the queue moved
+  over; panes follow, the old session is archived with a link forward. Turn
+  it off in Settings to summarise in place instead; `/compact` does that on
+  demand.
 - **Resilience**: sessions, queues and the window layout survive app crashes,
   daemon restarts and reboots. A session that was mid-turn comes back
   **paused** with its prompt behind a **resume** button; nothing is re-run

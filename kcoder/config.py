@@ -41,6 +41,7 @@ DEFAULTS = {
     "pricing": {},
     "daily_cap_usd": 0,        # 0 = no cap; sessions pause when today's spend reaches it
     "compact_at": 150000,      # compact history when the last prompt reached this many tokens
+    "handoff": True,           # at that point: write the handoff summary and continue in a fresh session (False: compact in place)
     "worktrees": True,         # every session in a git repo gets its own worktree + branch
     "review_required": "push", # push | commit | none - when the changes view must have approved the work
     "max_concurrent": 3,       # task queue: how many sessions it keeps running at once

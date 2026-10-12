@@ -17,6 +17,7 @@ Events (all carry "t" = type and "ts" = unix time):
     retry             {attempt, max, delay, reason}   backing off before retrying
     compaction_start  {tokens}
     compaction        {summary, messages_before, tokens_before}
+    handoff_start     {tokens}            the daemon then records `handoff` {to, name, summary}
     approval_result   {id, approved}
     tool_output       {id, delta}                  live output of a running command (not persisted)
     tool_result       {id, name, content, is_error, elapsed}
@@ -257,6 +258,8 @@ class Engine:
         self.before_turn = None        # callback(turn_start_index) run before the model sees a turn (checkpoints)
         self.scope = None              # directory the built-in write tools must stay inside (the worktree)
         self.router = None             # callback(text, context_tokens) -> (model, tier) when model is "auto"
+        self.on_handoff = None         # callback(summary, text, image_paths): start a fresh session instead of compacting in place
+        self._last_send = ("", [])
         self.fallback_candidates = None  # callback(tier) -> [(provider, backend, model), ...]
         self.active = None             # (provider, backend, model) while running on a fallback provider
         self.fallback_since = 0.0
@@ -356,6 +359,7 @@ class Engine:
                 raise EngineBusy("a turn is already running")
             content = build_user_content(text, image_paths or [], self.provider.kind)
             self.current_user_text = text
+            self._last_send = (text, list(image_paths or []))
             self._interrupt.clear()
             self._set_status(STATUS_WORKING)
             self._thread = threading.Thread(
@@ -428,6 +432,8 @@ class Engine:
         self.turn_in = self.turn_out = 0
         self._turn_progress = False
         try:
+            if self._maybe_handoff():
+                return
             self._maybe_compact()
         except Interrupted:
             with self._lock:
@@ -607,14 +613,41 @@ class Engine:
                     self._check_interrupt()
                     time.sleep(0.25)
 
-    def _maybe_compact(self) -> None:
-        if not self.compact_at or self.last_input_tokens < self.compact_at or len(self.messages) < 4:
-            return
-        self.compact()
+    def _due_for_compaction(self) -> bool:
+        return bool(self.compact_at) and self.last_input_tokens >= self.compact_at and len(self.messages) >= 4
 
-    def compact(self) -> None:
-        """Summarise the history into a single handoff message."""
-        self.emit("compaction_start", tokens=self.last_input_tokens)
+    def _maybe_compact(self) -> None:
+        if self._due_for_compaction():
+            self.compact()
+
+    def _maybe_handoff(self) -> bool:
+        """At the compaction point, with a handoff callback set: write the
+        handoff summary and hand the pending message to a fresh session
+        (the daemon creates it). Returns True when this turn is over."""
+        if self.on_handoff is None or not self._due_for_compaction():
+            return False
+        self.emit("handoff_start", tokens=self.last_input_tokens)
+        try:
+            summary, hooks = self.summarize()
+        except Interrupted:
+            raise
+        except Exception as exc:  # noqa: BLE001 - fall back to compacting in place
+            self.emit("notice", text=f"Handoff summary failed ({type(exc).__name__}: {exc}); compacting in place instead.")
+            return False
+        self.emit("usage", input=hooks.usage_in, output=hooks.usage_out, cache_read=0, cache_write=0,
+                  model=self.model, elapsed=round(time.monotonic() - self._turn_started, 2))
+        text, images = self._last_send
+        with self._lock:
+            self._set_status(STATUS_IDLE)
+        self.emit("turn_end", result="handoff", elapsed=round(time.monotonic() - self._turn_started, 2))
+        try:
+            self.on_handoff(summary, text, images)
+        except Exception as exc:  # noqa: BLE001
+            self.emit("error", text=f"handoff failed: {exc}")
+        return True
+
+    def summarize(self):
+        """One model call that writes the handoff summary of the history so far (no tools)."""
         hooks = _CaptureHooks()
         temp = list(self.messages) + [{"role": "user", "content": COMPACT_PROMPT}]
         model = self.turn_model or (routing.model_for(self.provider, "large") if self.model == routing.AUTO else self.model)
@@ -622,6 +655,12 @@ class Engine:
         summary = hooks.text.strip()
         if not summary:
             raise RuntimeError("empty summary")
+        return summary, hooks
+
+    def compact(self) -> None:
+        """Summarise the history into a single handoff message."""
+        self.emit("compaction_start", tokens=self.last_input_tokens)
+        summary, hooks = self.summarize()
         before = len(self.messages)
         user_msg = {
             "role": "user",

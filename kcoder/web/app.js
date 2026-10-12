@@ -293,6 +293,9 @@ function onEvent(sid, ev) {
   if (ev.t === 'progress') { store.turn = { input: ev.input, output: ev.output }; return; }
   if (ev.t === 'job_output') { state.jobTails.set(sid + ':' + ev.id, ((state.jobTails.get(sid + ':' + ev.id) || '') + ev.delta).slice(-60000)); if (state.dialog === 'job' && state.jobOpen === sid + ':' + ev.id) renderJobDialogTail(); return; }
   if (ev.t === 'job') { if (state.dialog === 'job' && state.jobOpen === sid + ':' + ev.id) setTimeout(() => jobDialog(sid, ev.id), 200); }
+  if (ev.t === 'handoff' && ev.to) {      // follow the work: every pane showing the old session shows the new one
+    setTimeout(() => { state.layout.panes.forEach((p, i) => { if (p === sid) assignPane(i, ev.to); }); if (state.sid === sid) { state.sid = ev.to; localStorage.setItem('kcoder.sid', ev.to); } toast(`${ev.name}: fresh session with a handoff summary`, 'ok'); }, 300);
+  }
   if (ev.t === 'turn_start') store.turn = { input: 0, output: 0 };
   if (ev.t === 'tool_output') { store.toolLive = store.toolLive || {}; store.toolLive[ev.id] = ((store.toolLive[ev.id] || '') + ev.delta).slice(-12000); queueRender(sid); return; }
   if (ev.t === 'tool_result' && store.toolLive) delete store.toolLive[ev.id];
@@ -461,6 +464,8 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'system': out.push(`<div class="note">${esc(e.text)}${e.kind === 'interrupted' ? ' <button data-act="resume">resume</button>' : ''}</div>`); break;
       case 'compaction': out.push(`<div class="note marker">✂ context compacted here (${e.messages_before} messages → summary)</div>`); break;
       case 'compaction_start': out.push(`<div class="note">✂ compacting context (${fmtInt(e.tokens)} tokens)…</div>`); break;
+      case 'handoff_start': out.push(`<div class="note">⇢ context at ${fmtInt(e.tokens)} tokens - writing the handoff summary for a fresh session…</div>`); break;
+      case 'handoff': out.push(`<div class="note marker">⇢ ${esc(e.text || '')} <button data-open="${esc(e.to)}">open ${esc(e.name)}</button></div>`); break;
       case 'queue': out.push(`<div class="note">▶ queued task started (${e.remaining} left): ${esc(e.started)}</div>`); break;
       case 'git': out.push(`<div class="note">${esc(e.text || '')}</div>`); break;
       case 'job': out.push(`<div class="note job ${esc(e.status || '')}">${e.status === 'running' ? '▶' : e.status === 'done' ? '✓' : '✗'} ${esc(e.text || '')} <button data-job="${e.id}" title="output, stop">output</button></div>`); break;
@@ -589,6 +594,8 @@ function buildTermHtml(store, sid, opts = {}) {
       case 'info': case 'system': case 'git': case 'job': out.push(`<span class="t-dim">${esc(e.text || '')}</span>\n`); break;
       case 'compaction': out.push(`<span class="t-dim">✂ compacted ${e.messages_before} messages into a summary</span>\n`); break;
       case 'compaction_start': out.push(`<span class="t-dim">✂ context at ${fmtInt(e.tokens)} tokens - compacting…</span>\n`); break;
+      case 'handoff_start': out.push(`<span class="t-dim">⇢ context at ${fmtInt(e.tokens)} tokens - writing the handoff summary…</span>\n`); break;
+      case 'handoff': out.push(`<span class="t-dim">⇢ ${esc(e.text || '')}</span>\n`); break;
       case 'queue': out.push(`<span class="t-dim">▶ next queued task (${e.remaining} left): ${esc(e.started)}</span>\n`); break;
       case 'turn_end': out.push('\n'); break;
     }
@@ -1750,6 +1757,7 @@ async function jobDialog(sid, id) {
   d.addEventListener('click', async (e) => { const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'stop') { try { await request('job_stop', { sid, job: id }); toast('stopping job ' + id, 'warn'); } catch (err) { toast(err.message, 'err'); } } else { state.jobOpen = null; closeDialog(); } });
 }
 function renderJobDialogTail() { const pre = $('#job-log'); if (!pre) return; const stick = nearBottom(pre); pre.textContent = state.jobTails.get(state.jobOpen) || '(no output yet)'; if (stick) pre.scrollTop = pre.scrollHeight; }
+document.addEventListener('click', (e) => { const o = e.target.closest('.chat-log [data-open], .note [data-open]'); if (o && o.dataset.open) { e.stopPropagation(); state.sid = o.dataset.open; if (state.view === 'chat') { const pane = o.closest('.pane[data-sid]'); const idx = pane ? state.layout.panes.indexOf(pane.dataset.sid) : -1; assignPane(idx >= 0 ? idx : state.layout.focus, o.dataset.open); } else { if (state.view !== 'wall') setView('wall'); focusPane(o.dataset.open); } } }, true);
 document.addEventListener('click', (e) => { const b = e.target.closest('[data-job]'); if (!b) return; const pane = b.closest('[data-sid]'); const sid = (pane && pane.dataset.sid) || state.sid; if (sid) { e.stopPropagation(); jobDialog(sid, Number(b.dataset.job)); } }, true);
 
 function aboutDialog() {
@@ -1779,6 +1787,7 @@ async function settingsDialog() {
     ${sel('review_required', cfg.review_required || 'push', 'Review required before', [['push', 'push - PRs, pushes and merges'], ['commit', 'commit - every commit'], ['none', 'none - review is optional']])}
     ${chk('auto_publish', cfg.auto_publish === true, 'Auto-publish local folders to GitHub', 'a private repo is created and pushed for folders with no remote')}
     ${chk('connector_approvals', cfg.connector_approvals !== false, 'Connector approvals', 'reads (Gmail, Calendar, Drive, Linear…) run by themselves; sends and changes wait for your approval')}
+    ${chk('handoff', cfg.handoff !== false, 'Automatic handoff', 'at the compaction point the session writes a handoff summary and continues as a fresh session in the same worktree (off: the history is summarised in place)')}
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
     <div class="label-h">accounts</div>
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
@@ -1795,7 +1804,7 @@ async function settingsDialog() {
       if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
       if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
       if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
-      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
+      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
       const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');
     } catch (err) { toast(err.message, 'err'); }
   });

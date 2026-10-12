@@ -10,8 +10,8 @@ here so any session can pick up where the last one stopped.
 | 2 | **Long-running work**: commands that outlive the Bash tool's two-minute limit become background jobs with live output, a stop button and a result the session picks up when the job ends. Also lets the push gate wait longer. | done (`kcoder job run -- <cmd>`, `kcoder/jobs.py`; Bash timeouts 10 min / 1 h; review and connector waits 8 min) |
 | 3 | **Dry-run sessions**: the agent plans and shows the diff it would make without touching files. | done (trust level `dry`: built-in tools refuse writes and non-read-only shell commands, Claude Code runs in plan mode; pane chip "dry run · do it" switches to a real run) |
 | 5 | **Per-repo rules in plain English** (`KCODER.md`): "never touch migrations", "run the tests before committing", enforced as checks. | done (`kcoder/rules.py`: protect / only / never-commit / never-run / run-before-commit / run-before-push; checked in the built-in tools, the Claude Code PreToolUse hook and the worktree git hooks; listed in the instructions dialog) |
-| 12 | **Automatic handoff**: at the compaction point kcoder writes the handoff summary and starts a fresh session instead of carrying a giant context. | next |
-| 13 | **Plan-limit awareness**: how much of the 5-hour and weekly limits a session is using. | |
+| 12 | **Automatic handoff**: at the compaction point kcoder writes the handoff summary and starts a fresh session instead of carrying a giant context. | done (`Engine._maybe_handoff` + `Manager._handoff`: fresh session in the same worktree, pending message and queue move over, panes follow, old session archived; Settings toggle, off = compact in place) |
+| 13 | **Plan-limit awareness**: how much of the 5-hour and weekly limits a session is using. | next |
 | 9 | **GitHub issues in**: an issue URL as a task; the PR links back and closes it. | |
 | 8 | **Session templates**: one-click starts with repo, model, trust and first prompt. | |
 | 7 | **Auto-fix on CI failure**: a red check on a draft PR opens a session with the failing log; the fix lands in review. | |
