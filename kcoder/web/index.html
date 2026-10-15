@@ -24,6 +24,7 @@
     <button data-view="wall" title="Sessions: the grid, or 1 to 3 panes  (alt+1)">sessions</button>
     <button data-view="tasks" title="Task queue and schedules  (alt+2)">tasks <span id="tasks-count" class="count" hidden></span></button>
     <button data-view="stats" title="Stats  (alt+3)">stats</button>
+    <button data-view="fun" title="Just for fun: the token mine  (alt+4)">fun</button>
   </nav>
   <input id="omni" class="omni" type="search" placeholder="Search or run a command  ⌘K" autocomplete="off" title="Search sessions or run a command  (⌘K)">
   <div class="tools">
@@ -71,6 +72,10 @@
 
   <section id="view-tasks" class="view tasksview" hidden>
     <div id="tasks-body" class="tasks-body"></div>
+  </section>
+
+  <section id="view-fun" class="view funview" hidden>
+    <div id="fun-body" class="fun-body"></div>
   </section>
 
 </main>

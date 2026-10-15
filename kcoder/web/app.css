@@ -627,6 +627,36 @@ table.grid tr[data-sha] { cursor: pointer; }
 .hunk-body .l { display: block; } .hunk-body .l.add { background: rgba(74,222,128,.16); color: var(--green); } .hunk-body .l.del { background: rgba(248,113,113,.16); color: var(--red); } .hunk-body .l.meta { color: var(--fg-mute); }
 .empty-row { padding: 14px; color: var(--fg-dim); text-align: center; }
 .tasksview { flex-direction: column; }
+
+/* ---- the fun tab: the token mine ---- */
+.funview { flex-direction: column; }
+.fun-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 28px; }
+.mine { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.mine-head { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; position: relative; }
+.mine-btn { background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 14px 18px; cursor: pointer; user-select: none; -webkit-user-select: none; transition: transform .06s; }
+.mine-btn:hover { border-color: var(--accent); }
+.mine-btn:active { transform: scale(.97); }
+.mine-btn .banner { margin: 0; font-size: 9px; animation: none; }
+.mine-nums { display: flex; flex-direction: column; gap: 4px; }
+.mine-bank { font-size: 26px; font-weight: 700; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+.mine-nums .dim, .mine .dim { color: var(--fg-mute); }
+.mine-note { min-height: 16px; font-size: 12px; color: var(--green); }
+.mine-pop { position: absolute; pointer-events: none; font-weight: 700; color: var(--accent-text); animation: minepop .8s ease-out forwards; z-index: 2; }
+@keyframes minepop { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-40px); } }
+.mine-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; align-items: start; }
+@media (max-width: 900px) { .mine-grid { grid-template-columns: 1fr; } }
+.mine-unit { display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.mine-unit:first-child { border-top: none; padding-top: 2px; }
+.mine-unit .nm { font-weight: 600; } .mine-unit .nm b { color: var(--accent-text); margin-left: 6px; } .mine-unit .nm span { color: var(--fg-mute); font-weight: 400; margin-left: 6px; }
+.mine-unit .ds { color: var(--fg-mute); font-size: 11px; }
+.mine-unit .nm, .mine-unit .ds { grid-column: 1; }
+.mine-unit button { grid-column: 2; grid-row: 1 / span 2; min-width: 116px; }
+.mine-unit button:disabled { opacity: .45; cursor: default; }
+.mine-ups { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.mine-up { display: flex; align-items: center; gap: 10px; }
+.mine-up .ds { color: var(--fg-mute); font-size: 11px; flex: 1; }
+.mine-up button:disabled { opacity: .45; cursor: default; }
+.mine .card h3 + h3, .mine .card .row + h3 { margin-top: 12px; }
 .tasks-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 10px; }
 .tasks-body h3 { margin: 10px 0 2px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; }
 .task-add { display: flex; flex-direction: column; gap: 8px; }

@@ -123,7 +123,7 @@ want built, and watch it work.
 `kcoder ui` opens it in a browser tab instead.
 
 **Header**, left to right: the KCODER banner (click it for About), the
-**sessions / tasks / stats** tabs (alt+1/2/3), a **search or run a command**
+**sessions / tasks / stats / fun** tabs (alt+1/2/3/4), a **search or run a command**
 field (the command palette, ⌘K), the **inbox** with a badge for everything
 waiting on you, and **+ new**. That is all the header ever holds. Everything
 informational sits in the one-line **status bar** at the bottom: daemon
@@ -310,7 +310,19 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   detected from local git, so it works offline and for private repos. At
   the top, the **weekly plan limit** meter: used, reset time, how much of
   the week has passed, the pace and forecast, plan tokens per day of the
-  window, the 5-hour window, and whether the quota shift is active.
+  window, the 5-hour window, and whether the quota shift is active. A
+  **just for fun** card lists the working verbs shown most this month, the
+  period as something you can picture, the secret badges earned and a link
+  to the latest Wrapped card and to the token mine.
+- **Fun** (alt+4): the **token mine**, a clicker. Click the KCODER banner for
+  tokens and spend them on agents that mine on their own (Haiku intern,
+  Sonnet builder, Opus architect, a second pane, a worktree, a cron
+  schedule, the task queue, the fleet) and on upgrades that double them.
+  Real work feeds the mine: every finished turn in any session pays its
+  output tokens into the bank and every commit made from a session pays a
+  bonus of a minute of mining. The mine keeps going for up to eight hours
+  while the tab is away; progress lives in the browser and is mirrored
+  through kcoderd so the app window and a browser tab share one mine.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, the weekly plan
   limit (token limit, reset day and hour, quota shift), plus links to your

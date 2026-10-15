@@ -186,7 +186,7 @@ function restartForMismatch(why) {
 let uiSyncTimer = null;
 function syncUiState() {
   clearTimeout(uiSyncTimer);
-  uiSyncTimer = setTimeout(() => { if (state.connected) request('ui_state', { state: { layout: state.layout, order: state.order, view: state.view, saved: Date.now() } }).catch(() => {}); }, 800);
+  uiSyncTimer = setTimeout(() => { if (state.connected) request('ui_state', { state: uiStateOut() }).catch(() => {}); }, 800);
 }
 function send(type, fields = {}) { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type, ...fields })); }
 
@@ -216,9 +216,10 @@ async function onConnected() {
   await refreshProviders();
   try { state.config = (await request('config')).config; } catch {}
   if (!state._updOffered) { state._updOffered = true; request('update', { action: 'check' }).then((r) => { if (r.update && r.update.available && !r.update.failed) updateNow(); }).catch(() => {}); }
-  if (!localStorage.getItem('kcoder.layout') && !localStorage.getItem('kcoder.order')) {
-    // a fresh browser profile: pick up the layout the daemon kept for us
-    try { const r = await request('ui_state'); if (r.state) { if (r.state.layout) { state.layout = r.state.layout; localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); } if (Array.isArray(r.state.order)) { state.order = r.state.order; localStorage.setItem('kcoder.order', JSON.stringify(state.order)); } } } catch {}
+  {
+    const fresh = !localStorage.getItem('kcoder.layout') && !localStorage.getItem('kcoder.order');
+    // a fresh browser profile picks up the layout the daemon kept for us; the token mine is adopted whenever the daemon's copy is further along
+    try { const r = await request('ui_state'); if (r.state) { if (fresh && r.state.layout) { state.layout = r.state.layout; localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); } if (fresh && Array.isArray(r.state.order)) { state.order = r.state.order; localStorage.setItem('kcoder.order', JSON.stringify(state.order)); } if (r.state.mine) mineAdopt(r.state.mine); } } catch {}
   }
   applyUrlParams();
   setTimeout(maybeMorningBrief, 1500);
@@ -315,6 +316,7 @@ function onEvent(sid, ev) {
   if (ev.t === 'history_reset') { loadEventsFresh(sid); return; }
   if (ev.t === 'git') { state.gitInfo.set(sid, ev); }
   if (ev.t === 'turn_end') { const s = state.sessions.get(sid); if (s && s.project && s.project.git) gitStatus(sid, false).catch(() => {}); }
+  if (ev.t === 'usage' || (ev.t === 'git' && ev.commit)) mineOnEvent(sid, ev);
   store.list.push(ev);
   if (store.list.length > 3000) store.list.splice(0, store.list.length - 3000);
   if (ev.t === 'approval_request' && state.dialog === 'inbox') renderInbox();
@@ -344,7 +346,7 @@ function renderSession(sid) {
   if (state.sid === sid && state.view === 'terminal') renderTermLog();
 }
 
-function renderAll() { renderHeader(); renderViews(); renderWall(); renderSidebar(); renderTitlebars(); renderSplit(); renderTermLog(); if (state.view === 'stats') renderStatsView(); tickStatusLines(); }
+function renderAll() { renderHeader(); renderViews(); renderWall(); renderSidebar(); renderTitlebars(); renderSplit(); renderTermLog(); if (state.view === 'stats') renderStatsView(); if (state.view === 'fun') renderFunView(); tickStatusLines(); }
 
 // ----------------------------------------------------------------------
 // markdown, diffs, sanitising
@@ -2720,6 +2722,7 @@ const SHORTCUTS = [
   { id: 'v-sessions', group: 'navigation', combo: 'alt+1', label: 'sessions', scope: 'app', palette: 'sessions', run: () => openSessions() },
   { id: 'v-tasks', group: 'navigation', combo: 'alt+2', label: 'task queue + schedules', scope: 'app', palette: 'task queue + schedules', run: () => setView('tasks') },
   { id: 'v-stats', group: 'navigation', combo: 'alt+3', label: 'stats', scope: 'app', palette: 'stats', run: () => setView('stats') },
+  { id: 'v-fun', group: 'navigation', combo: 'alt+4', label: 'just for fun: the token mine', scope: 'app', palette: 'just for fun: the token mine', run: () => setView('fun') },
   { id: 'l-grid', group: 'navigation', combo: 'alt+g', label: 'sessions: grid of every live session', scope: 'app', palette: 'sessions: grid', run: () => setLayout('grid') },
   { id: 'l-1', group: 'navigation', keys: '⌥⇧1 … 3', label: 'sessions: 1, 2 or 3 panes side by side', scope: 'app', test: (e) => e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && /^(Digit[123]|[123!@#])$/.test(e.code || e.key), palette: 'sessions: 1 pane', run: (e) => setLayout(e.code ? e.code.replace('Digit', '') : '1') },
   { id: 'l-2', group: 'navigation', label: 'sessions: 2 panes', scope: 'alias', palette: 'sessions: 2 panes', run: () => setLayout('2') },
@@ -3389,6 +3392,7 @@ async function renderStatsView(force) {
     ${lh.length ? `<div class="row stack"><span>long hauls <span class="dim">· verbs past ten minutes</span></span><b><span class="verbs">${lh.map(([v, n]) => `<span class="lh">${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</span></b></div>` : ''}
     ${rec(`${P} is`, S.fun ? esc(S.fun) : null)}
     ${rec('secret badges', secret.length ? secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ') : '<span class="dim">none found yet</span>')}
+    ${rec('token mine', `${fmtMine(Math.floor(mineLoad().bank))} tokens banked · ${fmtMine(mineRate(mineLoad()))}/s <span class="dim">· <button class="link" data-go-fun>open the fun tab</button></span>`)}
     <div class="row"><span>${latestWrapped ? `<button class="link" data-wrapped="${esc(latestWrapped.key)}">latest Wrapped: ${esc(wrappedPeriodLabel(latestWrapped))}</button>` : '<span class="dim">no Wrapped card yet</span>'}</span></div></div>`;
   // achievements: next up (three closest locked badges) above the badge wall; hidden badges show only once earned
   const A = d.achievements || { badges: [], next_up: [], records: {} };
@@ -3458,6 +3462,7 @@ async function renderStatsView(force) {
     const mc = e.target.closest('.card.metric[data-metric]'); if (mc) { state.statsMetric = mc.dataset.metric; renderStatsView(false); return; }
     if (e.target.closest('[data-clear-day]')) { state.statsDate = null; state.statsRange = null; renderStatsView(true); return; }
     const wb = e.target.closest('[data-wrapped]'); if (wb) { wrappedDialog(wb.dataset.wrapped); return; }
+    if (e.target.closest('[data-go-fun]')) { setView('fun'); return; }
     if (e.target.closest('[data-x="settings"]')) { settingsDialog(); return; }
     const dd = e.target.closest('[data-day]'); if (dd && !e.target.closest('th')) { state.statsDate = dd.dataset.day; state.statsRange = null; renderStatsView(true); return; }
     const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
@@ -3597,6 +3602,122 @@ async function exportStatsCsv() {
   let r; try { r = await request('stats_csv', { days: statsData.days, date: statsData.date || null, start: statsData.range && statsData.range.start, end: statsData.range && statsData.range.end }); } catch (e) { toast(e.message, 'err'); return; }
   await saveFile(r.filename, r.csv, 'text/csv');
 }
+
+// ----------------------------------------------------------------------
+// just for fun: the token mine, a clicker on the fun tab
+// ----------------------------------------------------------------------
+// Click the banner for tokens and spend them on agents that mine on their own. Real work feeds it:
+// every finished turn pays its output tokens into the bank and every commit a session makes pays a
+// bonus. Progress lives in localStorage (kcoder.mine) and is mirrored into the daemon's ui_state so
+// the app window and a browser tab share one mine; the mine keeps going up to eight hours while away.
+const MINE_UNITS = [
+  { id: 'intern', name: 'Haiku intern', desc: 'fetches tokens one at a time, very fast, slightly wrong', cost: 15, rate: 0.1, tiers: ['prompt caching', 'extended thinking'] },
+  { id: 'builder', name: 'Sonnet builder', desc: 'ships the feature while you are still reading the plan', cost: 100, rate: 1, tiers: ['plan mode', 'MCP tools'] },
+  { id: 'architect', name: 'Opus architect', desc: 'thinks for a while, then everything works', cost: 1100, rate: 8, tiers: ['1M context', 'a good CLAUDE.md'] },
+  { id: 'pane', name: 'second pane', desc: 'two sessions side by side, one keyboard', cost: 12000, rate: 47, tiers: ['third pane', 'broadcast'] },
+  { id: 'worktree', name: 'worktree', desc: 'a branch of its own so nobody steps on anybody', cost: 130000, rate: 260, tiers: ['review gate', 'auto-merge'] },
+  { id: 'cron', name: 'cron schedule', desc: 'runs at 6 AM whether you are up or not', cost: 1.4e6, rate: 1400, tiers: ['morning brief', 'nightly dependency bumps'] },
+  { id: 'queue', name: 'task queue', desc: 'the whole backlog, one slot at a time', cost: 2e7, rate: 7800, tiers: ['trust: auto', 'more slots'] },
+  { id: 'fleet', name: 'the fleet', desc: 'ten agents, one keyboard', cost: 3.3e8, rate: 44000, tiers: ['Wrapped', 'paid for itself'] },
+];
+const MINE_UPGRADES = [
+  { id: 'kbd', name: 'mechanical keyboard', desc: 'clicks are worth twice as much', cost: 100, click: 2 },
+  { id: 'dictation', name: 'dictation', desc: 'clicks are worth twice as much', cost: 2000, click: 2, need: 'kbd' },
+  { id: 'macro', name: 'macro pad', desc: 'clicks are worth twice as much', cost: 50000, click: 2, need: 'dictation' },
+  { id: 'omni', name: 'command palette', desc: 'each click also earns a second of the mine', cost: 1e6, clickSec: 1, need: 'macro' },
+  ...MINE_UNITS.flatMap((u) => [1, 2].map((t) => ({ id: `${u.id}${t}`, name: u.tiers[t - 1], desc: `${u.name} mines twice as fast`, cost: u.cost * (t === 1 ? 10 : 100), unit: u.id, mult: 2, owned: t === 1 ? 10 : 25 }))),
+];
+const MINE_AWAY_CAP = 8 * 3600;
+let mine = null, mineTimer = null, mineSaveTimer = null, mineTicks = 0, mineNoteTimer = null;
+const mineSeen = [];   // live events already paid, so a reconnect replay never pays twice
+const fmtMine = (n) => (n < 1000 ? (Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10)) : fmtCompact(n));
+function mineNormalize(g) {
+  const n = { v: 1, bank: 0, total: 0, clicks: 0, units: {}, ups: [], real: { turns: 0, tokens: 0, commits: 0, bonus: 0 }, last: Date.now(), started: Date.now(), ...(g && typeof g === 'object' ? g : {}) };
+  n.real = { turns: 0, tokens: 0, commits: 0, bonus: 0, ...(n.real || {}) }; n.units = n.units || {}; n.ups = Array.isArray(n.ups) ? n.ups : [];
+  for (const k of ['bank', 'total', 'clicks', 'last', 'started']) n[k] = Number(n[k]) || 0;
+  return n;
+}
+function mineLoad() { if (mine) return mine; let g = null; try { g = JSON.parse(localStorage.getItem('kcoder.mine') || 'null'); } catch {} mine = mineNormalize(g); return mine; }
+function mineAdopt(theirs) { const g = mineLoad(); const t = mineNormalize(theirs); if (t.total > g.total) { mine = t; mineSave(true); if (state.view === 'fun') { const b = $('#fun-body'); delete b.dataset.built; renderFunView(); } } }
+function uiStateOut() { const out = { layout: state.layout, order: state.order, view: state.view, saved: Date.now() }; if (mine) out.mine = mine; return out; }
+function mineRate(g) { let r = 0; for (const u of MINE_UNITS) { let m = 1; for (const up of MINE_UPGRADES) if (up.unit === u.id && g.ups.includes(up.id)) m *= up.mult; r += (g.units[u.id] || 0) * u.rate * m; } return r; }
+function mineClickValue(g) { let v = 1, sec = 0; for (const up of MINE_UPGRADES) if (g.ups.includes(up.id)) { if (up.click) v *= up.click; if (up.clickSec) sec += up.clickSec; } return v + mineRate(g) * sec; }
+const mineUnitCost = (u, n) => Math.ceil(u.cost * Math.pow(1.15, n));
+function mineAccrue() {
+  const g = mineLoad(); const now = Date.now(); const dt = Math.min(MINE_AWAY_CAP, Math.max(0, (now - g.last) / 1000));
+  if (dt > 0) { const got = mineRate(g) * dt; g.bank += got; g.total += got; if (dt > 120 && got >= 1) mineNote(`mined ${fmtMine(Math.floor(got))} while you were away (${fmtDur(Math.round(dt))}${dt >= MINE_AWAY_CAP ? ', the eight-hour cap' : ''})`); }
+  g.last = now; return g;
+}
+function mineSave(now) {
+  const g = mineLoad(); try { localStorage.setItem('kcoder.mine', JSON.stringify(g)); } catch {}
+  clearTimeout(mineSaveTimer); mineSaveTimer = setTimeout(() => { if (state.connected) request('ui_state', { state: uiStateOut() }).catch(() => {}); }, now ? 0 : 5000);
+}
+function mineNote(text) { const el = $('#mine-note'); if (!el) return; el.textContent = text; clearTimeout(mineNoteTimer); mineNoteTimer = setTimeout(() => { if (el.isConnected) el.textContent = ''; }, 6000); }
+function mineOnEvent(sid, ev) {
+  const key = `${sid}:${ev.t}:${ev.ts || ''}:${ev.commit || ''}`; if (mineSeen.includes(key)) return; mineSeen.push(key); if (mineSeen.length > 200) mineSeen.shift();
+  const g = mineAccrue();
+  if (ev.t === 'usage') { const got = Math.max(0, Math.round(Number(ev.output) || 0)); if (!got) return; g.bank += got; g.total += got; g.real.turns += 1; g.real.tokens += got; mineNote(`+${fmtMine(got)} from a real turn`); }
+  else { const bonus = Math.max(100, Math.round(mineRate(g) * 60)); g.bank += bonus; g.total += bonus; g.real.commits += 1; g.real.bonus += bonus; mineNote(`+${fmtMine(bonus)} for commit ${ev.commit}`); }
+  mineSave(); if (state.view === 'fun') mineRefresh();
+}
+function mineBuy(kind, id) {
+  const g = mineAccrue();
+  if (kind === 'unit') { const u = MINE_UNITS.find((x) => x.id === id); const cost = mineUnitCost(u, g.units[u.id] || 0); if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = (g.units[u.id] || 0) + 1; }
+  else { const up = MINE_UPGRADES.find((x) => x.id === id); if (!up || g.ups.includes(up.id) || g.bank < up.cost) return; g.bank -= up.cost; g.ups.push(up.id); }
+  mineSave(); mineRefresh();
+}
+function mineUpgradesOpen(g) { return MINE_UPGRADES.filter((up) => !g.ups.includes(up.id) && (!up.need || g.ups.includes(up.need)) && (!up.unit || (g.units[up.unit] || 0) >= up.owned)); }
+function renderFunView() {
+  if (state.view !== 'fun') return;
+  const box = $('#fun-body'); const g = mineAccrue();
+  if (!box.dataset.built) {
+    box.innerHTML = `<div class="mine">
+      <div class="mine-head"><button class="mine-btn" id="mine-btn" title="click for tokens"><pre class="banner big" aria-label="KCODER">${esc(BANNER)}</pre></button>
+        <div class="mine-nums"><div class="mine-bank"><span data-m="bank">0</span> tokens</div><div class="dim"><span data-m="rate">0</span> per second · <span data-m="click">1</span> per click</div><div class="dim">click the banner; real turns and commits pay in too</div><div class="mine-note" id="mine-note"></div></div></div>
+      <div class="mine-grid">
+        <div class="card"><h3>agents</h3><div class="mine-units">${MINE_UNITS.map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join('')}</div></div>
+        <div class="card"><h3>upgrades</h3><div class="mine-ups" id="mine-ups"></div>
+          <h3>from real work</h3><div class="row"><span>turns paid in</span><b data-m="turns"></b></div><div class="row"><span>tokens from real turns</span><b data-m="rtokens"></b></div><div class="row"><span>commits</span><b data-m="commits"></b></div><div class="row"><span>commit bonuses</span><b data-m="bonus"></b></div>
+          <h3>all time</h3><div class="row"><span>tokens mined</span><b data-m="total"></b></div><div class="row"><span>clicks</span><b data-m="clicks"></b></div><div class="row"><span>mining since</span><b data-m="since"></b></div>
+          <div class="row"><span><button class="link" data-mine="reset">start over</button></span></div></div>
+      </div></div>`;
+    box.dataset.built = '1';
+    $('#mine-btn').addEventListener('click', (e) => {
+      const g2 = mineAccrue(); const v = mineClickValue(g2); g2.bank += v; g2.total += v; g2.clicks += 1; mineSave();
+      const head = $('.mine-head'); const r = head.getBoundingClientRect(); const pop = document.createElement('span'); pop.className = 'mine-pop'; pop.textContent = `+${fmtMine(Math.round(v * 10) / 10)}`;
+      pop.style.left = `${(e.clientX || r.left + 60) - r.left + 8}px`; pop.style.top = `${(e.clientY || r.top + 40) - r.top - 10}px`; head.appendChild(pop); setTimeout(() => pop.remove(), 800);
+      mineRefresh();
+    });
+    box.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-buy]'); if (b) { mineBuy('unit', b.dataset.buy); return; }
+      const u = e.target.closest('[data-up]'); if (u) { mineBuy('up', u.dataset.up); return; }
+      if (e.target.closest('[data-mine="reset"]')) { if (await confirmDialog('Start the token mine over?', 'Every agent, upgrade and token goes; the real-work counters too.')) { mine = mineNormalize(null); mineSave(true); delete box.dataset.built; renderFunView(); } }
+    });
+  }
+  mineRefresh();
+  if (!mineTimer) mineTimer = setInterval(() => {
+    if (state.view !== 'fun' || document.hidden || !$('#fun-body').dataset.built) { clearInterval(mineTimer); mineTimer = null; mineSave(); return; }
+    mineAccrue(); mineRefresh(); if (++mineTicks % 15 === 0) mineSave();
+  }, 1000);
+}
+function mineRefresh() {
+  const box = $('#fun-body'); if (!box || !box.dataset.built) return;
+  const g = mineLoad(); const rate = mineRate(g); const set = (k, v) => { const el = box.querySelector(`[data-m="${k}"]`); if (el && el.textContent !== String(v)) el.textContent = v; };
+  set('bank', fmtMine(Math.floor(g.bank))); set('rate', fmtMine(Math.round(rate * 10) / 10)); set('click', fmtMine(Math.round(mineClickValue(g) * 10) / 10));
+  set('turns', fmtInt(g.real.turns)); set('rtokens', fmtMine(g.real.tokens)); set('commits', fmtInt(g.real.commits)); set('bonus', fmtMine(g.real.bonus));
+  set('total', fmtMine(Math.floor(g.total))); set('clicks', fmtInt(g.clicks)); set('since', fmtDate(new Date(g.started).toISOString().slice(0, 10)));
+  for (const u of MINE_UNITS) {
+    const row = box.querySelector(`[data-unit="${u.id}"]`); const n = g.units[u.id] || 0; const cost = mineUnitCost(u, n);
+    let m = 1; for (const up of MINE_UPGRADES) if (up.unit === u.id && g.ups.includes(up.id)) m *= up.mult;
+    row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * m * 10) / 10)}/s` : '';
+    row.querySelector('[data-m="cost"]').textContent = `${fmtMine(cost)} tokens`; row.querySelector('button').disabled = g.bank < cost;
+  }
+  const open = mineUpgradesOpen(g); const key = open.map((u) => u.id).join(',');
+  const ups = $('#mine-ups');
+  if (ups.dataset.key !== key) { ups.dataset.key = key; ups.innerHTML = open.length ? open.map((up) => `<div class="mine-up"><div><b>${esc(up.name)}</b><div class="ds">${esc(up.desc)}</div></div><button data-up="${up.id}">${fmtMine(up.cost)} tokens</button></div>`).join('') : `<div class="dim">${g.ups.length === MINE_UPGRADES.length ? 'every upgrade bought' : 'more appear as you buy agents'}</div>`; }
+  for (const up of open) { const b = ups.querySelector(`[data-up="${up.id}"]`); if (b) b.disabled = g.bank < up.cost; }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.view === 'fun') renderFunView(); });
 
 renderHeader(); renderViews();
 connect();
