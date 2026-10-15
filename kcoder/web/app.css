@@ -735,3 +735,18 @@ html[data-density="compact"] .sidebar { width: 220px; flex-basis: 220px; }
 html[data-density="compact"] .dialog .list .item { padding: 2px 6px; }
 html[data-density="compact"] .settings .setting { gap: 6px; }
 html[data-density="compact"] table td, html[data-density="compact"] table th { padding: 2px 6px; }
+
+/* stats summary cards: equal height, one-line titles, change vs the prior period, "charted" marks the card that drives the chart below */
+.summary .card.metric { display: flex; flex-direction: column; cursor: pointer; }
+.summary .card.metric:hover { border-color: var(--line-2); }
+.summary .card.metric h3 { flex-wrap: nowrap; white-space: nowrap; }
+.summary .card.metric h3 .t { overflow: hidden; text-overflow: ellipsis; }
+.card h3 .badge { margin-left: auto; font-size: 9px; letter-spacing: .06em; color: var(--on-accent); background: var(--accent); border-radius: 3px; padding: 0 5px; font-weight: 700; }
+.card h3 .info { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; border: 1px solid var(--line-2); border-radius: 50%; font-size: 9px; text-transform: none; color: var(--fg-dim); cursor: help; font-style: italic; }
+.card .delta { font-size: 11px; margin: -2px 0 6px; color: var(--fg-dim); white-space: nowrap; }
+.card .delta.up { color: var(--green); }
+.card .delta.down { color: var(--red); }
+.card .delta.flat { color: var(--fg-mute); }
+.card.metric .row { white-space: nowrap; }
+.card.metric .row span { overflow: hidden; text-overflow: ellipsis; }
+.card.metric .note-dim { margin-top: auto; padding-top: 4px; font-size: 10.5px; color: var(--fg-mute); white-space: nowrap; }

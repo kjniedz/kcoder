@@ -602,14 +602,36 @@ def full(days: int = 30, date: str | None = None) -> dict:
 
     d7, d30 = _dates_back(7), _dates_back(30)
     window_totals = agg([per_day.get(d) or day_row(d) for d in window])
+    first_date = all_days[-1]["date"] if all_days else None
+    # averages divide by the days that can have data: when history is shorter than the
+    # window, by the days since the first record (the app says "(N days of data)")
+    history_days = (dt.date.fromisoformat(t) - dt.date.fromisoformat(first_date)).days + 1 if first_date else 0
+    def avg_days(n: int) -> int:
+        return max(1, min(n, history_days)) if history_days else max(1, n)
+    w_days, a7_days, a30_days = avg_days(len(window)), avg_days(7), avg_days(30)
+    # the previous equal period, for "vs prior N days" (none for all time)
+    prev_dates: list = []
+    if date:
+        prev_dates = [(dt.date.fromisoformat(date) - dt.timedelta(days=1)).strftime("%Y-%m-%d")]
+    elif days != 0:
+        start = dt.date.fromisoformat(window[-1])
+        prev_dates = [(start - dt.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, len(window) + 1)]
+    prev_totals = agg([per_day.get(d) or day_row(d) for d in prev_dates]) if prev_dates else None
     summary = {
         "window": window_totals,
-        "window_avg": {k: (v / len(window) if window else 0) for k, v in window_totals.items() if k != "days"},
+        "window_avg": {k: (v / w_days) for k, v in window_totals.items() if k != "days"},
+        "window_avg_days": w_days,
         "today": agg([per_day.get(t) or day_row(t)]),
-        "avg7": avg([per_day.get(d) or day_row(d) for d in d7], 7),
-        "avg30": avg([per_day.get(d) or day_row(d) for d in d30], 30),
+        "avg7": avg([per_day.get(d) or day_row(d) for d in d7], a7_days),
+        "avg7_days": a7_days,
+        "avg30": avg([per_day.get(d) or day_row(d) for d in d30], a30_days),
+        "avg30_days": a30_days,
         "all": agg(all_days),
-        "first_date": all_days[-1]["date"] if all_days else None,
+        "first_date": first_date,
+        "history_days": history_days,
+        "prev": prev_totals,
+        "prev_days": len(prev_dates),
+        "prev_has_data": bool(prev_dates) and bool(first_date) and prev_dates[-1] >= first_date,
     }
 
     # ---- breakdowns over the selected window ----

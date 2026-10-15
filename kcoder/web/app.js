@@ -2900,7 +2900,7 @@ const fmtDur = (sec) => { sec = Math.round(sec || 0); if (sec < 60) return sec +
 const fmtDate = (d) => { if (!d) return ''; const t = new Date(d + 'T00:00:00'); return isNaN(t) ? d : t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + (t.getFullYear() !== new Date().getFullYear() ? ' ' + t.getFullYear() : ''); };
 const fmtPct = (x) => `${Math.round((x || 0) * 100)}%`;
 const fmtNum = (v) => (v == null ? '-' : Number.isInteger(v) ? fmtInt(v) : Math.abs(v) >= 100 ? fmtInt(Math.round(v)) : v.toFixed(1));
-const fmtCompact = (v) => { v = Math.round(v || 0); const a = Math.abs(v); return a >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : a >= 10000 ? (v / 1e3).toFixed(1) + 'k' : fmtInt(v); };
+const fmtCompact = (v) => { v = Math.round(v || 0); const a = Math.abs(v); const body = a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e5 ? Math.round(a / 1e3) + 'k' : a >= 1e3 ? (a / 1e3).toFixed(1) + 'k' : String(a); return (v < 0 ? '\u2212' : '') + body; };
 const fmtSigned = (v) => (v > 0 ? '+' : '') + fmtCompact(v);
 const plus = (v) => `<span class="ok">+${fmtInt(Math.round(v || 0))}</span>`, minus = (v) => `<span class="warn">-${fmtInt(Math.round(v || 0))}</span>`;
 const TOOL_NAMES = { run_bash: 'Bash', read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List' };
@@ -2931,15 +2931,36 @@ async function renderStatsView(force) {
   // the period every number on the page is for: a day, today, the last N days, or all time
   const P = d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days} days`;
   const PW = S.window || S.today, isDay = !!d.date || d.days === 1;
-  const metricCard = (key, title, pick, fmt, foot) => `<div class="card${m === key ? ' hl' : ''}"><h3>${title} <span class="dim">· ${P}</span></h3><div class="big">${fmt(pick(PW))}</div>${isDay ? '' : `<div class="row"><span>per day (${P})</span><b>${fmt(pick(S.window_avg || PW))}</b></div>`}${d.days === 1 ? '' : `<div class="row"><span>today</span><b>${fmt(pick(S.today))}</b></div>`}<div class="row"><span>7-day avg</span><b>${fmt(pick(S.avg7))}</b></div><div class="row"><span>30-day avg</span><b>${fmt(pick(S.avg30))}</b></div>${d.days === 0 ? '' : `<div class="row"><span>all time${S.first_date ? ' (since ' + fmtDate(S.first_date) + ')' : ''}</span><b>${fmt(pick(S.all))}</b></div>`}${foot || ''}</div>`;
-  const linesFmt = (r) => `<span class="ok">+${fmtCompact(r.insertions)}</span> <span class="warn">-${fmtCompact(r.deletions)}</span> <span class="dim">net ${fmtSigned(r.net)}</span>`;
+  const Ps = d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days}d`;   // short, for card titles
+  const prior = d.date ? 'the day before' : `prior ${d.days} days`;
+  // when history is shorter than the 30-day window the averages divide by the days that have data; one muted note per card says so
+  const dataNote = S.history_days && S.history_days < 30 ? `<div class="note-dim" title="kcoder has ${S.history_days} day${S.history_days === 1 ? '' : 's'} of history: the 30-day average divides by ${S.avg30_days}${S.history_days < 7 ? ', the 7-day average by ' + S.avg7_days : ''}">(${S.history_days} day${S.history_days === 1 ? '' : 's'} of data)</div>` : '';
+  const delta = (cur, prev, dirBy) => {   // "↑ 38% vs prior 7 days", coloured by direction (dirBy overrides the sign that decides the colour)
+    if (!S.prev || d.days === 0) return '';
+    if (!S.prev_has_data) return `<div class="delta flat" title="no history for the ${prior}">no ${prior} to compare</div>`;
+    const diff = (cur || 0) - (prev || 0); const sign = dirBy == null ? diff : dirBy;
+    const pct = prev ? Math.abs(diff) / Math.abs(prev) : null;
+    const txt = pct == null ? (cur ? 'new' : 'no change') : pct < 0.005 ? 'no change' : (diff > 0 ? '↑ ' : '↓ ') + (pct >= 10 ? Math.round(pct) + '×' : Math.round(pct * 100) + '%');
+    return `<div class="delta ${diff === 0 || pct != null && pct < 0.005 ? 'flat' : sign >= 0 ? 'up' : 'down'}" title="${esc(txt)} vs ${prior}">${txt} <span class="dim">vs ${prior}</span></div>`;
+  };
+  const mk = ['tokens', 'lines', 'commits', 'sessions', 'active', 'api'].includes(m) ? m : 'tokens';   // the card that drives the chart below
+  const metricCard = (key, title, pick, fmt, opts = {}) => `<div class="card metric${mk === key ? ' hl' : ''}" data-metric="${key}" title="click to chart this below">
+    <h3><span class="t">${title} · ${Ps}</span>${opts.info ? ` <span class="info" title="${esc(opts.info)}">i</span>` : ''}${mk === key ? '<span class="badge">charted</span>' : ''}</h3>
+    <div class="big">${fmt(pick(PW))}</div>${delta(opts.num ? opts.num(pick(PW)) : pick(PW), opts.num ? opts.num(pick(S.prev || {})) : pick(S.prev || {}), opts.dir ? opts.dir(PW, S.prev || {}) : null)}
+    ${d.days === 1 ? '' : `<div class="row"><span>today</span><b>${fmt(pick(S.today))}</b></div>`}
+    <div class="row"><span>7-day avg</span><b>${fmt(pick(S.avg7))}</b></div>
+    <div class="row"><span>30-day avg</span><b>${fmt(pick(S.avg30))}</b></div>
+    ${d.days === 0 ? '' : `<div class="row"><span title="${S.first_date ? 'since ' + esc(fmtDate(S.first_date)) : ''}">all time</span><b>${fmt(pick(S.all))}</b></div>`}
+    ${opts.foot || ''}${dataNote}</div>`;
+  const linesFmt = (r) => `<span class="ok">+${fmtCompact(r.insertions)}</span> <span class="warn">−${fmtCompact(r.deletions)}</span> <span class="dim">net ${fmtSigned(r.net)}</span>`;
   const summary = [
     metricCard('tokens', 'tokens', (r) => r.total, fmtTokens),
-    metricCard('lines', 'lines of code', (r) => r, linesFmt, `<div class="row"><span>files changed (${P}) · all time</span><b>${fmtInt(PW.files)} · ${fmtInt(S.all.files)}</b></div>`).replace('<div class="card', '<div class="card wide'),
-    metricCard('commits', 'commits', (r) => r.commits, fmtNum),
-    metricCard('sessions', 'sessions', (r) => r.sessions, fmtNum),
-    metricCard('active', 'active agent time', (r) => r.active_seconds, fmtDur),
-    metricCard('api', 'API equivalent <span class="dim">(estimate)</span>', (r) => r.api_equivalent, fmtUsd, `<div class="row"><span class="dim">what this usage would cost at API rates; plan usage is not billed</span></div>`),
+    metricCard('lines', 'lines of code', (r) => r, linesFmt, { num: (r) => (r.insertions || 0) + (r.deletions || 0), dir: (a, b) => (a.net || 0) - (b.net || 0),
+      foot: `<div class="row"><span>files changed · all time</span><b>${fmtCompact(PW.files)} · ${fmtCompact(S.all.files)}</b></div>` }).replace('<div class="card metric', '<div class="card metric wide'),
+    metricCard('commits', 'commits', (r) => r.commits, fmtCompact),
+    metricCard('sessions', 'sessions', (r) => r.sessions, fmtCompact),
+    metricCard('active', 'agent time', (r) => r.active_seconds, fmtDur),
+    metricCard('api', 'API equiv.', (r) => r.api_equivalent, fmtUsd, { info: 'an estimate of what this usage would cost at API rates; usage on your Claude plan is not billed' }),
   ].join('');
   // daily tokens chart
   const ser = d.series; const W = 900, H = 150, pad = 4; const slot = (W - pad * 2) / Math.max(1, ser.length); const bw = Math.max(2, slot - 2);
@@ -2951,6 +2972,10 @@ async function renderStatsView(force) {
   const ml = Math.max(1, ...ser.map((r) => Math.max(r.insertions, r.deletions))); const zero = Math.round((H - 16) * 0.6);
   const lineBars = ser.map((r, i) => { const x = pad + i * slot; const ha = Math.round(r.insertions / ml * (zero - 4)); const hr = Math.round(r.deletions / ml * (H - 20 - zero)); return `<g><title>${r.date}: +${fmtInt(r.insertions)} / -${fmtInt(r.deletions)} (net ${fmtSigned(r.net)}) · ${r.commits} commit${r.commits === 1 ? '' : 's'} · ${fmtInt(r.files)} files</title><rect class="add" x="${x}" y="${zero - ha}" width="${bw}" height="${ha}"></rect><rect class="del" x="${x}" y="${zero}" width="${bw}" height="${hr}"></rect>${label(i, r)}</g>`; }).join('');
   const linesChart = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line class="zero" x1="0" x2="${W}" y1="${zero}" y2="${zero}"></line>${lineBars}</svg><div class="legend"><span><i class="add"></i> lines added</span><span><i class="del"></i> lines removed</span><span class="dim">peak ${fmtInt(ml)} / day</span></div>`;
+  // a plain daily chart for the other charted metrics (commits, sessions, agent time, API equivalent)
+  const plainChart = (k, f) => { const mp = Math.max(1e-9, ...ser.map((r) => r[k] || 0)); const bars = ser.map((r, i) => { const x = pad + i * slot; const h = Math.round((r[k] || 0) / mp * (H - 20)); return `<g><title>${r.date}: ${f(r[k] || 0)}</title><rect class="in" x="${x}" y="${H - 16 - h}" width="${bw}" height="${h}"></rect>${label(i, r)}</g>`; }).join(''); return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg><div class="legend"><span class="dim">peak ${f(mp)} / day</span></div>`; };
+  const CHARTS = { tokens: ['daily tokens', tokChart], lines: ['daily lines of code', linesChart], commits: ['daily commits', plainChart('commits', fmtCompact)], sessions: ['daily sessions', plainChart('sessions', fmtCompact)], active: ['daily agent time', plainChart('active_seconds', fmtDur)], api: ['daily API equivalent', plainChart('api_equivalent', fmtUsd)] };
+  const charted = CHARTS[m] ? m : 'tokens'; const other = charted === 'lines' ? 'tokens' : 'lines';
   // breakdown tables
   // what the row's usage would cost at API rates; "est." whenever some of it ran on the plan (so was not billed)
   const costCol = { k: 'api_equivalent', label: 'API equiv.', f: (r) => (r.api_equivalent > (r.cost || 0) + 0.005 ? `<span class="dim" title="estimate at API rates${r.cost ? '; ' + fmtUsd(r.cost) + ' actually billed on API keys' : '; this usage ran on your plan'}">${fmtUsd(r.api_equivalent)} est.</span>` : fmtUsd(r.cost)) };
@@ -3016,7 +3041,7 @@ async function renderStatsView(force) {
       <button id="stats-csv" title="daily table as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
     </div>
     <div class="summary six">${summary}</div>
-    ${(d.window || {}).n === 1 ? '' : `<div class="two"><div class="card${m === 'tokens' ? ' hl' : ''}"><h3>daily tokens · ${P}</h3>${tokChart}</div><div class="card${m === 'lines' ? ' hl' : ''}"><h3>daily lines of code · ${P}</h3>${linesChart}</div></div>`}
+    ${(d.window || {}).n === 1 ? '' : `<div class="two"><div class="card hl"><h3>${CHARTS[charted][0]} · ${P} <span class="badge">charted</span></h3>${CHARTS[charted][1]}</div><div class="card"><h3>${CHARTS[other][0]} · ${P}</h3>${CHARTS[other][1]}</div></div>`}
     <div class="card"><h3>daily</h3><div id="stats-daily"></div></div>
     <div class="card"><h3>by model · ${P} <span class="dim">(aliases and full ids merged)</span></h3>${byModel}</div>
     <div class="two"><div class="card"><h3>by provider · ${P}</h3>${byProvider}</div>${cacheCard}</div>
@@ -3036,6 +3061,7 @@ async function renderStatsView(force) {
     const th = e.target.closest('th[data-sort]'); const tb = th && th.closest('[data-table]');
     if (th && tb) { const id = tb.dataset.table, k = th.dataset.sort; const cur = state.statsSorts[id]; state.statsSorts[id] = { key: k, dir: cur && cur.key === k ? -cur.dir : -1 }; localStorage.setItem('kcoder.statsSorts', JSON.stringify(state.statsSorts)); renderStatsView(false); return; }
     const cb = e.target.closest('[data-cal]'); if (cb) { state.statsCal = cb.dataset.cal; localStorage.setItem('kcoder.statsCal', state.statsCal); renderStatsView(false); return; }
+    const mc = e.target.closest('.card.metric[data-metric]'); if (mc) { state.statsMetric = mc.dataset.metric; renderStatsView(false); return; }
     if (e.target.closest('[data-clear-day]')) { state.statsDate = null; renderStatsView(true); return; }
     const dd = e.target.closest('[data-day]'); if (dd && !e.target.closest('th')) { state.statsDate = dd.dataset.day; renderStatsView(true); return; }
     const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
