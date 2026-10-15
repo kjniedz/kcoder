@@ -844,6 +844,42 @@ def full(days: int = 30, date: str | None = None) -> dict:
     }
 
 
+CSV_COLUMNS = ["date", "input", "fresh", "cache_read", "cache_write", "output", "total", "calls", "sessions", "commits",
+               "insertions", "deletions", "net", "files", "active_seconds", "cost", "api_equivalent", "pushed", "unpushed"]
+_CSV_MONEY = {"cost", "api_equivalent"}
+
+
+def csv_export(days: int = 30, date: str | None = None) -> dict:
+    """The daily table of the stats page as CSV text for the same range
+    (`days`: 1 = today, 0 = all time, else the last N days; `date` = one
+    day), oldest day first, one row for every day of the range with zeros
+    on days that had no activity, money rounded to cents. Returns the text,
+    a file name like kcoder-stats-2026-10-15-7d.csv and the row count."""
+    import csv
+    import io
+    f = full(days, date)
+    by_date = {r["date"]: r for r in f["daily"]}
+    start, end = dt.date.fromisoformat(f["window"]["start"]), dt.date.fromisoformat(f["window"]["end"])
+    rows = []
+    d = start
+    while d <= end:
+        key = d.strftime("%Y-%m-%d")
+        r = by_date.get(key) or {"date": key}
+        rows.append([key] + [f"{float(r.get(c) or 0):.2f}" if c in _CSV_MONEY else int(r.get(c) or 0) for c in CSV_COLUMNS[1:]])
+        d += dt.timedelta(days=1)
+    out = io.StringIO()
+    w = csv.writer(out, lineterminator="\n")
+    w.writerow(CSV_COLUMNS)
+    w.writerows(rows)
+    if f["date"]:
+        tag = f["date"]
+    else:
+        n = f["days"]
+        tag = f"{f['today']}-" + ("today" if n == 1 else "all" if n == 0 else f"{n}d")
+    return {"csv": out.getvalue(), "filename": f"kcoder-stats-{tag}.csv", "rows": len(rows),
+            "start": f["window"]["start"], "end": f["window"]["end"]}
+
+
 def _cfg_plan_price() -> float | None:
     try:
         from . import config

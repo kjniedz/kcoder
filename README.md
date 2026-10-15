@@ -184,7 +184,13 @@ Powder Day record (biggest token day) is earned again each time it is beaten.
 model, dates, tokens, the whole conversation with markdown rendered, tool
 calls and their output folded, the commits it made, secrets masked. It
 needs no server and reads well in any browser, light or dark; send the file
-or drop it in a PR. Markdown export is still there.
+or drop it in a PR. Markdown export is still there. In the app window every
+export (session, transcript, stats CSV) goes through the macOS save dialog,
+Downloads by default, then a toast with "Show in Finder"; in a browser tab
+it is a normal download. The window itself only ever shows kcoder: a link
+that would leave it (GitHub, a PR, a file) opens in your default browser,
+and should it ever land on another page, a "back to kcoder" bar, Esc or ⌘[
+brings the app back.
 
 **Search across transcripts.** The sidebar box finds sessions as you type;
 Enter (or ⌘K → search) opens the full search with filters: repo, date
@@ -236,7 +242,9 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   project; top sessions; an activity calendar with streaks; an hour-of-day
   heatmap; parallelism, time waiting on you, tool usage with failure rates,
   session health, records; and every commit made from a session with a GitHub
-  link. Every table sorts by column; the daily table exports CSV. Commits are
+  link. Every table sorts by column; **export CSV** saves the daily table for
+  the range on screen, one row per day (zeros on quiet days, money in
+  cents), as `kcoder-stats-<date>-7d.csv`. Commits are
   detected from local git, so it works offline and for private repos.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, plus links to your

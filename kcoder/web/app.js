@@ -1090,7 +1090,7 @@ async function handleAction(el, sid) {
       case 'git': await gitStatus(sid, true); break;
       case 'pull': { try { const r = await request('pull', { sid }); toast(r.message || 'pulled', 'ok'); gitStatus(sid, false).catch(() => {}); } catch (e) { toast('pull: ' + e.message, 'err'); } break; }
       case 'merge': if (await confirmDialog(`Merge branch ${s.worktree.branch} into ${s.project.name}?`, 'Uncommitted changes in the worktree are committed first.')) { const r = await request('merge', { sid }); toast(r.message || 'merged', r.ok === false ? 'err' : 'ok'); } break;
-      case 'pr': { toast('opening a draft PR… (commit, review check, push, description)'); const r = await request('pr', { sid }); if (r.url) { toast((r.pr && r.pr.draft ? 'draft PR opened: ' : 'PR opened: ') + r.url, 'ok'); window.open(r.url, '_blank'); } else toast(r.message || 'PR created', 'ok'); break; }
+      case 'pr': { toast('opening a draft PR… (commit, review check, push, description)'); const r = await request('pr', { sid }); if (r.url) { toast((r.pr && r.pr.draft ? 'draft PR opened: ' : 'PR opened: ') + r.url, 'ok'); openExternal(r.url); } else toast(r.message || 'PR created', 'ok'); break; }
       case 'discard': if (await confirmDialog(`Discard all work in ${s.worktree.branch}?`, 'The worktree and branch are deleted. This cannot be undone.')) { await request('discard', { sid }); toast('discarded', 'warn'); } break;
       case 'open-chat': assignPane(state.layout.focus, sid); setView('chat'); break;
       case 'export': await exportChat(sid); break;
@@ -1121,11 +1121,46 @@ async function gitStatus(sid, show) {
 async function exportChat(sid, format) {
   if (!format) { format = await chooseDialog('Export this session as…', [['html', 'HTML page - one file that reads well anywhere, secrets masked, tool output folded (share this)'], ['md', 'Markdown']]); if (!format) return; }
   let r; try { r = await request('export', { sid, format: format === 'html' ? 'html' : 'markdown' }); } catch (e) { toast(e.message, 'err'); return; }
-  const blob = new Blob([format === 'html' ? r.html : r.markdown], { type: format === 'html' ? 'text/html' : 'text/markdown' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = (r.title || 'chat').replace(/[^\w.-]+/g, '_') + (format === 'html' ? '.html' : '.md'); a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  toast('exported ' + a.download, 'ok');
+  const name = (r.title || 'chat').replace(/[^\w.-]+/g, '_') + (format === 'html' ? '.html' : '.md');
+  await saveFile(name, format === 'html' ? r.html : r.markdown, format === 'html' ? 'text/html' : 'text/markdown');
 }
+// ----------------------------------------------------------------------
+// files and links: the window only ever shows the app. Saving goes through
+// the native save dialog (Downloads, then "Show in Finder") in the app
+// window and through the browser's download in a tab; a link that would
+// leave the app opens in the default browser instead.
+// ----------------------------------------------------------------------
+function nativeApi() { return (window.pywebview && window.pywebview.api) || null; }
+function isAppUrl(u) { try { const x = new URL(u, location.href); return x.origin === location.origin && /^https?:$/.test(x.protocol); } catch { return false; } }
+function openExternal(url) {
+  const api = nativeApi();
+  if (api && api.open_external) { Promise.resolve(api.open_external(String(url))).catch(() => {}); return; }
+  window.open(url, '_blank', 'noopener');
+}
+async function saveFile(name, text, mime) {
+  const api = nativeApi();
+  if (api && api.save_file) {
+    let r; try { r = await api.save_file(name, text); } catch (e) { toast('could not save ' + name + ': ' + (e && e.message || e), 'err'); return null; }
+    if (!r || r.cancelled) return null;
+    if (r.error) { toast('could not save ' + name + ': ' + r.error, 'err'); return null; }
+    const where = /Mac/i.test(navigator.platform) ? 'Show in Finder' : 'Show in folder';
+    toast('saved ' + (r.name || name), 'ok', api.reveal ? { label: where, run: () => Promise.resolve(api.reveal(r.path)).catch(() => {}) } : null);
+    return r.path;
+  }
+  const blob = new Blob([text], { type: mime || 'application/octet-stream' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.rel = 'noopener'; a.hidden = true;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('saved ' + name + ' to your downloads', 'ok');
+  return name;
+}
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href]'); if (!a) return;
+  const href = a.getAttribute('href') || ''; if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+  if (isAppUrl(a.href)) return;
+  if (nativeApi()) { e.preventDefault(); e.stopPropagation(); openExternal(a.href); return; }
+  if (!a.target || a.target === '_self') { a.target = '_blank'; a.rel = 'noopener'; }
+}, true);
 function copyCode(btn) { const code = btn.parentElement.querySelector('code'); navigator.clipboard.writeText(code ? code.textContent : btn.parentElement.textContent); btn.textContent = 'copied'; setTimeout(() => (btn.textContent = 'copy'), 1200); }
 
 // ----------------------------------------------------------------------
@@ -2433,11 +2468,12 @@ function tokenGate(msg) {
 // ----------------------------------------------------------------------
 // notifications, sound, toasts
 // ----------------------------------------------------------------------
-function toast(text, kind = '') {
+function toast(text, kind = '', action = null) {
   const el = document.createElement('div'); el.className = 'toast ' + kind; el.textContent = text;
   const blocked = /GitHub is (not )?connected|Connect GitHub/i.test(text) && /block/i.test(text);
-  if (blocked) { el.classList.add('warn'); const b = document.createElement('button'); b.textContent = 'Connect GitHub'; b.className = 'primary'; b.style.marginLeft = '8px'; b.onclick = (e) => { e.stopPropagation(); el.remove(); setupDialog(); }; el.appendChild(b); }
-  $('#toasts').appendChild(el); el.onclick = () => el.remove(); setTimeout(() => el.remove(), blocked ? 12000 : 5000);
+  if (blocked) { el.classList.add('warn'); action = { label: 'Connect GitHub', run: () => setupDialog() }; }
+  if (action) { const b = document.createElement('button'); b.textContent = action.label; b.className = 'primary'; b.style.marginLeft = '8px'; b.onclick = (e) => { e.stopPropagation(); el.remove(); action.run(); }; el.appendChild(b); }
+  $('#toasts').appendChild(el); el.onclick = () => el.remove(); setTimeout(() => el.remove(), action ? 12000 : 5000);
 }
 let audioCtx = null;
 function ping(kind) {
@@ -3052,7 +3088,7 @@ async function renderStatsView(force) {
       ${state.statsDate ? `<span class="chip day-chip">${fmtDate(state.statsDate)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
       <span class="help">today is ${fmtDate(d.today)} · days roll over at local midnight</span>
       <span class="spacer"></span>
-      <button id="stats-csv" title="daily table as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
+      <button id="stats-csv" title="save the daily table for this range as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
     </div>
     <div class="summary six">${summary}</div>
     ${(d.window || {}).n === 1 ? '' : `<div class="two"><div class="card hl"><h3>${CHARTS[charted][0]} · ${P} <span class="badge">charted</span></h3>${CHARTS[charted][1]}</div><div class="card"><h3>${CHARTS[other][0]} · ${P}</h3>${CHARTS[other][1]}</div></div>`}
@@ -3098,14 +3134,11 @@ function renderDailyTable() {
   const metricCol = { tokens: 'total', commits: 'commits', sessions: 'sessions', active: 'active_seconds', lines: 'net', api: 'api_equivalent' }[state.statsMetric];
   el.innerHTML = sortableTable('daily', DAILY_COLS, rows, { sort: { key: 'date', dir: -1 }, tall: true, hl: metricCol, empty: 'nothing in this period', total: rows.length ? { label: tot.date, row: tot } : null, row: (r) => ` data-day="${r.date}" title="show ${fmtDate(r.date)}"` + (r.date === statsData.today ? ' class="today click"' : ' class="click"') });
 }
-function exportStatsCsv() {
+async function exportStatsCsv() {
   if (!statsData) return;
-  const cols = ['date', 'input', 'fresh', 'cache_read', 'cache_write', 'output', 'total', 'calls', 'sessions', 'commits', 'insertions', 'deletions', 'net', 'files', 'active_seconds', 'cost', 'api_equivalent', 'pushed', 'unpushed'];
-  const w = statsData.window || {}; const days = statsData.daily.filter((r) => (!w.start || r.date >= w.start) && (!w.end || r.date <= w.end));
-  const csv = [cols.join(',')].concat(days.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => cols.map((c) => r[c] ?? '').join(','))).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `kcoder-stats-${statsData.today}.csv`; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  // the daily table for the range on screen, built by kcoderd: every day of the range, zeros where nothing happened
+  let r; try { r = await request('stats_csv', { days: statsData.days, date: statsData.date || null }); } catch (e) { toast(e.message, 'err'); return; }
+  await saveFile(r.filename, r.csv, 'text/csv');
 }
 
 renderHeader(); renderViews();

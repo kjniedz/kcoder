@@ -1594,6 +1594,10 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
     if t == "stats_full":
         return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None)
 
+    if t == "stats_csv":
+        # the daily table as CSV for the range the stats page shows (the app saves it through the native dialog)
+        return await asyncio.get_running_loop().run_in_executor(None, stats.csv_export, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None)
+
     if t == "notify":
         # a desktop notification on behalf of a client that has no Notification
         # API of its own (the native window); macOS only, best effort

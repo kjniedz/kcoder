@@ -17,6 +17,7 @@ How the window is opened, in order of preference:
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import plistlib
@@ -25,7 +26,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import webbrowser
+from urllib.parse import urlsplit
 
 from . import __version__, compat, paths
 
@@ -123,11 +126,119 @@ def run_native_window(url: str) -> None:
             pass
     storage = os.path.join(paths.DATA_DIR, "webview")
     os.makedirs(storage, exist_ok=True)
+    try:   # a stray a[download] link downloads through the save panel instead of showing the file in the window
+        webview.settings["ALLOW_DOWNLOADS"] = True
+    except Exception:  # noqa: BLE001
+        pass
     api = WindowApi()
+    api.home_url = url
+    install_navigation_guard(url)
     api.window = webview.create_window(APP_NAME, url, width=1440, height=900, min_size=(900, 600), js_api=api)
+    api.window.events.loaded += api.guard_page
     if sys.platform == "darwin":
         api.status_item = install_status_item(api, url)
     webview.start(private_mode=False, storage_path=storage)
+
+
+# ----------------------------------------------------------------------
+# the window only ever shows the app
+# ----------------------------------------------------------------------
+
+def page_allowed(url: str, home: str) -> bool:
+    """True for the app itself (same scheme, host and port as `home`) and the
+    blank page; everything else (files, blob: URLs, GitHub, any other site)
+    belongs in the default browser."""
+    u = str(url or "")
+    if not u or u.startswith("about:"):
+        return True
+    try:
+        a, b = urlsplit(u), urlsplit(home)
+        return (a.scheme, a.hostname, a.port or _default_port(a.scheme)) == (b.scheme, b.hostname, b.port or _default_port(b.scheme))
+    except ValueError:
+        return False
+
+
+def _default_port(scheme: str) -> int | None:
+    return {"http": 80, "https": 443}.get(scheme)
+
+
+def open_external(url: str) -> bool:
+    """Open a URL outside the window: web links in the default browser,
+    file: URLs with whatever opens that file. Other schemes are refused."""
+    u = str(url or "").strip()
+    if urlsplit(u).scheme not in ("http", "https", "mailto", "file"):
+        return False
+    return bool(webbrowser.open(u))
+
+
+def install_navigation_guard(home: str) -> bool:
+    """macOS: a subclass of pywebview's WKNavigationDelegate (installed before
+    the window is made) cancels any main-frame navigation away from the app
+    and opens it in the default browser instead. pywebview only does that for
+    target=_blank links; a plain link (markdown in a transcript, a PR link),
+    window.open() or a blob: URL would replace the app with the page. Frames
+    (the preview pane) are not touched."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from webview.platforms import cocoa  # type: ignore
+        import objc  # type: ignore
+    except Exception:  # noqa: BLE001
+        return False
+    base = cocoa.BrowserView.BrowserDelegate
+    if getattr(base, "_kcoder_home", None) is not None:
+        base._kcoder_home = home
+        return True
+    try:
+        class GuardedDelegate(base):          # the class body keeps PyObjC's block metadata for the handler
+            _kcoder_home = home
+
+            def webView_decidePolicyForNavigationAction_decisionHandler_(self, webview, action, handler):
+                try:
+                    url = str(action.request().URL().absoluteString() or "")
+                    frame = action.targetFrame()
+                    main = frame is None or bool(frame.isMainFrame())
+                except Exception:  # noqa: BLE001
+                    url, main = "", False
+                if main and not page_allowed(url, type(self)._kcoder_home):
+                    handler(0)        # WKNavigationActionPolicyCancel
+                    try:
+                        open_external(url)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+                objc.super(GuardedDelegate, self).webView_decidePolicyForNavigationAction_decisionHandler_(webview, action, handler)
+
+        cocoa.BrowserView.BrowserDelegate = GuardedDelegate
+        return True
+    except Exception as exc:  # noqa: BLE001 - the page-level bar still works
+        with open(APP_LOG_PATH, "a", encoding="utf-8") as log:
+            log.write(f"navigation guard unavailable: {exc}\n")
+        return False
+
+
+# Shown on any page that is not the app (should the guard above ever miss one):
+# a bar at the top with "back to kcoder"; Esc and Cmd+[ go back too.
+BACK_BAR_JS = """(function () {
+  if (document.getElementById('kc-back')) return;
+  var home = %s;
+  var go = function () {
+    try { if (window.pywebview && window.pywebview.api && window.pywebview.api.go_home) { window.pywebview.api.go_home(); return; } } catch (e) {}
+    location.replace(home);
+  };
+  var bar = document.createElement('div'); bar.id = 'kc-back';
+  bar.setAttribute('style', 'position:fixed;top:0;left:0;right:0;z-index:2147483647;display:flex;align-items:center;gap:12px;padding:8px 14px;background:#0C0E12;color:#E6E8EC;font:13px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;border-bottom:1px solid #2A2F3A;box-shadow:0 2px 12px rgba(0,0,0,.4)');
+  var b = document.createElement('button'); b.textContent = '\u2190 back to kcoder';
+  b.setAttribute('style', 'background:#3B82F6;color:#fff;border:0;border-radius:4px;padding:5px 10px;font:inherit;font-weight:600;cursor:pointer');
+  b.onclick = go;
+  var t = document.createElement('span'); t.textContent = 'This is not the kcoder app. Esc or \u2318[ goes back.';
+  t.setAttribute('style', 'opacity:.8');
+  bar.appendChild(b); bar.appendChild(t);
+  (document.body || document.documentElement).appendChild(bar);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' || ((e.metaKey || e.ctrlKey) && e.key === '[')) { e.preventDefault(); go(); }
+  }, true);
+})();"""
 
 
 def install_status_item(api, url: str):
@@ -225,9 +336,74 @@ class WindowApi:
     """Exposed to the page as window.pywebview.api.* in the native window."""
 
     window = None
+    home_url = ""
 
     def is_native(self) -> bool:
         return True
+
+    def save_file(self, name: str, content: str) -> dict:
+        """Save text through the native save dialog (Downloads by default).
+        {"path", "name"} once written, {"cancelled": true}, or {"error"}."""
+        import webview  # type: ignore
+        name = os.path.basename(str(name or "")).strip() or "export.txt"
+        downloads = os.path.expanduser("~/Downloads")
+        if not os.path.isdir(downloads):
+            downloads = os.path.expanduser("~")
+        try:
+            res = self.window.create_file_dialog(webview.FileDialog.SAVE, directory=downloads, save_filename=name)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"save dialog: {exc}"}
+        if not res:
+            return {"cancelled": True}
+        path = str(res[0] if isinstance(res, (list, tuple)) else res)
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(str(content or ""))
+        except OSError as exc:
+            return {"error": str(exc)}
+        return {"path": path, "name": os.path.basename(path)}
+
+    def reveal(self, path: str) -> bool:
+        """Show a saved file in Finder (Explorer on Windows, the folder elsewhere)."""
+        path = str(path or "")
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path) or "."], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            return False
+
+    def open_external(self, url: str) -> bool:
+        """A link that must not replace the app: the default browser gets it."""
+        return open_external(url)
+
+    def go_home(self) -> bool:
+        """Back to the app (the "back to kcoder" bar, Esc, Cmd+[)."""
+        try:
+            self.window.load_url(self.home_url)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def guard_page(self) -> None:
+        """After every page load: if the window shows anything but the app,
+        put the "back to kcoder" bar on it (runs on pywebview's event thread)."""
+        def check():
+            try:
+                cur = self.window.get_current_url() or ""
+                if page_allowed(cur, self.home_url):
+                    return
+                self.window.evaluate_js(BACK_BAR_JS % json.dumps(self.home_url))
+            except Exception as exc:  # noqa: BLE001
+                with open(APP_LOG_PATH, "a", encoding="utf-8") as log:
+                    log.write(f"back bar: {exc}\n")
+        threading.Thread(target=check, daemon=True).start()
 
     def start_daemon(self) -> str:
         """The page found kcoderd down (stopped, crashed, or a restart that never
