@@ -125,3 +125,42 @@ def remove_all(cwd: str | None, sid: str) -> None:
     refs = _git(cwd, "for-each-ref", "--format=%(refname)", f"refs/kcoder/{sid}/", check=False).split()
     for ref in refs:
         _git(cwd, "update-ref", "-d", ref, check=False)
+
+
+def worktree_tree(cwd: str) -> str:
+    """Tree sha of the working tree right now (tracked + untracked, .gitignore honoured)."""
+    fd, idx = tempfile.mkstemp(prefix="kcoder-tl-")
+    os.close(fd)
+    os.unlink(idx)
+    env = dict(os.environ, GIT_INDEX_FILE=idx)
+    try:
+        _git(cwd, "read-tree", "HEAD", env=env, check=False)
+        _git(cwd, "add", "-A", env=env)
+        return _git(cwd, "write-tree", env=env).strip()
+    finally:
+        try:
+            os.unlink(idx)
+        except OSError:
+            pass
+
+
+def diff_trees(cwd: str, tree_a: str, tree_b: str | None) -> dict:
+    """What changed between two checkpoint trees (tree_b None = the worktree now):
+    {"files": [{path, additions, deletions, status, binary}], "diff": str, "to"}."""
+    to = tree_b or worktree_tree(cwd)
+    stat = _git(cwd, "diff", "--numstat", "-M", tree_a, to, check=False)
+    names = _git(cwd, "diff", "--name-status", "-M", tree_a, to, check=False)
+    diff = _git(cwd, "diff", "-M", "--no-color", tree_a, to, check=False)
+    status = {}
+    for line in names.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            status[parts[-1]] = parts[0][0]
+    files = []
+    for line in stat.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            add, dele, path = parts[0], parts[1], parts[-1]
+            files.append({"path": path, "additions": 0 if add == "-" else int(add), "deletions": 0 if dele == "-" else int(dele),
+                          "status": status.get(path, "M"), "binary": add == "-"})
+    return {"files": files, "diff": diff[:2_000_000], "from": tree_a, "to": to}

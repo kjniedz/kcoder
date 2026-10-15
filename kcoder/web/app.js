@@ -222,6 +222,7 @@ async function onConnected() {
   }
   applyUrlParams();
   setTimeout(maybeMorningBrief, 1500);
+  setTimeout(maybeWrapped, 4000);
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
   for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1);
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
@@ -477,7 +478,7 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'handoff_start': out.push(`<div class="note">⇢ context at ${fmtInt(e.tokens)} tokens - writing the handoff summary for a fresh session…</div>`); break;
       case 'handoff': out.push(`<div class="note marker">⇢ ${esc(e.text || '')} <button data-open="${esc(e.to)}">open ${esc(e.name)}</button></div>`); break;
       case 'queue': out.push(`<div class="note">▶ queued task started (${e.remaining} left): ${esc(e.started)}</div>`); break;
-      case 'git': out.push(`<div class="note">${esc(e.text || '')}</div>`); break;
+      case 'git': out.push(`<div class="note${e.kind === 'deploy' ? ' deploy' : ''}">${e.kind === 'deploy' ? '☁ ' : ''}${esc(e.text || '')}</div>`); break;
       case 'job': out.push(`<div class="note job ${esc(e.status || '')}">${e.status === 'running' ? '▶' : e.status === 'done' ? '✓' : '✗'} ${esc(e.text || '')} <button data-job="${e.id}" title="output, stop">output</button></div>`); break;
     }
   }
@@ -1098,6 +1099,7 @@ async function handleAction(el, sid) {
       case 'preview-start': { toast('starting the dev server…'); const r = await request('preview', { sid, action: 'start' }); toast(`preview on ${r.preview.url}`, 'ok'); renderSession(sid); break; }
       case 'preview-stop': await request('preview', { sid, action: 'stop' }); renderSession(sid); break;
       case 'instructions': instructionsDialog(sid); break;
+      case 'deploy': deployDialog(sid); break;
       case 'undo': {
         const msg = el.closest('.msg-user'); const turn = Number(msg.dataset.turn);
         if (!s.worktree) { toast('undo needs a worktree session', 'warn'); break; }
@@ -1163,17 +1165,18 @@ function openExternal(url) {
   if (api && api.open_external) { Promise.resolve(api.open_external(String(url))).catch(() => {}); return; }
   window.open(url, '_blank', 'noopener');
 }
-async function saveFile(name, text, mime) {
+async function saveFile(name, text, mime, opts = {}) {
   const api = nativeApi();
   if (api && api.save_file) {
-    let r; try { r = await api.save_file(name, text); } catch (e) { toast('could not save ' + name + ': ' + (e && e.message || e), 'err'); return null; }
+    let r; try { r = await api.save_file(name, text, !!opts.binary); } catch (e) { toast('could not save ' + name + ': ' + (e && e.message || e), 'err'); return null; }
     if (!r || r.cancelled) return null;
     if (r.error) { toast('could not save ' + name + ': ' + r.error, 'err'); return null; }
     const where = /Mac/i.test(navigator.platform) ? 'Show in Finder' : 'Show in folder';
     toast('saved ' + (r.name || name), 'ok', api.reveal ? { label: where, run: () => Promise.resolve(api.reveal(r.path)).catch(() => {}) } : null);
     return r.path;
   }
-  const blob = new Blob([text], { type: mime || 'application/octet-stream' });
+  const bytes = opts.binary ? Uint8Array.from(atob(text), (c) => c.charCodeAt(0)) : text;
+  const blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.rel = 'noopener'; a.hidden = true;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
@@ -1223,7 +1226,9 @@ function renderSidebar() {
     const archived = g.chats.filter((c) => c.archived);
     if (!show) { hiddenChats += archived.length; if (!active.length) { hiddenProjects++; return ''; } }
     const open = !collapsed[pid];
-    return `<div class="project" data-pid="${esc(pid)}"><div class="project-head" title="${esc(g.project.path)}"><span>${open ? '▾' : '▸'}</span><span class="name">${esc(g.project.name)}</span><span>${active.length}${archived.length ? '+' + archived.length : ''}</span><button class="add" data-new-in="${esc(g.project.path)}" title="new chat in ${esc(g.project.name)}">+</button></div>` +
+    const dep = ((state.projects || []).find((p) => p.id === pid) || {}).deploy;
+    const depDot = dep && dep.state && dep.state !== 'untracked' ? `<span class="deploy-dot ${esc(dep.state)}" title="deploy: ${esc(dep.state)}${dep.at ? ' · ' + age(dep.at) + ' ago' : ''}">${DEPLOY_ICON[dep.state] || '?'}</span>` : '';
+    return `<div class="project" data-pid="${esc(pid)}"><div class="project-head" title="${esc(g.project.path)}"><span>${open ? '▾' : '▸'}</span><span class="name">${esc(g.project.name)}</span>${depDot}<span>${active.length}${archived.length ? '+' + archived.length : ''}</span><button class="add" data-new-in="${esc(g.project.path)}" title="new chat in ${esc(g.project.name)}">+</button></div>` +
       (open ? active.map(chatItemHtml).join('') + (archived.length && show ? `<details class="archived-group"><summary class="chat-item archived"><span class="title">${archived.length} archived</span></summary>${archived.map(chatItemHtml).join('')}</details>` : '') : '') + '</div>';
   }).join('') || `<div class="hit">${hiddenChats ? 'no live chats' : 'no chats yet'} - press + to start one</div>`;
   const b = $('#btn-archived');
@@ -2294,7 +2299,37 @@ function paneChips(s) {
   if (s.needs_review) h += `<span class="chip warn" data-act="changes" title="a task finished; its changes wait for your review">⚑ review</span>`;
   if (s.fallback && s.fallback.provider) h += `<span class="chip warn" title="running on a fallback provider since ${esc(new Date((s.fallback.since || 0) * 1000).toLocaleTimeString())}: ${esc(s.fallback.reason || '')}">⇄ ${esc(s.fallback.provider)}/${esc(s.fallback.model)} · ${age(s.fallback.since)}</span>`;
   if (s.preview && s.preview.running) h += `<span class="chip ok" data-act="preview" title="dev server ${esc(s.preview.label)} on port ${esc(s.preview.port)} (click to show)">▶ :${esc(s.preview.port)}</span>`;
+  if (s.deploy && s.deploy.targets && s.deploy.targets.length) h += deployChipHtml(s.deploy);
   return h;
+}
+// ---- deploy status per repo (read-only, from the provider CLIs): a chip on the pane, a dot on the sidebar project ----
+const DEPLOY_LABEL = { cloudflare: 'cf', railway: 'railway', supabase: 'supabase' };
+const DEPLOY_ICON = { live: '●', building: '◐', failed: '✗', none: '○', error: '?', untracked: '' };
+function deployTitle(d) { return (d.targets || []).map((t) => `${t.provider} ${t.kind || ''} ${t.name}: ${t.state}${t.at ? ' · ' + age(t.at) + ' ago' : ''}${t.detail ? ' · ' + t.detail : ''}`).join('\n') + (d.checked ? `\nchecked ${age(d.checked)} ago · click for details` : ''); }
+function deployChipHtml(d) {
+  const t = d.targets.find((x) => x.state === d.state) || d.targets[0];
+  const names = d.targets.length > 1 ? `${DEPLOY_LABEL[t.provider] || t.provider} +${d.targets.length - 1}` : (DEPLOY_LABEL[t.provider] || t.provider);
+  const when = d.at ? ' · ' + age(d.at) : '';
+  return `<span class="chip deploy ${esc(d.state)}" data-act="deploy" title="${esc(deployTitle(d))}">${DEPLOY_ICON[d.state] || ''} ${esc(names)} · ${esc(d.state)}${when}</span>`;
+}
+async function deployDialog(sid) {
+  const s = state.sessions.get(sid) || state.chats.find((c) => c.id === sid) || {};
+  const root = (s.project || {}).path;
+  const d = openDialog(`<h2>deploys · ${esc((s.project || {}).name || s.name || '')}<span class="help" id="dp-status"></span><span class="spacer"></span><button data-x="refresh" title="ask the provider CLIs now">↻ refresh</button><button data-x="close">✕</button></h2><div class="body"><div id="dp-body" class="help plain">loading…</div><div class="help plain">Read-only: kcoder only lists deployments through the CLIs you are logged into (wrangler, railway, supabase) and never triggers one. Status refreshes after a turn in this repo and every few minutes.</div></div>`, 'deploys');
+  const body = $('#dp-body', d);
+  const render = (dep, targets) => {
+    const list = dep && dep.targets && dep.targets.length ? dep.targets : (targets || []).map((t) => ({ ...t, state: 'unknown', detail: 'not checked yet' }));
+    body.innerHTML = list.length ? list.map((t) => `<div class="row dp-row"><span class="chip deploy ${esc(t.state)}">${DEPLOY_ICON[t.state] || '?'} ${esc(t.state)}</span><b>${esc(t.provider)} ${esc(t.kind || '')} · ${esc(t.name)}</b><span class="help plain">${t.at ? esc(new Date(t.at * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })) + ' · ' : ''}${esc(t.detail || '')}</span><span class="spacer"></span>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">site</a>` : ''}${t.dashboard ? `<a href="${esc(t.dashboard)}" target="_blank" rel="noopener">dashboard</a>` : ''}<button data-open="${esc(t.name)}" class="${t.state === 'failed' ? 'primary' : ''}" title="load the deploy log into this repo's session so the agent can fix it">open in session</button></div>`).join('') : '<div class="empty-row">no deploy config in this repo (wrangler.toml / .json / .jsonc, railway.json / .toml, supabase/config.toml)</div>';
+    $('#dp-status', d).textContent = dep && dep.checked ? `checked ${age(dep.checked)} ago` : '';
+  };
+  const load = async (refresh) => { try { if (refresh) { $('#dp-status', d).textContent = 'asking the CLIs…'; const r = await request('deploys', { action: 'refresh', root }); render(r.deploy, []); if (s.id) renderSession(s.id); } else { const r = await request('deploys', { action: 'list', root }); render(r.deploys[root], r.targets[root]); } } catch (e) { body.innerHTML = `<div class="empty-row">${esc(e.message)}</div>`; } };
+  d.addEventListener('click', async (e) => {
+    const x = e.target.closest('[data-x]'); if (x) { if (x.dataset.x === 'close') closeDialog(); else load(true); return; }
+    const o = e.target.closest('[data-open]'); if (!o) return;
+    try { const r = await request('deploys', { action: 'open', root, sid: state.sessions.has(sid) ? sid : null, target: o.dataset.open }); closeDialog(); toast(r.queued ? 'deploy log queued for the session' : 'deploy log sent to the session', 'ok'); assignPane(state.layout.focus, r.sid); setView('chat'); }
+    catch (err) { toast(err.message, 'err'); }
+  });
+  load(false);
 }
 
 // ---- changes view: file list + diff, accept / reject / edit per hunk, approve ----
@@ -2909,6 +2944,7 @@ function renderCpaneBar(pane) {
     const ms = $('select[data-act="model"]', bar); if (ms.dataset.for !== sid + ':' + s.model + ':' + s.provider) { fillModelSelect(ms, s); ms.dataset.for = sid + ':' + s.model + ':' + s.provider; }
     $('button[data-act="interrupt"]', bar).disabled = !(s.status === 'working' || s.status === 'waiting');
   }
+  const tb = $('[data-pane="timeline"]', bar); if (tb) tb.classList.toggle('active', timelineOn());
   const tv = cpaneViewOf(sid) === 'term';
   const vt = $('[data-pane="view"]', bar); vt.textContent = tv ? '▤' : '☰'; vt.title = (tv ? 'terminal view · click for chat' : 'chat view · click for terminal') + '  (v)'; vt.classList.toggle('active', tv);
   $('[data-pane="zoom"]', bar).textContent = state.layout.zoom != null ? '⤡' : '⤢';
@@ -2969,6 +3005,82 @@ document.addEventListener('click', (e) => {
   else { hideRecap(sid); request('recap', { sid, action: 'dismiss' }).catch(() => {}); }
 });
 
+// ---- session timeline: one mark per turn with tools, files changed, errors and tokens; click for the turn's diff ----
+function timelineOn() { return localStorage.getItem('kcoder.timeline') === 'on'; }
+function turnMarks(store) {
+  const turns = [];
+  let cur = null; const calls = new Map();
+  for (let i = 0; i < store.list.length; i++) {
+    const e = store.list[i];
+    if (e.t === 'user') { cur = { turn: turns.length, i, text: e.text || '', tools: 0, files: new Set(), errors: 0, tokens: 0, ts: e.ts, images: (e.images || []).length }; turns.push(cur); continue; }
+    if (!cur) continue;
+    if (e.t === 'tool_call') { cur.tools++; calls.set(e.id, e); const inp = e.input || {}; const path = inp.file_path || inp.path || inp.notebook_path; if (path && /^(Edit|Write|MultiEdit|NotebookEdit|write_file|edit_file)$/.test(e.name)) cur.files.add(path); }
+    else if (e.t === 'tool_result' && e.is_error) cur.errors++;
+    else if (e.t === 'error') cur.errors++;
+    else if (e.t === 'usage') cur.tokens += (e.input || 0) + (e.output || 0);
+  }
+  return turns;
+}
+function renderTimeline(pane) {
+  const tl = $('.timeline', pane); const sid = pane.dataset.sid;
+  if (!tl) return;
+  if (!sid || !timelineOn() || cpaneViewOf(sid) === 'term') { tl.hidden = true; tl.innerHTML = ''; return; }
+  const store = state.events.get(sid) || { list: [] };
+  const turns = turnMarks(store);
+  const filter = state.tlFilter || 'all';
+  const shown = turns.filter((t) => filter === 'all' || (filter === 'files' && t.files.size) || (filter === 'errors' && t.errors));
+  const maxTok = Math.max(1, ...turns.map((t) => t.tokens));
+  const cur = state.tlTurn && state.tlTurn.sid === sid ? state.tlTurn.turn : -1;
+  tl.hidden = false;
+  tl.innerHTML = `<span class="tl-label" title="one mark per turn: height = tokens; blue = files changed; red = an error">⧗ ${turns.length} turn${turns.length === 1 ? '' : 's'}</span>
+    <span class="tl-track">${shown.map((t) => `<button class="tl-mark${t.files.size ? ' files' : ''}${t.errors ? ' err' : ''}${t.turn === cur ? ' cur' : ''}" data-turn="${t.turn}" style="--h:${Math.max(18, Math.round(t.tokens / maxTok * 100))}%" title="turn ${t.turn + 1}: ${esc(t.text.slice(0, 80))}${t.text.length > 80 ? '…' : ''}\n${t.tools} tool call${t.tools === 1 ? '' : 's'} · ${t.files.size} file${t.files.size === 1 ? '' : 's'} changed · ${t.errors} error${t.errors === 1 ? '' : 's'} · ${fmtTokens(t.tokens)} tokens${t.images ? ' · ' + t.images + ' image(s)' : ''}\nclick: jump there and show the diff of this turn"><i></i></button>`).join('') || '<span class="dim">no turns match</span>'}</span>
+    <span class="seg sm tl-filter"><button data-tlf="all" class="${filter === 'all' ? 'active' : ''}" title="every turn">all</button><button data-tlf="files" class="${filter === 'files' ? 'active' : ''}" title="only turns that changed files">files</button><button data-tlf="errors" class="${filter === 'errors' ? 'active' : ''}" title="only turns that hit an error">errors</button></span>
+    <button class="tl-close" data-tl="close" title="hide the timeline">✕</button>`;
+}
+function toggleTimeline(pane) { localStorage.setItem('kcoder.timeline', timelineOn() ? 'off' : 'on'); for (const p of $$('#split .cpane')) { renderTimeline(p); renderCpaneBar(p); } }
+document.addEventListener('click', (e) => {
+  const tl = e.target.closest('.timeline'); if (!tl) return;
+  const pane = tl.closest('.cpane'); const sid = pane.dataset.sid;
+  const f = e.target.closest('[data-tlf]'); if (f) { state.tlFilter = f.dataset.tlf; renderTimeline(pane); return; }
+  if (e.target.closest('[data-tl="close"]')) { toggleTimeline(pane); return; }
+  const m = e.target.closest('.tl-mark'); if (!m) return;
+  const turn = Number(m.dataset.turn);
+  state.tlTurn = { sid, turn }; renderTimeline(pane);
+  const el = pane.querySelector(`.msg-user[data-turn="${turn}"]`);
+  if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); }
+  turnDiffDialog(sid, turn);
+});
+function diffHunkHtml(h) {
+  const lines = h.text.split('\n').slice(1).map((l) => `<div class="dl ${l[0] === '+' ? 'add' : l[0] === '-' ? 'del' : ''}">${esc(l)}</div>`).join('');
+  return `<div class="hunk ro"><div class="hh"><code>${esc(h.path)}</code> <span class="dim">${esc(h.header)}</span></div><div class="dls">${lines}</div></div>`;
+}
+async function turnDiffDialog(sid, turn) {
+  const s = state.sessions.get(sid) || {};
+  const store = state.events.get(sid) || { list: [] }; const turns = turnMarks(store); const t = turns[turn] || { text: '', tools: 0, files: new Set(), errors: 0, tokens: 0 };
+  const d = openDialog(`<h2>turn ${turn + 1} of ${turns.length}<span class="help" id="td-status"></span><span class="spacer"></span><button data-td="prev" ${turn <= 0 ? 'disabled' : ''} title="previous turn">←</button><button data-td="next" ${turn >= turns.length - 1 ? 'disabled' : ''} title="next turn">→</button><button data-td="undo" class="danger" title="undo to here: files and conversation go back to just before this turn">↶ undo to here</button><button data-x="close">✕</button></h2>
+    <div class="body changes"><div class="td-head"><div class="md">${renderMarkdown(t.text.slice(0, 600))}</div><div class="help plain">${t.tools} tool call(s) · ${t.files.size} file(s) touched · ${t.errors} error(s) · ${fmtTokens(t.tokens)} tokens${t.ts ? ' · ' + new Date(t.ts * 1000).toLocaleString() : ''}</div></div><div class="ch-files"></div><div class="ch-diff"><div class="empty-row">loading the diff…</div></div></div>`, 'turndiff');
+  d.classList.add('wide');
+  const files = $('.ch-files', d), diff = $('.ch-diff', d), status = $('#td-status', d);
+  try {
+    const r = await request('turn_diff', { sid, turn });
+    status.textContent = `${r.files.length} file(s) changed by this turn${r.through_now ? (r.partial ? ' (still running: the diff grows)' : ' (through the worktree now)') : ''}`;
+    files.innerHTML = r.files.length ? r.files.map((f) => `<div class="item" data-f="${esc(f.path)}"><span class="st ${esc(f.status)}">${esc(f.status)}</span><code>${esc(f.path)}</code><span class="meta">+${f.additions}/-${f.deletions}</span></div>`).join('') : '<div class="empty-row">this turn changed no files</div>';
+    diff.innerHTML = r.hunks.length ? r.hunks.map(diffHunkHtml).join('') : `<div class="empty-row">${r.files.length ? 'binary changes only' : 'no diff'}</div>`;
+  } catch (e) { status.textContent = ''; diff.innerHTML = `<div class="empty-row">${esc(e.message)}</div>`; files.innerHTML = ''; }
+  d.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-x]')) { closeDialog(); return; }
+    const b = e.target.closest('[data-td]'); if (!b) return;
+    if (b.dataset.td === 'prev' || b.dataset.td === 'next') { closeDialog(); const k = turn + (b.dataset.td === 'next' ? 1 : -1); state.tlTurn = { sid, turn: k }; for (const p of $$('#split .cpane')) if (p.dataset.sid === sid) renderTimeline(p); turnDiffDialog(sid, k); return; }
+    if (b.dataset.td === 'undo') {
+      if (!s.worktree) { toast('undo needs a worktree session', 'warn'); return; }
+      closeDialog();
+      if (await confirmDialog('Undo to here?', `Files in the worktree go back to how they were just before turn ${turn + 1}, and that message and everything after it are removed from the conversation. Commits the agent made since are undone too.`)) {
+        try { await request('undo', { sid, turn }); toast('restored files and conversation', 'ok'); loadEventsFresh(sid); } catch (err) { toast(err.message, 'err'); }
+      }
+    }
+  });
+}
+
 function renderCpaneLog(pane) {
   const sid = pane.dataset.sid; const log = $('.chat-log', pane);
   const term = cpaneViewOf(sid) === 'term';
@@ -2979,6 +3091,7 @@ function renderCpaneLog(pane) {
   renderLogInto(pane, log, sid, store, {}, log);
   if (pane._find && pane._find.q) runFind(pane, false);
   if (store.loaded) maybeRecap(pane, sid);
+  renderTimeline(pane);
 }
 
 function wireCpane(pane) {
@@ -2992,8 +3105,8 @@ function wireCpane(pane) {
   const bar = $('.cpane-bar', pane);
   bar.addEventListener('click', (e) => {
     const sid = pane.dataset.sid;
-    const pb = e.target.closest('[data-pane]');
-    if (pb) { const a = pb.dataset.pane; if (a === 'zoom') toggleZoom(idx()); else if (a === 'close') splitClose(idx()); else if (a === 'menu') paneMenu(pane); else if (a === 'find') openFind(pane); else if (a === 'view') toggleCpaneView(pane); return; }
+    const pb = e.target.closest('button[data-pane]');   // the pane element itself carries data-pane=<index>: buttons only
+    if (pb) { const a = pb.dataset.pane; if (a === 'zoom') toggleZoom(idx()); else if (a === 'close') splitClose(idx()); else if (a === 'menu') paneMenu(pane); else if (a === 'find') openFind(pane); else if (a === 'view') toggleCpaneView(pane); else if (a === 'timeline') toggleTimeline(pane); return; }
     if (e.target.closest('.picker')) { pickSession(idx()); return; }
     if (e.target.closest('a')) return;
     const b = e.target.closest('[data-act]'); if (b && sid) handleAction(b, sid);
@@ -3169,17 +3282,20 @@ const verbCountsThisMonth = () => { try { return (JSON.parse(localStorage.getIte
 async function renderStatsView(force) {
   if (state.view !== 'stats') return;
   const box = $('#stats-body');
-  if (force || !statsData || statsData.days !== state.statsDays || (statsData.date || null) !== (state.statsDate || null)) {
+  const RG = state.statsRange || null;
+  const sameRange = (a, b) => (!a && !b) || (a && b && a.start === b.start && a.end === b.end);
+  if (force || !statsData || statsData.days !== state.statsDays || (statsData.date || null) !== (state.statsDate || null) || !sameRange(statsData.range, RG)) {
     if (!statsData) box.innerHTML = '<div class="empty"><p>loading stats…</p></div>';
-    try { statsData = await request('stats_full', { days: state.statsDays, date: state.statsDate || null }); } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
+    try { statsData = await request('stats_full', { days: state.statsDays, date: state.statsDate || null, start: RG && RG.start, end: RG && RG.end }); } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
     if (state.view !== 'stats') return;
   }
   if (!statsData.quota || force) { try { statsData.quota = (await request('quota')).quota; } catch { statsData.quota = { source: 'none' }; } }
+  if (!statsData.wrapped || force) { try { statsData.wrapped = await request('wrapped', { action: 'list' }); } catch { statsData.wrapped = { cards: [], keys: {} }; } }
   const d = statsData; const S = d.summary; const m = state.statsMetric;
   // the period every number on the page is for: a day, today, the last N days, or all time
-  const P = d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days} days`;
+  const P = d.range ? `${fmtDate(d.range.start)} – ${fmtDate(d.range.end)}` : d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days} days`;
   const PW = S.window || S.today, isDay = !!d.date || d.days === 1;
-  const Ps = d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days}d`;   // short, for card titles
+  const Ps = d.range ? `${d.days}d range` : d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days}d`;   // short, for card titles
   const prior = d.date ? 'the day before' : `prior ${d.days} days`;
   // when history is shorter than the 30-day window the averages divide by the days that have data; one muted note per card says so
   const dataNote = S.history_days && S.history_days < 30 ? `<div class="note-dim" title="kcoder has ${S.history_days} day${S.history_days === 1 ? '' : 's'} of history: the 30-day average divides by ${S.avg30_days}${S.history_days < 7 ? ', the 7-day average by ' + S.avg7_days : ''}">(${S.history_days} day${S.history_days === 1 ? '' : 's'} of data)</div>` : '';
@@ -3295,9 +3411,11 @@ async function renderStatsView(force) {
   const quotaCard = quotaCardHtml(d.quota, m === 'quota');
   box.innerHTML = `
     <div class="stats-head"><h2>stats</h2>
-      <div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && !RG && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
       <label class="help day-pick" title="Show one day: pick it here, or click a day in the daily table or the calendar">or a day <input type="date" id="stats-day" max="${d.today}" value="${esc(state.statsDate || '')}"></label>
+      <label class="help day-pick" title="Any range, for example a Wrapped week or month">or from <input type="date" id="stats-from" max="${d.today}" value="${esc(RG ? RG.start : '')}"> to <input type="date" id="stats-to" max="${d.today}" value="${esc(RG ? RG.end : '')}"></label>
       ${state.statsDate ? `<span class="chip day-chip">${fmtDate(state.statsDate)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
+      ${RG ? `<span class="chip day-chip">${fmtDate(RG.start)} – ${fmtDate(RG.end)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
       <span class="help">today is ${fmtDate(d.today)} · days roll over at local midnight</span>
       <span class="spacer"></span>
       <button id="stats-csv" title="save the daily table for this range as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
@@ -3314,11 +3432,14 @@ async function renderStatsView(force) {
     ${hours}
     <div class="summary four">${parallel}${waiting}${health}${records}</div>
     ${achievementsCard}
+    ${wrappedCardHtml(d.wrapped)}
     <div class="two"><div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>${fun}</div>
     <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${P} · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
   renderDailyTable();
-  $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); state.statsDate = null; localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
-  $('#stats-day').addEventListener('change', (e) => { state.statsDate = e.target.value || null; renderStatsView(true); });
+  $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); state.statsDate = null; state.statsRange = null; localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
+  $('#stats-day').addEventListener('change', (e) => { state.statsDate = e.target.value || null; state.statsRange = null; renderStatsView(true); });
+  const rangeChange = () => { const a = $('#stats-from').value, b = $('#stats-to').value; if (a && b) { state.statsRange = { start: a <= b ? a : b, end: a <= b ? b : a }; state.statsDate = null; renderStatsView(true); } };
+  $('#stats-from').addEventListener('change', rangeChange); $('#stats-to').addEventListener('change', rangeChange);
   $('#stats-csv').addEventListener('click', exportStatsCsv);
   $('#stats-refresh').addEventListener('click', () => renderStatsView(true));
   box.onclick = (e) => {
@@ -3326,14 +3447,107 @@ async function renderStatsView(force) {
     if (th && tb) { const id = tb.dataset.table, k = th.dataset.sort; const cur = state.statsSorts[id]; state.statsSorts[id] = { key: k, dir: cur && cur.key === k ? -cur.dir : -1 }; localStorage.setItem('kcoder.statsSorts', JSON.stringify(state.statsSorts)); renderStatsView(false); return; }
     const cb = e.target.closest('[data-cal]'); if (cb) { state.statsCal = cb.dataset.cal; localStorage.setItem('kcoder.statsCal', state.statsCal); renderStatsView(false); return; }
     const mc = e.target.closest('.card.metric[data-metric]'); if (mc) { state.statsMetric = mc.dataset.metric; renderStatsView(false); return; }
-    if (e.target.closest('[data-clear-day]')) { state.statsDate = null; renderStatsView(true); return; }
+    if (e.target.closest('[data-clear-day]')) { state.statsDate = null; state.statsRange = null; renderStatsView(true); return; }
+    const wb = e.target.closest('[data-wrapped]'); if (wb) { wrappedDialog(wb.dataset.wrapped); return; }
     if (e.target.closest('[data-x="settings"]')) { settingsDialog(); return; }
-    const dd = e.target.closest('[data-day]'); if (dd && !e.target.closest('th')) { state.statsDate = dd.dataset.day; renderStatsView(true); return; }
+    const dd = e.target.closest('[data-day]'); if (dd && !e.target.closest('th')) { state.statsDate = dd.dataset.day; state.statsRange = null; renderStatsView(true); return; }
     const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
     if (e.target.closest('a')) return;
     const tr = e.target.closest('tr[data-open]'); if (tr) { assignPane(state.layout.focus, tr.dataset.open); setView('chat'); return; }
     const cr = e.target.closest('tr[data-sha]'); if (cr) cr.classList.toggle('open');
   };
+}
+// ---- kcoder Wrapped: the archive on the stats page, the card itself in a dialog, PNG through the save dialog ----
+function wrappedPeriodLabel(c) { const k = c.key || ''; return c.kind === 'week' || /W/.test(k) ? `week ${k.split('W')[1]} · ${fmtDate(c.start)} – ${fmtDate(c.end)}` : `${new Date(c.start + 'T00:00:00').toLocaleDateString([], { month: 'long', year: 'numeric' })}`; }
+function wrappedCardHtml(w) {
+  const keys = (w && w.keys) || {}; const cards = (w && w.cards) || [];
+  const rows = cards.map((c) => `<div class="row wr-row"><button class="link" data-wrapped="${esc(c.key)}">${esc(wrappedPeriodLabel(c))}</button><span class="dim">${c.complete ? '' : 'so far · '}${fmtTokens(c.tokens)} tokens · ${fmtInt(c.commits)} commits · <span class="ok">+${fmtCompact(c.lines_added)}</span> <span class="warn">−${fmtCompact(c.lines_removed)}</span>${c.top_repo ? ' · ' + esc(c.top_repo.name) : ''}</span></div>`).join('');
+  return `<div class="card wrapped"><h3>kcoder wrapped <span class="dim">· every Monday for the week, on the 1st for the month</span><span class="spacer"></span>
+    <button data-wrapped="${esc(keys.this_week || '')}">this week so far</button><button data-wrapped="${esc(keys.last_week || '')}">last week</button><button data-wrapped="${esc(keys.this_month || '')}">this month so far</button><button data-wrapped="${esc(keys.last_month || '')}">last month</button></h3>
+    ${rows || '<div class="row"><span class="dim">no cards yet: open one above; finished weeks and months are kept here</span></div>'}</div>`;
+}
+function verbForPeriod(start) { try { const all = JSON.parse(localStorage.getItem('kcoder.verbCounts') || '{}'); const m = all[(start || '').slice(0, 7)] || {}; const top = Object.entries(m).sort((a, b) => b[1] - a[1])[0]; return top ? { name: top[0], count: top[1] } : null; } catch { return null; } }
+async function wrappedDialog(key, opts = {}) {
+  if (!key) return;
+  let card; try { card = (await request('wrapped', { action: 'get', key, verb: verbForPeriod(key.includes('W') ? null : key + '-01') || verbForPeriod(null), fresh: !!opts.fresh })).card; } catch (e) { toast(e.message, 'err'); return; }
+  if (!card.verb) { const v = verbForPeriod(card.start); if (v) card.verb = v; }
+  const hours = (sec) => { const h = Math.floor((sec || 0) / 3600); return h ? `${h}h ${Math.round(((sec || 0) % 3600) / 60)}m` : fmtDur(sec); };
+  const tile = (label, value, sub) => `<div class="wtile"><div class="wl">${label}</div><div class="wv">${value}</div>${sub ? `<div class="ws">${sub}</div>` : ''}</div>`;
+  const paid = card.paid_multiple != null ? `${card.paid_multiple}× the plan's share (${fmtUsd(card.plan_share)})` : '';
+  const html = `<div class="wrapped-card" id="wrapped-card">
+    <pre class="banner compact">${BANNER}</pre>
+    <div class="wh"><span class="wt">kcoder wrapped</span><span class="wp">${esc(wrappedPeriodLabel(card))}${card.complete ? '' : ' · so far'}</span></div>
+    <div class="wgrid">
+      ${tile('tokens', fmtTokens(card.tokens), `${fmtTokens(card.input)} in · ${fmtTokens(card.output)} out`)}
+      ${tile('lines', `<span class="ok">+${fmtCompact(card.lines_added)}</span> <span class="warn">−${fmtCompact(card.lines_removed)}</span>`, `net ${fmtSigned(card.net)} · ${fmtInt(card.files)} files`)}
+      ${tile('commits', fmtInt(card.commits), `${fmtInt(card.sessions)} sessions · ${hours(card.active_seconds)} agent time`)}
+      ${tile('top repo', card.top_repo ? esc(card.top_repo.name) : '-', card.top_repo ? `${fmtTokens(card.top_repo.tokens)} tokens · ${fmtInt(card.top_repo.commits)} commits` : '')}
+      ${tile('longest session', card.longest_session ? esc(card.longest_session.name) : '-', card.longest_session ? `${hours(card.longest_session.active_seconds)} · ${fmtTokens(card.longest_session.tokens)} tokens` : '')}
+      ${tile('biggest commit', card.biggest_commit ? `${fmtInt(card.biggest_commit.lines)} lines` : '-', card.biggest_commit ? `${esc((card.biggest_commit.subject || '').slice(0, 60))}` : '')}
+      ${tile('API equivalent', fmtUsd(card.api_equivalent), paid ? `plan paid for itself ${esc(paid)}` : '')}
+      ${tile('badges earned', card.badges.length ? card.badges.map((b) => '★ ' + esc(b.name)).join('<br>') : 'none this time', '')}
+      ${tile('most-shown verb', card.verb ? esc(card.verb.name) : '-', card.verb ? `${fmtInt(card.verb.count)} times (counted in this browser)` : 'counted while sessions work')}
+    </div>
+    <div class="wfun">That is ${esc(card.fun)}.</div>
+  </div>`;
+  const d = openDialog(`<h2>wrapped<span class="spacer"></span><button data-w="png" title="save as PNG through the save dialog">⤓ save PNG</button><button data-w="refresh" title="recompute">↻</button><button data-w="stats" title="the stats page for exactly this range">check on stats</button><button data-x="close">✕</button></h2><div class="body wrapped-body">${html}</div>`, 'wrapped');
+  d.classList.add('wide');
+  const done = () => { closeDialog(); if (opts.due) request('wrapped', { action: 'seen', key }).catch(() => {}); };
+  d.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-x]')) { done(); return; }
+    const b = e.target.closest('[data-w]'); if (!b) return;
+    if (b.dataset.w === 'png') { await saveWrappedPng(card); return; }
+    if (b.dataset.w === 'refresh') { done(); wrappedDialog(key, { ...opts, fresh: true }); return; }
+    if (b.dataset.w === 'stats') { done(); state.statsRange = { start: card.start, end: card.end }; state.statsDate = null; statsData = null; setView('stats'); }
+  });
+}
+function maybeWrapped() {
+  if (state.dialog) return;
+  request('wrapped', { action: 'due' }).then((r) => { const k = (r.due || [])[0]; if (k && !state.dialog) wrappedDialog(k, { due: true }); }).catch(() => {});
+}
+// the PNG is drawn with the canvas API (no foreignObject: WebKit taints that), styled with the brand tokens
+async function saveWrappedPng(card) {
+  const W = 1200, H = 1500, S = 2;
+  const c = document.createElement('canvas'); c.width = W * S; c.height = H * S; const x = c.getContext('2d'); x.scale(S, S);
+  const T = { bg: '#0C0E12', bg2: '#11161C', line: '#2E4559', fg: '#D9E2EC', dim: '#8597AB', accent: '#7FC5FF', green: '#4ADE80', red: '#F87171', yellow: '#FBBF24' };
+  const mono = '"SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
+  x.fillStyle = T.bg; x.fillRect(0, 0, W, H);
+  x.fillStyle = T.accent; x.font = `bold 15px ${mono}`; x.textBaseline = 'top';
+  BANNER.split('\n').forEach((l, i) => x.fillText(l, 60, 50 + i * 17));
+  x.fillStyle = T.fg; x.font = `bold 34px ${mono}`; x.fillText('kcoder wrapped', 60, 175);
+  x.fillStyle = T.dim; x.font = `18px ${mono}`; x.fillText(wrappedPeriodLabel(card) + (card.complete ? '' : ' · so far'), 60, 222);
+  const hours = (sec) => { const h = Math.floor((sec || 0) / 3600); return h ? `${h}h ${Math.round(((sec || 0) % 3600) / 60)}m` : fmtDur(sec); };
+  const tiles = [
+    ['tokens', fmtTokens(card.tokens), `${fmtTokens(card.input)} in · ${fmtTokens(card.output)} out`],
+    ['lines', `+${fmtCompact(card.lines_added)}  −${fmtCompact(card.lines_removed)}`, `net ${fmtSigned(card.net)} · ${fmtInt(card.files)} files`, 'lines'],
+    ['commits', fmtInt(card.commits), `${fmtInt(card.sessions)} sessions · ${hours(card.active_seconds)} agent time`],
+    ['top repo', card.top_repo ? card.top_repo.name : '-', card.top_repo ? `${fmtTokens(card.top_repo.tokens)} tokens · ${fmtInt(card.top_repo.commits)} commits` : ''],
+    ['longest session', card.longest_session ? card.longest_session.name : '-', card.longest_session ? `${hours(card.longest_session.active_seconds)} · ${fmtTokens(card.longest_session.tokens)} tokens` : ''],
+    ['biggest commit', card.biggest_commit ? `${fmtInt(card.biggest_commit.lines)} lines` : '-', card.biggest_commit ? (card.biggest_commit.subject || '').slice(0, 40) : ''],
+    ['API equivalent', fmtUsd(card.api_equivalent), card.paid_multiple != null ? `plan paid for itself ${card.paid_multiple}×` : ''],
+    ['badges earned', card.badges.length ? `${card.badges.length}` : 'none', card.badges.slice(0, 3).map((b) => '★ ' + b.name).join('  ')],
+    ['most-shown verb', card.verb ? card.verb.name : '-', card.verb ? `${fmtInt(card.verb.count)} times` : ''],
+  ];
+  const cols = 3, tw = (W - 120 - 20 * (cols - 1)) / cols, th = 150;
+  tiles.forEach((t, i) => {
+    const cx = 60 + (i % cols) * (tw + 20), cy = 275 + Math.floor(i / cols) * (th + 20);
+    x.fillStyle = T.bg2; x.strokeStyle = T.line; x.lineWidth = 1.5; x.beginPath(); x.roundRect(cx, cy, tw, th, 10); x.fill(); x.stroke();
+    x.fillStyle = T.dim; x.font = `13px ${mono}`; x.fillText(t[0].toUpperCase(), cx + 18, cy + 16);
+    x.fillStyle = t[3] === 'lines' ? T.green : T.fg; x.font = `bold ${String(t[1]).length > 14 ? 24 : 34}px ${mono}`;
+    if (t[3] === 'lines') { const parts = String(t[1]).split('  '); x.fillText(parts[0], cx + 18, cy + 44); const w1 = x.measureText(parts[0] + ' ').width; x.fillStyle = T.red; x.fillText(parts[1] || '', cx + 18 + w1, cy + 44); }
+    else x.fillText(String(t[1]).slice(0, 22), cx + 18, cy + 44);
+    x.fillStyle = T.dim; x.font = `13px ${mono}`; x.fillText(String(t[2]).slice(0, 44), cx + 18, cy + 100);
+  });
+  x.fillStyle = T.accent; x.font = `bold 22px ${mono}`;
+  const fun = `That is ${card.fun}.`; const words = fun.split(' '); let line = '', ly = 820; for (const w of words) { const test = line ? line + ' ' + w : w; if (x.measureText(test).width > W - 120) { x.fillText(line, 60, ly); ly += 32; line = w; } else line = test; } x.fillText(line, 60, ly);
+  // the period's days as bars
+  const days = card.daily || []; if (days.length) { const bx = 60, by = 920, bw = W - 120, bh = 260; const mx = Math.max(1, ...days.map((r) => r.tokens)); const slot = bw / days.length; x.fillStyle = T.dim; x.font = `13px ${mono}`; x.fillText('TOKENS PER DAY', bx, by - 24); days.forEach((r, i) => { const h = Math.round(r.tokens / mx * (bh - 30)); x.fillStyle = r.tokens ? T.accent : T.line; x.fillRect(bx + i * slot + 2, by + bh - 30 - h, Math.max(2, slot - 4), Math.max(2, h)); if (days.length <= 31 && (days.length <= 7 || i % Math.ceil(days.length / 10) === 0)) { x.fillStyle = T.dim; x.font = `11px ${mono}`; x.fillText(r.date.slice(5), bx + i * slot + 2, by + bh - 22); } }); }
+  x.fillStyle = T.dim; x.font = `14px ${mono}`; x.fillText(`${card.commits} commits · ${hours(card.active_seconds)} of agent time · streak ${card.streak || 0} day${card.streak === 1 ? '' : 's'}`, 60, 1230);
+  x.fillStyle = T.line; x.fillRect(60, 1400, W - 120, 1.5);
+  x.fillStyle = T.dim; x.font = `13px ${mono}`; x.fillText('kcoder · developed by Kyle Niedzwiecki · © 2026 Kyer\'s Reserve LLC', 60, 1420);
+  x.fillStyle = T.accent; x.font = `bold 13px ${mono}`; x.textAlign = 'right'; x.fillText('ten agents, one keyboard.', W - 60, 1420); x.textAlign = 'left';
+  const dataUrl = c.toDataURL('image/png');
+  await saveFile(`kcoder-wrapped-${card.key}.png`, dataUrl.split(',')[1], 'image/png', { binary: true });
 }
 function quotaCardHtml(q, hl) {
   q = q || { source: 'none' };
@@ -3371,7 +3585,7 @@ function renderDailyTable() {
 async function exportStatsCsv() {
   if (!statsData) return;
   // the daily table for the range on screen, built by kcoderd: every day of the range, zeros where nothing happened
-  let r; try { r = await request('stats_csv', { days: statsData.days, date: statsData.date || null }); } catch (e) { toast(e.message, 'err'); return; }
+  let r; try { r = await request('stats_csv', { days: statsData.days, date: statsData.date || null, start: statsData.range && statsData.range.start, end: statsData.range && statsData.range.end }); } catch (e) { toast(e.message, 'err'); return; }
   await saveFile(r.filename, r.csv, 'text/csv');
 }
 

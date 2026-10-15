@@ -62,6 +62,8 @@ from . import rules as rulesmod
 from . import issues as issuesmod
 from . import brief as briefmod
 from . import quota as quotamod
+from . import deploys as deploysmod
+from . import wrapped as wrappedmod
 from . import recap as recapmod
 from . import search as searchmod
 from .providers import plan_usage as providers_plan_usage
@@ -149,6 +151,7 @@ class Session:
         m["active_model"] = self.engine.active_label()
         m["fallback"] = self.meta.get("fallback")
         m["preview"] = self.preview.info() if self.preview is not None else None
+        m["deploy"] = self.manager.deploy_summary(root)
         return m
 
     def save_meta(self) -> None:
@@ -401,6 +404,67 @@ class Manager:
             "tasks": {"paused": self.tasks.paused, "counts": self.tasks.summary()["counts"],
                       "max_concurrent": self.cfg.get("max_concurrent", 3)},
         }
+
+    # ---- deploy status per repo (kcoder/deploys.py): read-only, polled, refreshed after turns ----
+    def deploy_entry(self, root: str | None) -> dict | None:
+        if not root:
+            return None
+        cache = getattr(self, "_deploys", None)
+        if cache is None:
+            cache = self._deploys = deploysmod.all_entries()
+        return cache.get(root)
+
+    def deploy_summary(self, root: str | None) -> dict | None:
+        """The short form for panes and sidebar rows: state, time, one line per target."""
+        e = self.deploy_entry(root)
+        if not e or not e.get("targets"):
+            return None
+        return {"state": e.get("state"), "at": e.get("at"), "checked": e.get("checked"), "root": root,
+                "targets": [{"provider": t["provider"], "kind": t.get("kind"), "name": t.get("name"), "state": t["status"].get("state"),
+                             "at": t["status"].get("at"), "detail": t["status"].get("detail"), "url": t["status"].get("url"), "dashboard": t["status"].get("dashboard")} for t in e["targets"]]}
+
+    def deploy_roots(self) -> list:
+        roots = []
+        for m in list(self.chats.values()):
+            if m.get("archived") and m["id"] not in self.sessions:
+                continue
+            root = (m.get("project") or {}).get("path")
+            if root and root not in roots and os.path.isdir(root) and deploysmod.has_targets(root):
+                roots.append(root)
+        return roots
+
+    def deploy_refresh(self, root: str) -> dict:
+        """Runs in a worker thread: ask the CLIs, note state changes on the repo's sessions."""
+        before = self.deploy_entry(root) or {}
+        entry = deploysmod.refresh(root)
+        self._deploys[root] = entry
+        self.loop.call_soon_threadsafe(self._deploy_changed, root, before, entry)
+        return entry
+
+    def _deploy_changed(self, root: str, before: dict, entry: dict) -> None:
+        old = {t["name"]: t["status"].get("state") for t in before.get("targets") or []}
+        changed = [t for t in entry.get("targets") or [] if old.get(t["name"]) != t["status"].get("state")]
+        if changed:
+            for s in self.sessions.values():
+                if ((s.meta.get("project") or {}).get("path")) == root:
+                    for t in changed:
+                        self._record(s, {"t": "git", "ts": time.time(), "kind": "deploy",
+                                         "text": f"deploy: {t['provider']} {t.get('kind') or ''} {t['name']} is {t['status'].get('state')}" + (f" · {t['status'].get('detail')}" if t["status"].get("detail") else "")})
+            for t in changed:
+                if t["status"].get("state") == "failed":
+                    self.notify(f"{os.path.basename(root)}: deploy failed", f"{t['provider']} {t['name']}: {t['status'].get('detail') or ''}")
+        self.broadcast_sessions()
+        self.broadcast_chats()
+
+    def deploy_soon(self, root: str, delay: float = 45.0) -> None:
+        """After a turn in a repo with deploy targets: check again shortly (a push usually starts a build)."""
+        pending = self.__dict__.setdefault("_deploy_timers", {})
+        if root in pending:
+            return
+        def fire():
+            pending.pop(root, None)
+            self.loop.run_in_executor(None, self.deploy_refresh, root)
+        pending[root] = self.loop.call_later(delay, fire)
 
     def _quota_summary(self) -> dict:
         """The weekly meter for the status bar (the daily series stays out of the sessions frame)."""
@@ -1140,6 +1204,9 @@ class Manager:
             if not m.get("archived"):
                 entry["active"] += 1
             entry["last_activity"] = max(entry["last_activity"], m.get("last_activity", 0))
+            if "deploy" not in entry:
+                d = self.deploy_summary(p.get("path"))
+                entry["deploy"] = {"state": d["state"], "at": d["at"]} if d else None
         return sorted(by_id.values(), key=lambda p: p["last_activity"], reverse=True)
 
     def history(self, project: str | None = None, include_archived: bool = True, limit: int = 200) -> list:
@@ -1271,6 +1338,9 @@ class Manager:
             self.finish_task(session, event.get("result") or "error")
             if (session.meta.get("project") or {}).get("git") or session.meta.get("worktree"):
                 self.loop.run_in_executor(None, self._track_commits, session)
+            root_ = (session.meta.get("project") or {}).get("path")
+            if root_ and deploysmod.has_targets(root_):
+                self.deploy_soon(root_)
             if event.get("result") == "ok":
                 self.loop.call_later(0.2, self._advance_queue, sid)
             if self.cap_reached():
@@ -1684,11 +1754,89 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         return {"quota": data}
 
     if t == "stats_full":
-        return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None)
+        return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None,
+                                                                req.get("start") or None, req.get("end") or None)
+
+    if t == "wrapped":
+        # kcoder Wrapped: due cards (a finished week on Monday, a finished month on the 1st), any period on demand, the archive
+        action = req.get("action") or "due"
+        loop = asyncio.get_running_loop()
+        if action == "due":
+            return {"due": wrappedmod.due(), "keys": wrappedmod.current_keys()}
+        if action == "keys":
+            return {"keys": wrappedmod.current_keys()}
+        if action == "list":
+            return {"cards": wrappedmod.archive(), "keys": wrappedmod.current_keys()}
+        if action == "seen":
+            wrappedmod.mark_seen(str(req.get("key") or ""))
+            return {"ok": True}
+        if action == "get":
+            try:
+                card = await loop.run_in_executor(None, wrappedmod.get, str(req.get("key") or ""), req.get("verb") or None, bool(req.get("fresh")))
+            except ValueError as exc:
+                raise RequestError(str(exc))
+            return {"card": card}
+        raise RequestError(f"unknown wrapped action: {action}")
+
+    if t == "deploys":
+        # deploy status per repo: list (cached), refresh (ask the CLIs now), open (the failed log into a session)
+        action = req.get("action") or "list"
+        loop = asyncio.get_running_loop()
+        root = req.get("root")
+        if not root and req.get("sid"):
+            root = ((_session(manager, req.get("sid")).meta.get("project") or {}).get("path"))
+        if root:
+            root = os.path.realpath(os.path.expanduser(str(root)))   # project paths are real paths (macOS: /tmp is /private/tmp)
+        if action == "list":
+            roots = [root] if root else manager.deploy_roots()
+            return {"deploys": {r: manager.deploy_summary(r) for r in roots}, "targets": {r: deploysmod.detect(r) for r in roots}}
+        if not root or not os.path.isdir(root):
+            raise RequestError("no repo for that")
+        if action == "refresh":
+            entry = await loop.run_in_executor(None, manager.deploy_refresh, root)
+            return {"deploy": manager.deploy_summary(root), "entry": entry}
+        if action == "open":
+            entry = manager.deploy_entry(root) or await loop.run_in_executor(None, manager.deploy_refresh, root)
+            name = req.get("target")
+            targets = [t for t in entry.get("targets") or [] if not name or t.get("name") == name]
+            failed = [t for t in targets if t["status"].get("state") == "failed"] or targets
+            if not failed:
+                raise RequestError("no deploy target in this repo")
+            tgt = failed[0]
+            report = await loop.run_in_executor(None, deploysmod.failure_log, tgt, tgt["status"], root)
+            # the session: the one asked for, else a live idle session of this repo, else a new one
+            sess = manager.sessions.get(req.get("sid")) if req.get("sid") else None
+            if sess is None:
+                cands = [s_ for s_ in manager.sessions.values() if ((s_.meta.get("project") or {}).get("path")) == root]
+                cands.sort(key=lambda s_: (s_.engine.busy, -(s_.meta.get("last_activity") or 0)))
+                sess = cands[0] if cands else None
+            if sess is None:
+                prov = auth.default_provider()
+                sess = manager.create(cwd=root, provider=prov, model=None, name=None, trust=manager.cfg.get("default_trust") or "auto", worktree=None,
+                                      title=f"deploy failed: {tgt['name']}")
+            text = (f"The {tgt['provider']} deploy of `{tgt['name']}` is {tgt['status'].get('state')}.\n\n{report}\n\n"
+                    "Find the cause in this repo, fix it, run the relevant checks or build locally, and commit. Do not deploy from here: "
+                    "the next push triggers the deploy. If the failure is not caused by this repo, say so and stop.")
+            manager._record(sess, {"t": "git", "ts": time.time(), "kind": "deploy", "text": f"deploy log of {tgt['provider']} {tgt['name']} ({tgt['status'].get('state')}) sent to this session"})
+            if sess.engine.busy:
+                sess.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+                sess.save_meta()
+                manager.broadcast_sessions()
+                return {"sid": sess.id, "queued": True}
+            try:
+                manager.record_user(sess, text, [])
+                sess.engine.send(text, [])
+            except EngineBusy:
+                sess.meta.setdefault("queue", []).insert(0, {"text": text, "added": time.time()})
+                sess.save_meta()
+                return {"sid": sess.id, "queued": True}
+            return {"sid": sess.id, "queued": False}
+        raise RequestError(f"unknown deploys action: {action}")
 
     if t == "stats_csv":
         # the daily table as CSV for the range the stats page shows (the app saves it through the native dialog)
-        return await asyncio.get_running_loop().run_in_executor(None, stats.csv_export, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None)
+        return await asyncio.get_running_loop().run_in_executor(None, stats.csv_export, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None,
+                                                                req.get("start") or None, req.get("end") or None)
 
     if t == "notify":
         # a desktop notification on behalf of a client that has no Notification
@@ -2167,6 +2315,25 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
 
     if t == "checkpoints":
         return {"checkpoints": checkpoints.load(session.dir)}
+
+    if t == "turn_diff":
+        # the timeline: what turn k changed = checkpoint before turn k vs the one before turn k+1 (or the worktree now)
+        k = int(req.get("turn", -1))
+        items = checkpoints.load(session.dir)
+        cur = next((c for c in items if c.get("turn") == k), None)
+        if cur is None:
+            raise RequestError("no checkpoint for that turn (checkpoints need a worktree session)")
+        nxt = next((c for c in items if c.get("turn") == k + 1), None)
+        try:
+            d = await asyncio.get_running_loop().run_in_executor(None, checkpoints.diff_trees, engine.cwd, cur["tree"], nxt["tree"] if nxt else None)
+        except checkpoints.CheckpointError as exc:
+            raise RequestError(f"diff failed: {exc}")
+        d["hunks"] = review.split_hunks(d["diff"])
+        d["turn"] = k
+        d["partial"] = nxt is None and engine.busy      # the turn is still running: the diff grows
+        d["through_now"] = nxt is None
+        d["checkpoint"] = {kk: cur.get(kk) for kk in ("n", "ts", "turn", "head")}
+        return d
 
     if t == "undo":
         info = session.meta.get("worktree")
@@ -2808,9 +2975,10 @@ async def _serve(host: str, port: int) -> None:
         prs = asyncio.create_task(_pr_loop(manager))
         sched = asyncio.create_task(_schedule_loop(manager))
         pv = asyncio.create_task(_preview_loop(manager))
+        dp = asyncio.create_task(_deploy_loop(manager))
         await stop.wait()
         log.info("shutting down")
-        for task in (updates, prs, sched, pv):
+        for task in (updates, prs, sched, pv, dp):
             task.cancel()
         manager.shutdown()
         server.close()
@@ -2927,6 +3095,28 @@ async def _ci_autofix(manager: Manager, session: Session, fresh: dict) -> bool:
     session.save_meta()
     manager.notify(f"{session.meta['name']}: CI failed", f"PR #{pr.get('number')}: fixing the failing check", session.id)
     return True
+
+
+async def _deploy_loop(manager: Manager) -> None:
+    """Deploy status for every repo with targets: a light interval, faster while something builds."""
+    loop = asyncio.get_running_loop()
+    await asyncio.sleep(float(os.environ.get("KCODER_DEPLOY_DELAY", "20")))
+    while not manager.stop.is_set():
+        roots = manager.deploy_roots()
+        for root in roots:
+            if manager.stop.is_set():
+                return
+            try:
+                await loop.run_in_executor(None, manager.deploy_refresh, root)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("deploy status failed for %s: %s", root, exc)
+        building = any((manager.deploy_entry(r) or {}).get("state") == "building" for r in roots)
+        wait = float(os.environ.get("KCODER_DEPLOY_POLL") or (60 if building else 300))
+        try:
+            await asyncio.wait_for(manager.stop.wait(), timeout=wait)
+            return
+        except asyncio.TimeoutError:
+            pass
 
 
 async def _update_loop(manager: Manager) -> None:

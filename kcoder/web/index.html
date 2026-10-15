@@ -100,11 +100,13 @@
       <select data-act="model" class="sec" title="model"></select>
       <button data-act="interrupt" class="sec" title="Interrupt (Esc)">■</button>
       <button data-pane="find" class="sec" title="Find in session (⌘F)">⌕</button>
+      <button data-pane="timeline" class="sec" title="Timeline: one mark per turn (tools, files, errors, tokens); click a mark for its diff">⧗</button>
       <button data-pane="zoom" title="Pop out / back to grid (⌘⇧↩)">⤢</button>
       <button data-pane="close" title="Close pane (⌘⇧W)">✕</button>
       <button data-pane="menu" title="More">⋯</button>
     </div>
     <div class="cpane-find" hidden><input placeholder="find in this session…" autocomplete="off"><span class="count"></span><button data-find="prev" title="previous (⇧↩)">↑</button><button data-find="next" title="next (↩)">↓</button><button data-find="close" title="close (esc)">✕</button></div>
+    <div class="timeline" hidden></div>
     <div class="recap-slot" hidden></div>
     <div class="chat-log"></div>
     <button class="jump" hidden>↓ jump to latest</button>

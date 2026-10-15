@@ -228,6 +228,42 @@ the phone approval page a tap on "say yes or no" listens for yes / approve
 / allow or no / deny / decline and answers the request (the relay needs a
 redeploy once).
 
+**Deploy status per repo.** A repo with a wrangler.toml / .json / .jsonc,
+a railway.json / .toml or a supabase/config.toml gets a deploy chip in its
+pane header and a dot on its sidebar project: live, building or failed with
+the time of the last deploy. The state comes from the provider CLIs you are
+already logged into (`wrangler`, `railway`, `supabase`), through listing
+commands only: kcoder never triggers a deploy. It refreshes shortly after a
+turn in that repo (a push usually starts a build), every five minutes
+otherwise, every minute while something builds; the chip opens the list of
+targets with site and dashboard links and a refresh. **Open in session**
+loads what the CLI knows about a failed deploy (Railway build and deploy
+logs; the deployment record and dashboard link for Cloudflare and Supabase,
+whose CLIs expose no build log) into that repo's session so the agent can
+fix it; the fix is committed, never deployed from there.
+
+**Session timeline.** The ⧗ button on a chat pane shows a scrubber under
+the header, one mark per turn: height is the turn's tokens, blue means it
+changed files, red means it hit an error; hover for tools, files, errors
+and tokens. Click a mark to jump the transcript there and open the diff of
+exactly that turn (the checkpoint before it against the one before the next
+turn, or the worktree now for the last turn), with ← → to walk turns, a
+file list, and **undo to here** through the existing checkpoints. Filters:
+all, files, errors.
+
+**kcoder Wrapped.** Every Monday the past week's card, on the 1st the past
+month's, shown once when the app opens (also from the stats page: this week
+so far, last week, this month so far, last month, and an archive of every
+card kept). Tokens, lines added and removed, commits, sessions and agent
+time, top repo, longest session, biggest commit, API equivalent with the
+"plan paid for itself" multiple for that period's share of the plan price,
+badges earned in the period, the most-shown working verb, one fun
+equivalent, and the period's days as bars. **save PNG** draws the card
+with the brand tokens and the KCODER banner and saves it through the save
+dialog; **check on stats** opens the stats page on exactly that date range
+(the stats page now takes any from / to range, and export CSV follows it),
+so every number can be compared.
+
 **Where we left off.** Opening a session that sat idle for a day, or any
 session after the app restarted, shows a recap card at the top of its chat:
 what was done, what is pending, open decisions, and the branch state

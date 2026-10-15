@@ -529,9 +529,10 @@ class WindowApi:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
-    def save_file(self, name: str, content: str) -> dict:
-        """Save text through the native save dialog (Downloads by default).
-        {"path", "name"} once written, {"cancelled": true}, or {"error"}."""
+    def save_file(self, name: str, content: str, binary: bool = False) -> dict:
+        """Save text (or, with binary=True, base64 bytes: the Wrapped PNG) through the
+        native save dialog (Downloads by default). {"path", "name"} once written,
+        {"cancelled": true}, or {"error"}."""
         import webview  # type: ignore
         name = os.path.basename(str(name or "")).strip() or "export.txt"
         downloads = os.path.expanduser("~/Downloads")
@@ -545,9 +546,14 @@ class WindowApi:
             return {"cancelled": True}
         path = str(res[0] if isinstance(res, (list, tuple)) else res)
         try:
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(str(content or ""))
-        except OSError as exc:
+            if binary:
+                import base64
+                with open(path, "wb") as f:
+                    f.write(base64.b64decode(str(content or "")))
+            else:
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    f.write(str(content or ""))
+        except (OSError, ValueError) as exc:
             return {"error": str(exc)}
         return {"path": path, "name": os.path.basename(path)}
 

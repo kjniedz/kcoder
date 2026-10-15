@@ -517,11 +517,30 @@ def _parallelism(windows: list) -> dict:
     return {"peak": peak, "avg": round(agent / busy, 2) if busy else 0.0, "agent_seconds": round(agent), "busy_seconds": round(busy)}
 
 
-def full(days: int = 30, date: str | None = None) -> dict:
+def _dates_between(start: str, end: str) -> list:
+    """Every date from start to end inclusive, newest first (like _dates_back)."""
+    a, b = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+    if b < a:
+        a, b = b, a
+    n = min((b - a).days + 1, 3650)
+    return [(b - dt.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n)]
+
+
+def full(days: int = 30, date: str | None = None, start: str | None = None, end: str | None = None) -> dict:
     """Everything the stats view shows. `days`: 1 = today, 0 = all time,
-    else the last N days; `date` (YYYY-MM-DD) = that one day."""
+    else the last N days; `date` (YYYY-MM-DD) = that one day; `start` and
+    `end` (YYYY-MM-DD) = exactly that range, inclusive."""
     days = max(0, min(int(days if days is not None else 30), 3650))
     date = str(date)[:10] if date and re.match(r"^\d{4}-\d{2}-\d{2}$", str(date)) else None
+    ok = lambda v: str(v)[:10] if v and re.match(r"^\d{4}-\d{2}-\d{2}$", str(v)) else None   # noqa: E731
+    start, end = ok(start), ok(end)
+    if start and not end:
+        end = today()
+    if end and not start:
+        start = end
+    range_ = {"start": start, "end": end} if start and end else None
+    if range_:
+        date = None
     usage = usage_rows()
     commits = commits_with_state()
     metas = session_metas()
@@ -576,7 +595,10 @@ def full(days: int = 30, date: str | None = None) -> dict:
         row["active_seconds"] = round(row["active_seconds"])
 
     all_days = sorted(per_day.values(), key=lambda r: r["date"], reverse=True)
-    if date:
+    if range_:
+        window = _dates_between(range_["start"], range_["end"])
+        days = len(window)
+    elif date:
         window = [date]
     elif days == 0:
         first = all_days[-1]["date"] if all_days else t
@@ -818,6 +840,7 @@ def full(days: int = 30, date: str | None = None) -> dict:
     return {
         "days": days,
         "date": date,
+        "range": range_,
         "window": {"start": window[-1], "end": window[0], "n": len(window)},
         "today": t,
         "summary": summary,
@@ -849,7 +872,7 @@ CSV_COLUMNS = ["date", "input", "fresh", "cache_read", "cache_write", "output", 
 _CSV_MONEY = {"cost", "api_equivalent"}
 
 
-def csv_export(days: int = 30, date: str | None = None) -> dict:
+def csv_export(days: int = 30, date: str | None = None, start: str | None = None, end: str | None = None) -> dict:
     """The daily table of the stats page as CSV text for the same range
     (`days`: 1 = today, 0 = all time, else the last N days; `date` = one
     day), oldest day first, one row for every day of the range with zeros
@@ -857,7 +880,7 @@ def csv_export(days: int = 30, date: str | None = None) -> dict:
     a file name like kcoder-stats-2026-10-15-7d.csv and the row count."""
     import csv
     import io
-    f = full(days, date)
+    f = full(days, date, start, end)
     by_date = {r["date"]: r for r in f["daily"]}
     start, end = dt.date.fromisoformat(f["window"]["start"]), dt.date.fromisoformat(f["window"]["end"])
     rows = []
@@ -871,7 +894,9 @@ def csv_export(days: int = 30, date: str | None = None) -> dict:
     w = csv.writer(out, lineterminator="\n")
     w.writerow(CSV_COLUMNS)
     w.writerows(rows)
-    if f["date"]:
+    if f.get("range"):
+        tag = f"{f['range']['start']}-to-{f['range']['end']}"
+    elif f["date"]:
         tag = f["date"]
     else:
         n = f["days"]
