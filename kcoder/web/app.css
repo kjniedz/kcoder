@@ -556,14 +556,18 @@ table.grid .warn, .card .warn { color: var(--yellow); }
 .card .row.stack { flex-direction: column; align-items: flex-start; gap: 0; margin-bottom: 5px; }
 .card .row.stack b { white-space: normal; }
 .summary.four { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.card .verbs { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 2px 0 6px; }
+.card .verbs span { background: var(--bg-3); border-radius: 10px; padding: 1px 8px; font-size: 11px; }
+.card .verbs span b { margin-left: 4px; }
+.card .verbs span.lh { border: 1px dashed var(--line-2); background: transparent; }
 .card h3 .seg.sm { display: inline-flex; margin-left: 8px; }
 .card h3 .seg.sm button { padding: 0 7px; font-size: 10px; }
 .card h3 .spacer { flex: 1; }
 .card h3 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .chart rect.add { fill: var(--green); } .chart rect.del { fill: var(--yellow); } .chart line.zero { stroke: var(--line-2); stroke-width: 1; }
 .legend i.add { background: var(--green); } .legend i.del { background: var(--yellow); }
-.stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-3); margin: 2px 0 8px; }
-.stack i, .sw { display: inline-block; height: 10px; } .sw { width: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.tokbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--bg-3); margin: 2px 0 8px; }
+.tokbar i, .sw { display: inline-block; height: 10px; } .sw { width: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .fresh { background: var(--accent); } .cread { background: var(--chart-in); } .cwrite { background: var(--yellow); }
 .grid-wrap.fixed table.grid { table-layout: fixed; width: 100%; }
 .grid-wrap.fixed table.grid td, .grid-wrap.fixed table.grid th { overflow: hidden; text-overflow: ellipsis; }

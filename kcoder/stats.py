@@ -639,8 +639,11 @@ def full(days: int = 30, date: str | None = None, start: str | None = None, end:
         start = dt.date.fromisoformat(window[-1])
         prev_dates = [(start - dt.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, len(window) + 1)]
     prev_totals = agg([per_day.get(d) or day_row(d) for d in prev_dates]) if prev_dates else None
+    from . import wrapped as _wrapped   # wrapped imports stats; resolved here, not at import time
     summary = {
         "window": window_totals,
+        # the period as something you can picture (copies of War and Peace, Doom sources): the same line Wrapped prints
+        "fun": _wrapped.fun_line(int(window_totals.get("total") or 0), int(window_totals.get("insertions") or 0) + int(window_totals.get("deletions") or 0)),
         "window_avg": {k: (v / w_days) for k, v in window_totals.items() if k != "days"},
         "window_avg_days": w_days,
         "today": agg([per_day.get(t) or day_row(t)]),

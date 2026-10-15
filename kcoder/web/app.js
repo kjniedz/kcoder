@@ -3350,7 +3350,7 @@ async function renderStatsView(force) {
   const top = sortableTable('top', [{ k: 'name', label: 'session', f: (r) => `<span class="ell" title="${esc((r.name || r.key) + (r.title ? ' · ' + r.title : ''))}">${esc(r.name || r.key)}${r.title && r.title !== r.name ? ' <span class="dim">· ' + esc(r.title) + '</span>' : ''}</span>${r.archived ? ' <span class="badge archived">archived</span>' : ''}`, cls: 'l name', sort: (r) => r.name || r.key }, { k: 'model', label: 'model', f: (r) => esc(r.model || ''), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'turns', label: 'turns', f: (r) => fmtInt(r.turns) }, { k: 'active_seconds', label: 'active', f: (r) => fmtDur(r.active_seconds) }, { k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'net', label: 'lines', f: (r) => (r.commits ? `${plus(r.insertions)} ${minus(r.deletions)}` : '<span class="dim">-</span>') }, costCol], d.top_sessions, { sort: { key: 'total', dir: -1 }, fixed: true, row: (r) => ` class="click" data-open="${esc(r.key)}" title="open in the focused pane"`, empty: 'no usage in this range' });
   // cache split
   const c = d.cache; const ci = Math.max(1, c.input);
-  const cacheCard = `<div class="card"><h3>input tokens · ${P}</h3><div class="stack"><i class="fresh" style="width:${c.fresh / ci * 100}%" title="fresh input"></i><i class="cread" style="width:${c.cache_read / ci * 100}%" title="cache reads"></i><i class="cwrite" style="width:${c.cache_write / ci * 100}%" title="cache writes"></i></div>
+  const cacheCard = `<div class="card"><h3>input tokens · ${P}</h3><div class="tokbar"><i class="fresh" style="width:${c.fresh / ci * 100}%" title="fresh input"></i><i class="cread" style="width:${c.cache_read / ci * 100}%" title="cache reads"></i><i class="cwrite" style="width:${c.cache_write / ci * 100}%" title="cache writes"></i></div>
     <div class="row"><span><i class="sw fresh"></i> fresh input</span><b>${fmtTokens(c.fresh)}</b></div><div class="row"><span><i class="sw cread"></i> cache reads</span><b>${fmtTokens(c.cache_read)}</b></div><div class="row"><span><i class="sw cwrite"></i> cache writes</span><b>${fmtTokens(c.cache_write)}</b></div>
     <div class="row"><span>cache hit rate</span><b>${fmtPct(c.hit_rate)}</b></div><div class="row"><span>API equivalent <span class="dim">(estimate)</span></span><b>${fmtUsd(c.api_equivalent)}</b></div>${c.cost ? `<div class="row"><span>actually billed (API keys)</span><b>${fmtUsd(c.cost)}</b></div>` : ''}</div>`;
   // activity calendar
@@ -3379,8 +3379,17 @@ async function renderStatsView(force) {
     rec('longest turn', R.longest_turn && `${fmtDur(R.longest_turn.seconds)} <span class="dim">· <a href="#" data-open-session="${esc(R.longest_turn.sid)}">${esc(R.longest_turn.name || R.longest_turn.sid)}</a> · ${fmtDate(R.longest_turn.date)}</span>`) +
     rec('most tokens in a day', R.most_tokens_day && `${fmtTokens(R.most_tokens_day.tokens)} <span class="dim">· ${fmtDate(R.most_tokens_day.date)}</span>`) +
     rec('most lines in a day', R.most_lines_day && `${fmtInt(R.most_lines_day.lines)} <span class="dim">· ${fmtDate(R.most_lines_day.date)}</span>`) + '</div>';
+  // just for fun: the verbs this browser showed while sessions worked, the Wrapped-style equivalent for the period and the secret badges
   const vc = Object.entries(verbCountsThisMonth()).sort((a, b) => b[1] - a[1]);
-  const fun = `<div class="card"><h3>just for fun</h3>${rec('most-shown verb this month', vc.length ? `${esc(vc[0][0])} <span class="dim">· ${fmtInt(vc[0][1])} times${vc[1] ? ' · then ' + esc(vc[1][0]) : ''}</span>` : null)}<div class="row"><span class="dim">counted in this browser while sessions work</span></div></div>`;
+  const lh = vc.filter(([v]) => LONG_HAUL_VERBS.includes(v)), topV = vc.filter(([v]) => !LONG_HAUL_VERBS.includes(v)).slice(0, 5);
+  const secret = ((d.achievements || {}).badges || []).filter((b) => b.hidden && b.earned);
+  const latestWrapped = ((d.wrapped || {}).cards || [])[0];
+  const fun = `<div class="card fun"><h3>just for fun</h3>
+    <div class="row stack"><span>most-shown verbs this month <span class="dim">· counted in this browser</span></span><b>${topV.length ? `<span class="verbs">${topV.map(([v, n]) => `<span>${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</span>` : '<span class="dim">none yet: they show while a session works</span>'}</b></div>
+    ${lh.length ? `<div class="row stack"><span>long hauls <span class="dim">· verbs past ten minutes</span></span><b><span class="verbs">${lh.map(([v, n]) => `<span class="lh">${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</span></b></div>` : ''}
+    ${rec(`${P} is`, S.fun ? esc(S.fun) : null)}
+    ${rec('secret badges', secret.length ? secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ') : '<span class="dim">none found yet</span>')}
+    <div class="row"><span>${latestWrapped ? `<button class="link" data-wrapped="${esc(latestWrapped.key)}">latest Wrapped: ${esc(wrappedPeriodLabel(latestWrapped))}</button>` : '<span class="dim">no Wrapped card yet</span>'}</span></div></div>`;
   // achievements: next up (three closest locked badges) above the badge wall; hidden badges show only once earned
   const A = d.achievements || { badges: [], next_up: [], records: {} };
   const fmtBadge = (b, v) => ({ tokens: fmtTokens, int: fmtCompact, usd: fmtUsd, dur: fmtDur, days: (x) => `${Math.round(x)} day${Math.round(x) === 1 ? '' : 's'}`, pct: fmtPct, ratio: (x) => `${Math.round(x * 100)}%`, flag: (x) => (x ? 'done' : 'not yet') }[b.fmt] || fmtCompact)(v);
@@ -3430,10 +3439,10 @@ async function renderStatsView(force) {
     <div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens · ${P}</h3>${top}</div>
     ${calendar}
     ${hours}
-    <div class="summary four">${parallel}${waiting}${health}${records}</div>
+    <div class="summary four">${parallel}${waiting}${health}${fun}</div>
     ${achievementsCard}
     ${wrappedCardHtml(d.wrapped)}
-    <div class="two"><div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>${fun}</div>
+    <div class="two"><div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>${records}</div>
     <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${P} · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
   renderDailyTable();
   $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); state.statsDate = null; state.statsRange = null; localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
