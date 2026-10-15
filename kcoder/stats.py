@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 
-from . import identity, paths, repos
+from . import achievements, identity, paths, repos
 
 log = logging.getLogger("kcoder.stats")
 
@@ -839,5 +839,15 @@ def full(days: int = 30, date: str | None = None) -> dict:
         "tools": tool_rows,
         "health": health,
         "records": records,
+        "achievements": achievements.compute(all_days, facts, metas, commits, first_date, t, _cfg_plan_price()),
         "generated": now,
     }
+
+
+def _cfg_plan_price() -> float | None:
+    try:
+        from . import config
+        v = config.load().get("plan_price_usd")
+        return float(v) if v else None
+    except Exception:  # noqa: BLE001
+        return None

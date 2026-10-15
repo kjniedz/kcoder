@@ -1464,6 +1464,13 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if "connector_approvals" in req:
             manager.cfg["connector_approvals"] = bool(req["connector_approvals"])
             config.save({"connector_approvals": bool(req["connector_approvals"])})
+        if "plan_price_usd" in req:
+            try:
+                price = max(0.0, float(req["plan_price_usd"] or 0))
+            except (TypeError, ValueError):
+                raise RequestError("plan_price_usd must be a number")
+            manager.cfg["plan_price_usd"] = price
+            config.save({"plan_price_usd": price})
         if "ci_autofix" in req:
             manager.cfg["ci_autofix"] = bool(req["ci_autofix"])
             config.save({"ci_autofix": bool(req["ci_autofix"])})

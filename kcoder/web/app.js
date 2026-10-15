@@ -1963,6 +1963,7 @@ async function settingsDialog() {
     ${chk('connector_approvals', cfg.connector_approvals !== false, 'Connector approvals', 'reads (Gmail, Calendar, Drive, Linear…) run by themselves; sends and changes wait for your approval')}
     ${chk('ci_autofix', cfg.ci_autofix !== false, 'Auto-fix on CI failure', 'a red check on a session\'s PR sends the failing log to that session; its fix is pushed through the usual review gate (at most three rounds per PR)')}
     ${chk('handoff', cfg.handoff !== false, 'Automatic handoff', 'at the compaction point the session writes a handoff summary and continues as a fresh session in the same worktree (off: the history is summarised in place)')}
+    <label class="setting"><span>Claude plan price (USD / month) <span class="help">the stats page's "paid for itself" badges compare API-equivalent usage with it</span></span><input type="number" min="0" step="1" data-set="plan_price_usd" value="${Number(cfg.plan_price_usd == null ? 200 : cfg.plan_price_usd)}"></label>
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
     <div class="label-h">accounts</div>
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
@@ -1980,7 +1981,7 @@ async function settingsDialog() {
       if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
       if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
       if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
-      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'ci_autofix' ? { ci_autofix: el.checked } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
+      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'ci_autofix' ? { ci_autofix: el.checked } : k === 'plan_price_usd' ? { plan_price_usd: Number(el.value) } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
       const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');
     } catch (err) { toast(err.message, 'err'); }
   });
@@ -3017,6 +3018,19 @@ async function renderStatsView(force) {
     rec('most lines in a day', R.most_lines_day && `${fmtInt(R.most_lines_day.lines)} <span class="dim">· ${fmtDate(R.most_lines_day.date)}</span>`) + '</div>';
   const vc = Object.entries(verbCountsThisMonth()).sort((a, b) => b[1] - a[1]);
   const fun = `<div class="card"><h3>just for fun</h3>${rec('most-shown verb this month', vc.length ? `${esc(vc[0][0])} <span class="dim">· ${fmtInt(vc[0][1])} times${vc[1] ? ' · then ' + esc(vc[1][0]) : ''}</span>` : null)}<div class="row"><span class="dim">counted in this browser while sessions work</span></div></div>`;
+  // achievements: next up (three closest locked badges) above the badge wall; hidden badges show only once earned
+  const A = d.achievements || { badges: [], next_up: [], records: {} };
+  const fmtBadge = (b, v) => ({ tokens: fmtTokens, int: fmtCompact, usd: fmtUsd, dur: fmtDur, days: (x) => `${Math.round(x)} day${Math.round(x) === 1 ? '' : 's'}`, pct: fmtPct, ratio: (x) => `${Math.round(x * 100)}%`, flag: (x) => (x ? 'done' : 'not yet') }[b.fmt] || fmtCompact)(v);
+  const byId = Object.fromEntries(A.badges.map((b) => [b.id, b]));
+  const bar = (b) => `<div class="abar"><i style="width:${Math.round(b.progress * 100)}%"></i></div>`;
+  const nextUp = A.next_up.map((id) => byId[id]).filter(Boolean).map((b) => `<div class="next"><div class="nh"><b>${esc(b.name)}</b><span class="dim" title="${esc(b.desc)}">${esc(b.desc)}</span></div>${bar(b)}<div class="nv"><span>${fmtBadge(b, b.value)} of ${fmtBadge(b, b.threshold)}</span><span class="dim">${Math.round(b.progress * 100)}%</span></div></div>`).join('');
+  const GROUPS = [['tokens', 'tokens'], ['commits', 'commits'], ['lines', 'lines'], ['api', 'API equivalent'], ['time', 'agent time'], ['sessions', 'sessions'], ['streaks', 'streaks'], ['habits', 'habits'], ['hidden', 'secret']];
+  const badge = (b) => `<div class="badge-t ${b.earned ? 'on' : 'off'}" title="${esc(b.desc)}${b.earned ? ' · earned ' + esc(fmtDate(b.earned)) : ' · ' + fmtBadge(b, b.value) + ' of ' + fmtBadge(b, b.threshold)}"><span class="ic">${b.earned ? '★' : '☆'}</span><span class="nm">${esc(b.name)}</span>${b.earned ? `<span class="dt">${esc(fmtDate(b.earned))}</span>` : `<span class="dt">${Math.round(b.progress * 100)}%</span>`}</div>`;
+  const wall = GROUPS.map(([g, label]) => { const bs = A.badges.filter((b) => b.group === g && (!b.hidden || b.earned)); return bs.length ? `<div class="agroup"><div class="gl">${label}${g === 'hidden' ? ' <span class="dim">(these only show once earned)</span>' : ''}</div><div class="badges">${bs.map(badge).join('')}</div></div>` : ''; }).join('');
+  const pr = (A.records || {}).powder_day;
+  const recordLine = pr ? `<div class="row"><span>Powder Day record <span class="dim">(re-earned every time it is beaten)</span></span><b>${fmtTokens(pr.tokens)} on ${fmtDate(pr.date)}${pr.times_beaten ? ` · beaten ${pr.times_beaten}×` : ''}</b></div>` : `<div class="row"><span class="dim">Powder Day record: the first 100M-token day starts it; every bigger day earns it again</span></div>`;
+  const achievementsCard = `<div class="card achievements"><h3>achievements <span class="dim">· ${A.earned} of ${A.total} earned</span><span class="spacer"></span><span class="dim" title="the 'paid for itself' badges compare API-equivalent usage with the plan price (Settings)">plan ${fmtUsd(A.plan_price || 0)}/month</span></h3>
+    ${nextUp ? `<div class="label-h">next up</div><div class="nextup">${nextUp}</div>` : ''}${recordLine}${wall}</div>`;
   // tools
   const toolRows = Object.values(d.tools.reduce((acc, r) => { const n = TOOL_NAMES[r.name] || r.name; const a = acc[n] || (acc[n] = { name: n, category: toolCategory(r.name), count: 0, errors: 0 }); a.count += r.count; a.errors += r.errors; return acc; }, {})).map((r) => ({ ...r, error_rate: r.count ? r.errors / r.count : 0 }));
   const toolsT = sortableTable('tools', [{ k: 'name', label: 'tool', f: (r) => esc(r.name), cls: 'l' }, { k: 'category', label: 'kind', f: (r) => esc(r.category), cls: 'l' }, { k: 'count', label: 'calls', f: (r) => fmtInt(r.count) }, { k: 'errors', label: 'failed', f: (r) => (r.errors ? `<span class="warn">${fmtInt(r.errors)}</span>` : '0') }, { k: 'error_rate', label: 'failure rate', f: (r) => fmtPct(r.error_rate) }], toolRows, { sort: { key: 'count', dir: -1 }, empty: 'no tool calls in this range', total: toolRows.length ? { label: 'total', row: { ...sumRows(toolRows), error_rate: sumRows(toolRows).count ? sumRows(toolRows).errors / sumRows(toolRows).count : 0 } } : null });
@@ -3050,6 +3064,7 @@ async function renderStatsView(force) {
     ${calendar}
     ${hours}
     <div class="summary four">${parallel}${waiting}${health}${records}</div>
+    ${achievementsCard}
     <div class="two"><div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>${fun}</div>
     <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${P} · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
   renderDailyTable();

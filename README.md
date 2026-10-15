@@ -166,6 +166,19 @@ archive, export or delete it. Transcripts are real text: select across
 messages, ⌘C copies clean markdown, ⌘F finds in a session, ⌘⇧F searches all
 of them, and files dropped on a pane attach to the prompt.
 
+**Achievements.** The stats page keeps a badge wall: tokens (First Chair
+10M up to Space Station 50B, Powder Day and Avalanche for a single day),
+commits (Dropped In to Lifer, Double Digits and Ripper in a day), lines
+(Bulldozer to Megaproject, Big Air, Marie Kondo, Clear-Cut), API
+equivalent (Whale, Big Spender Day, Ten-K Club, Season Pass Paid Off, Fund
+Manager, "paid for itself" 10×/50×/100× against the plan price in Settings),
+agent time, sessions, streaks (Bluebird 7 days, Season Pass 30 days), habits
+(Dawn Patrol, Night Shift, Long Haul, Three-Man Rope Team, Hands Off, Clean
+Line, Diamond Hands, Gas Saver) and a few secret ones that appear once
+earned. Every badge is backfilled from history with the day it was earned;
+"next up" shows the three closest to unlocking with progress bars; the
+Powder Day record (biggest token day) is earned again each time it is beaten.
+
 **Share a session.** **export** on a pane (or `kcoder export <session>
 -o chat.html`) writes one self-contained HTML page: title, project, branch,
 model, dates, tokens, the whole conversation with markdown rendered, tool

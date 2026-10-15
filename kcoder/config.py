@@ -58,6 +58,7 @@ DEFAULTS = {
     "commit_email": "noreply",  # noreply | public - which email of the signed-in GitHub account commits use
     "ai_trailer": "",          # extra trailer for commits kcoder makes (e.g. "Co-Authored-By: ..."); empty = none
     "templates": [],           # session templates: {id, name, cwd, provider, model, trust, task, queue, worktree}
+    "plan_price_usd": 200,     # what the Claude plan costs per month; the "paid for itself" badges compare API-equivalent usage against it
 }
 
 _cache: dict | None = None
