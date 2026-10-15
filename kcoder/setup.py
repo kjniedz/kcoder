@@ -40,7 +40,7 @@ def providers_info() -> list:
         from . import routing
         row = {"id": p.id, "label": p.label, "kind": p.kind, "key_url": p.key_url, "models": p.models,
                "default_model": p.default_model, "configured": auth.has_credentials(p.id), "default": p.id == default,
-               "auto": routing.has_tiers(p), "tiers": routing.tiers_for(p)}
+               "auto": routing.has_tiers(p), "tiers": routing.tiers_for(p), "vision": _prov.vision_models(p)}
         if p.kind == "claude":
             st = claude_status()
             row.update(installed=st["installed"], logged_in=st["logged_in"], email=st["email"], on_plan=st["on_plan"],

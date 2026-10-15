@@ -204,11 +204,37 @@ waiting on you, <kbd>1</kbd> to <kbd>9</kbd> focus a grid pane, <kbd>esc</kbd>
 back to the grid or interrupt the focused session, <kbd>⌘K</kbd> palette,
 <kbd>⌘,</kbd> settings, <kbd>⌘/</kbd> the full shortcut sheet.
 
-**Voice input.** The microphone button in the composer (⌘⇧M) dictates
-into the message with the browser's speech recognition; click again or
-pause to stop, then edit and send as usual. On the phone approval page a
-tap on "say yes or no" listens for yes / approve / allow or no / deny /
-decline and answers the request (the relay needs a redeploy once).
+**Screenshots in a message.** Paste (⌘V) or drag images into any session
+composer or the task composer, several per message. Thumbnails appear
+above the input: click one to view it, ✕ removes it. Oversized Retina
+screenshots are scaled so the long side is 1568 px (what the model is
+served anyway: a 2x screenshot of a 1440-wide window lands at 1x, text
+intact; screenshots stay PNG, photos become JPEG). The images are saved
+with the session (`uploads/` in its folder), show as thumbnails in the
+transcript after a resume or restart, and reach Claude Code as real image
+blocks. If the session's model cannot take images (DeepSeek, Qwen, GLM,
+MiniMax, most Kimi models) a warning sits under the thumbnails and the
+send asks first instead of failing quietly.
+
+**Voice input.** The microphone button in the composer dictates into the
+message; the words land in the input for you to edit, and nothing is ever
+sent by voice. Click to start and stop, hold the button to talk, hold
+<kbd>⌥Space</kbd> anywhere for push-to-talk, <kbd>⌘⇧M</kbd> toggles. In the
+app window the Mac's on-device speech recognition does the work (the audio
+never leaves the machine; the first use asks for microphone and speech
+recognition permission), biased towards your repo and branch names and
+common dev terms. In a browser tab the Web Speech API is used instead. On
+the phone approval page a tap on "say yes or no" listens for yes / approve
+/ allow or no / deny / decline and answers the request (the relay needs a
+redeploy once).
+
+**Where we left off.** Opening a session that sat idle for a day, or any
+session after the app restarted, shows a recap card at the top of its chat:
+what was done, what is pending, open decisions, and the branch state
+(uncommitted files, unpushed commits, the PR and its checks). The recap is
+written by a cheap model (Haiku on your plan, no tools) and cached; it is
+only written again when the session has new activity. ✕ dismisses it, ↻
+rewrites it, `/recap` shows it any time (`/recap new` rewrites).
 
 **Theme and density.** Settings (⌘,) has the theme (dark, light, follow the
 system) and a density switch: comfortable, or compact for tighter spacing
@@ -245,9 +271,13 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   link. Every table sorts by column; **export CSV** saves the daily table for
   the range on screen, one row per day (zeros on quiet days, money in
   cents), as `kcoder-stats-<date>-7d.csv`. Commits are
-  detected from local git, so it works offline and for private repos.
+  detected from local git, so it works offline and for private repos. At
+  the top, the **weekly plan limit** meter: used, reset time, how much of
+  the week has passed, the pace and forecast, plan tokens per day of the
+  window, the 5-hour window, and whether the quota shift is active.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
-  routing, review policy, auto-publish, daily spend cap, plus links to your
+  routing, review policy, auto-publish, daily spend cap, the weekly plan
+  limit (token limit, reset day and hour, quota shift), plus links to your
   Claude plan, providers, GitHub and phone approvals, updates, restart,
   shortcuts and uninstall. About (banner click, or the macOS menu) shows the
   version and credits.
@@ -323,6 +353,22 @@ seen during its turns, approximate when sessions run in parallel), and to
 reconnect or clear a limit you reset yourself. Each session's pane and
 sidebar row show its own share. In a terminal: `kcoder login` and `kcoder
 plan [--clear]`.
+
+**Weekly plan limit meter.** The status bar's `wk` item shows the week's
+plan allowance: a bar with the percentage used and a tick where the week
+is now, the reset time, and when the forecast says you hit the limit ("hits
+limit Fri 11 AM"); the stats page has the full meter. The number comes
+from Claude Code's own reports when it has made one this window ("from
+Claude Code"); otherwise it is an estimate from plan tokens since the
+reset against a weekly token limit you set in Settings, with the reset
+weekday and hour (labelled "estimate"). The forecast is linear and counts
+as reliable after six hours of the window or a fifth of the limit. Toasts
+and a notification warn once per window at 75% and 90%. **Quota shift**
+(Settings, off by default): while the forecast says the limit runs out
+before the reset, small turns in sessions pinned to the provider's big
+model run on the cheap tier instead (Opus → Sonnet); the status bar shows
+"⇣ cheaper models" the whole time it is active and each shifted turn says
+so in the transcript. Sessions on `auto` already route that way.
 
 **Long-running work.** Shell commands get ten minutes (up to an hour when
 the model asks). For anything longer, the agent runs `kcoder job run --

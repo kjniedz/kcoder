@@ -59,6 +59,11 @@ DEFAULTS = {
     "ai_trailer": "",          # extra trailer for commits kcoder makes (e.g. "Co-Authored-By: ..."); empty = none
     "templates": [],           # session templates: {id, name, cwd, provider, model, trust, task, queue, worktree}
     "plan_price_usd": 200,     # what the Claude plan costs per month; the "paid for itself" badges compare API-equivalent usage against it
+    # weekly plan limit meter: Claude Code's own numbers when it reports them; otherwise an estimate from
+    # token history against limit_tokens (0 = no estimate), with the window resetting on reset_weekday
+    # (0 = Monday) at reset_hour local time. shift: route small turns to the cheap tier when the
+    # forecast says the limit runs out before the reset (off by default; always shown when active).
+    "quota": {"limit_tokens": 0, "reset_weekday": 0, "reset_hour": 0, "shift": False},
 }
 
 _cache: dict | None = None

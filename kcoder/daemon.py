@@ -61,11 +61,13 @@ from . import jobs as jobsmod
 from . import rules as rulesmod
 from . import issues as issuesmod
 from . import brief as briefmod
+from . import quota as quotamod
+from . import recap as recapmod
 from . import search as searchmod
 from .providers import plan_usage as providers_plan_usage
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
-from .providers import PROVIDERS
+from .providers import PROVIDERS, supports_images
 
 log = logging.getLogger("kcoderd")
 
@@ -392,12 +394,35 @@ class Manager:
             **self._header_stats(),
             "daily_cap_usd": self.daily_cap(),
             "cap_reached": self.cap_reached(),
+            "quota": self._quota_summary(),
             "version": __version__,
             "update": self._update_summary(),
             "restarting": self.restarting,
             "tasks": {"paused": self.tasks.paused, "counts": self.tasks.summary()["counts"],
                       "max_concurrent": self.cfg.get("max_concurrent", 3)},
         }
+
+    def _quota_summary(self) -> dict:
+        """The weekly meter for the status bar (the daily series stays out of the sessions frame)."""
+        try:
+            st = quotamod.status(self.cfg)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("quota status failed: %s", exc)
+            return {"source": "none"}
+        st.pop("daily", None)
+        return st
+
+    def _quota_warn(self) -> None:
+        """After usage or a plan report: say so once per window at 75% and 90%."""
+        try:
+            quotamod.invalidate()
+            msg = quotamod.check_warnings(quotamod.status(self.cfg, fresh=True))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("quota warning failed: %s", exc)
+            return
+        if msg:
+            self.broadcast_raw(json.dumps({"type": "notice", "title": "Weekly plan limit", "body": msg}))
+            self.notify("Weekly plan limit", msg)
 
     def _update_summary(self) -> dict:
         now = time.time()
@@ -704,6 +729,7 @@ class Manager:
         engine.scope = (meta.get("worktree") or {}).get("path")
         engine.before_turn = lambda idx, sid=sid: self._checkpoint(sid, idx)
         engine.router = lambda text, ctx, prov=provider: routing.pick(prov, text, ctx, self.cfg)
+        engine.quota_shift = lambda model, text, ctx, prov=provider: quotamod.shift_model(prov, model, text, ctx, self.cfg)
         engine.fallback_candidates = lambda tier, sid=sid: self.fallbacks(sid, tier)
         if self.cfg.get("handoff", True) is not False:
             engine.on_handoff = lambda summary, text, images, sid=sid: self.loop.call_soon_threadsafe(self._handoff, sid, summary, text, images)
@@ -1011,8 +1037,9 @@ class Manager:
                 if task.get("issue"):
                     session.meta["issue"] = task["issue"]
                     session.meta["title"] = f"#{task['issue']['number']} {task['issue'].get('title') or ''}"[:80]
-                self.record_user(session, task["text"], [])
-                session.engine.send(task["text"], [])
+                images = _save_images(session, task.get("images") or [])   # files saved when the task was queued
+                self.record_user(session, task["text"], images)
+                session.engine.send(task["text"], images)
                 session.save_meta()
                 self.tasks.update(task["id"], sid=session.id)
                 self._record(session, {"t": "system", "ts": time.time(), "text": f"task {task['id']} started from the queue"})
@@ -1199,6 +1226,7 @@ class Manager:
             self.today["cost"] += event["cost"]
             self.today["calls"] += 1
             self._log_usage(session, event)
+            self._quota_warn()
         elif t == "plan":
             share = session.meta.setdefault("plan_share", {})
             if event.get("delta"):
@@ -1206,6 +1234,7 @@ class Manager:
             share["seen"] = time.time()
             share["window"] = {**(share.get("window") or {}), event["limit"]: event.get("resets_at")}
             self.broadcast_raw(json.dumps({"type": "plan_usage", "usage": providers_plan_usage()}))
+            self._quota_warn()
         elif t == "fallback":
             session.meta["fallback"] = None if event.get("restored") else {
                 "provider": event.get("provider"), "model": event.get("model"), "since": event.get("since"), "reason": event.get("reason")}
@@ -1215,6 +1244,10 @@ class Manager:
             self.loop.run_in_executor(None, self.remote.resolve, event.get("id"), "approved" if event.get("approved") else "denied")
         elif t == "turn_start":
             session.meta["last_model"] = event.get("model")
+            if event.get("shifted_from"):
+                self._record(session, {"t": "info", "ts": time.time(), "kind": "quota_shift",
+                                       "text": f"quota shift: this small turn runs on {event.get('model')} instead of {event.get('shifted_from')} "
+                                               "(the weekly limit is on pace to run out early; Settings → weekly limit)"})
             session.meta.pop("interrupted", None)
             session.meta.pop("resume_text", None)
             session.save_messages()      # so a crash mid-turn keeps the user's message
@@ -1367,29 +1400,65 @@ class Manager:
 # request handling
 # ----------------------------------------------------------------------
 
-def _save_images(session: Session, images: list) -> list:
-    """Accept image paths (local clients) or {name, data_url} uploads (browser)."""
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGES = 12
+
+
+def _write_uploads(updir: str, images: list) -> list:
+    """Accept image paths (local clients) or {name, data_url} uploads (browser);
+    uploads are written into `updir`. Returns the file paths."""
     out = []
-    updir = os.path.join(session.dir, "uploads")
-    for img in images or []:
+    for img in (images or [])[:MAX_IMAGES]:
         if isinstance(img, str):
             if os.path.isfile(img):
                 out.append(img)
             continue
-        if isinstance(img, dict) and img.get("data_url", "").startswith("data:"):
+        if isinstance(img, dict) and str(img.get("data_url") or "").startswith("data:image/"):
             header, _, b64 = img["data_url"].partition(",")
             mime = header[5:].split(";")[0]
             ext = mimetypes.guess_extension(mime) or ".png"
+            if ext == ".jpe":
+                ext = ".jpg"
+            try:
+                data = base64.b64decode(b64)
+            except ValueError:
+                continue
+            if not data or len(data) > MAX_IMAGE_BYTES:
+                continue
             os.makedirs(updir, exist_ok=True)
             name = f"{int(time.time() * 1000)}-{secrets.token_hex(3)}{ext}"
             path = os.path.join(updir, name)
             try:
                 with open(path, "wb") as f:
-                    f.write(base64.b64decode(b64))
+                    f.write(data)
                 out.append(path)
-            except (ValueError, OSError):
+            except OSError:
                 continue
     return out
+
+
+def _save_images(session: Session, images: list) -> list:
+    """Images for a message live with the session: <session dir>/uploads/."""
+    paths_ = _write_uploads(os.path.join(session.dir, "uploads"), images)
+    # a task's images were written elsewhere; copy them in so they survive with the session
+    out = []
+    updir = os.path.join(session.dir, "uploads")
+    for p in paths_:
+        if os.path.dirname(p) != updir:
+            try:
+                os.makedirs(updir, exist_ok=True)
+                dest = os.path.join(updir, f"{int(time.time() * 1000)}-{secrets.token_hex(3)}{os.path.splitext(p)[1] or '.png'}")
+                shutil.copyfile(p, dest)
+                out.append(dest)
+                continue
+            except OSError:
+                pass
+        out.append(p)
+    return out
+
+
+def _save_task_images(tid: str, images: list) -> list:
+    return _write_uploads(os.path.join(paths.DATA_DIR, "task-uploads", tid), images)
 
 
 async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
@@ -1511,6 +1580,23 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if "pr_screenshots" in req:
             manager.cfg["pr_screenshots"] = bool(req["pr_screenshots"])
             config.save({"pr_screenshots": bool(req["pr_screenshots"])})
+        if any(k in req for k in ("quota_limit_tokens", "quota_reset_weekday", "quota_reset_hour", "quota_shift")):
+            qc = dict(manager.cfg.get("quota") or {})
+            try:
+                if "quota_limit_tokens" in req:
+                    qc["limit_tokens"] = max(0, int(float(req["quota_limit_tokens"] or 0)))
+                if "quota_reset_weekday" in req:
+                    qc["reset_weekday"] = int(req["quota_reset_weekday"]) % 7
+                if "quota_reset_hour" in req:
+                    qc["reset_hour"] = max(0, min(23, int(req["quota_reset_hour"])))
+            except (TypeError, ValueError):
+                raise RequestError("quota settings must be numbers")
+            if "quota_shift" in req:
+                qc["shift"] = bool(req["quota_shift"])
+            manager.cfg["quota"] = qc
+            config.save({"quota": qc})
+            quotamod.invalidate()
+            manager.broadcast_sessions()
         if "preview_idle_minutes" in req:
             try:
                 manager.cfg["preview_idle_minutes"] = max(1, int(req["preview_idle_minutes"]))
@@ -1590,6 +1676,12 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if req.get("action") == "clear_limits":
             clear_plan_limits()
         return {"claude": await asyncio.get_running_loop().run_in_executor(None, setup.claude_status)}
+
+    if t == "quota":
+        # the weekly plan limit meter in full (the daily series of the window included)
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, quotamod.status, manager.cfg, None, True)
+        return {"quota": data}
 
     if t == "stats_full":
         return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None)
@@ -1859,8 +1951,13 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             if not repos.parse_spec(repo) and not os.path.isdir(os.path.expanduser(repo)):
                 raise RequestError(f"no such folder or GitHub repo: {repo}")
             trust = req.get("trust") if req.get("trust") in TRUST_LEVELS else None
+            prov_id = req.get("provider") or auth.default_provider()
+            if req.get("images") and not supports_images(prov_id, req.get("model") or (PROVIDERS.get(prov_id).default_model if prov_id in PROVIDERS else None)):
+                raise RequestError(f"{req.get('model') or prov_id} can't take images; pick a model that can, or drop the images")
             task = q.add(text, os.path.abspath(os.path.expanduser(repo)) if not repos.parse_spec(repo) else repo,
                          provider=req.get("provider") or None, model=req.get("model") or None, trust=trust, name=req.get("name") or None)
+            if req.get("images"):
+                q.update(task["id"], images=_save_task_images(task["id"], req.get("images") or []))
             if issue:
                 q.update(task["id"], issue=issue)
             asyncio.get_running_loop().create_task(manager.schedule_tasks())
@@ -1945,6 +2042,8 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             session = manager.sessions[session.meta["handed_off_to"]]
             engine = session.engine
         text = req.get("text") or ""
+        if req.get("images") and not supports_images(engine.provider.id, engine.turn_model if engine.model == routing.AUTO else engine.model):
+            raise RequestError(f"{engine.model} can't take images; switch the model (/model) or send without them")
         images = _save_images(session, req.get("images") or [])
         if not text.strip() and not images:
             raise RequestError("empty message")
@@ -1963,6 +2062,28 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         except EngineBusy:
             raise RequestError("session is busy; wait for the current turn to finish")
         return {}
+
+    if t == "recap":
+        # where we left off: cached unless the session has new activity; "refresh" rewrites it; "dismiss" hides the card
+        action = req.get("action") or "get"
+        loop = asyncio.get_running_loop()
+        if action == "dismiss":
+            return {"recap": recapmod.dismiss(session)}
+        if action == "peek":
+            return {"recap": recapmod.peek(session)}
+        if len(engine.messages) < 2:
+            raise RequestError("nothing to recap yet")
+        lock = session.__dict__.setdefault("_recap_lock", asyncio.Lock())
+        async with lock:
+            try:
+                data = await loop.run_in_executor(None, recapmod.build, session, action == "refresh")
+            except Exception as exc:  # noqa: BLE001
+                raise RequestError(f"recap failed: {type(exc).__name__}: {exc}")
+        if not data.get("cached") and data.get("usage"):
+            u = data["usage"]
+            manager._on_engine_event(session.id, {"t": "usage", "ts": time.time(), "input": u.get("input", 0), "output": u.get("output", 0), "cache_read": 0, "cache_write": 0,
+                                                  "model": (data.get("model") or "").split("/")[-1], "provider": engine.provider.id, "elapsed": u.get("elapsed", 0), "recap": True})
+        return {"recap": data}
 
     if t == "preview":
         action = req.get("action") or "status"
@@ -2439,12 +2560,37 @@ def _response(status: int, reason: str, body: bytes, ctype: str = "text/plain; c
     return Response(status, reason, Headers([("Content-Type", ctype), ("Content-Length", str(len(body)))] + _SECURITY_HEADERS), body)
 
 
-def _serve_static(request):
-    path = request.path.split("?", 1)[0]
+_UPLOAD_RE = re.compile(r"^/uploads/([0-9a-f]{8})/([A-Za-z0-9_.-]+)$")
+
+
+def _serve_upload(sid: str, name: str, query: str, token: str | None):
+    """An image a message carried: <session dir>/uploads/<name>, only with the daemon token."""
+    from urllib.parse import parse_qs
+    given = (parse_qs(query).get("token") or [""])[0]
+    if not token or not given or not secrets.compare_digest(given, token):
+        return _response(403, "Forbidden", b"forbidden\n")
+    full = os.path.join(session_dir(sid), "uploads", name)
+    if ".." in name or not os.path.isfile(full):
+        return _response(404, "Not Found", b"not found\n")
+    ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+    if not ctype.startswith("image/"):
+        return _response(404, "Not Found", b"not found\n")
+    with open(full, "rb") as f:
+        body = f.read()
+    resp = _response(200, "OK", body, ctype)
+    resp.headers["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
+def _serve_static(request, token: str | None = None):
+    path, _, query = request.path.partition("?")
     if path in ("/", ""):
         path = "/index.html"
     if path == "/health":
         return _response(200, "OK", b"ok\n")
+    up = _UPLOAD_RE.match(path)
+    if up:
+        return _serve_upload(up.group(1), up.group(2), query, token)
     rel = os.path.normpath(path.lstrip("/"))
     if rel.startswith("..") or os.path.isabs(rel):
         return _response(404, "Not Found", b"not found\n")
@@ -2467,7 +2613,7 @@ def allowed_origins(port: int) -> set:
     return {f"http://{h}" for h in allowed_hosts(port)}
 
 
-def _make_process_request(port: int):
+def _make_process_request(port: int, token: str | None = None):
     """The loopback listener. Anything on this machine can open a TCP
     connection to it, so every request must look like it came from our own
     page: a loopback Host (no DNS rebinding) and, for browsers, our own
@@ -2482,7 +2628,7 @@ def _make_process_request(port: int):
             log.warning("refused request with Host %r", host[:80])
             return _response(403, "Forbidden", b"forbidden\n")
         if request.headers.get("Upgrade", "").lower() != "websocket":
-            return _serve_static(request)
+            return _serve_static(request, token)
         origin = request.headers.get("Origin")
         if origin is not None and origin not in origins:
             log.warning("refused websocket from Origin %r", origin[:80])
@@ -2648,7 +2794,7 @@ async def _serve(host: str, port: int) -> None:
         lambda ws: _handle(ws, manager, token),
         host, port,
         origins=origins,
-        process_request=_make_process_request(port),
+        process_request=_make_process_request(port, token),
         max_size=64 * 1024 * 1024,
         server_header=None,
     ) as server:

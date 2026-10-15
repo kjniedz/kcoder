@@ -332,14 +332,202 @@ def install_status_item(api, url: str):
         return None
 
 
+# ----------------------------------------------------------------------
+# dictation: on-device speech recognition (macOS Speech framework). The audio
+# never leaves the machine: the request asks for on-device recognition and
+# refuses to start if the locale cannot do it. Results stream into the page
+# through window.kcoderDictation({text, final, error, done}); the page only
+# puts the words in the composer and never sends anything by itself.
+# ----------------------------------------------------------------------
+
+DEV_TERMS = [
+    "kcoder", "kcoderd", "git", "commit", "push", "pull", "rebase", "merge", "branch", "worktree", "checkout", "stash",
+    "PR", "pull request", "CI", "GitHub", "repo", "README", "pyproject", "npm", "pnpm", "yarn", "bun", "pip", "venv",
+    "Python", "TypeScript", "JavaScript", "JSON", "YAML", "SQL", "Postgres", "SQLite", "Redis", "Docker", "Cloudflare",
+    "Worker", "Workers", "Pages", "wrangler", "Supabase", "Railway", "Vercel", "Next.js", "React", "Vite", "Tailwind",
+    "pytest", "lint", "linter", "refactor", "regex", "async", "await", "daemon", "websocket", "endpoint", "API", "token",
+    "Claude", "Opus", "Sonnet", "Haiku", "Fable", "config", "env", "dotenv", "localhost", "stack trace", "traceback",
+    "null", "undefined", "boolean", "integer", "string", "enum", "struct", "tuple", "dict", "list", "array", "map",
+    "diff", "patch", "hunk", "checkpoint", "undo", "rollback", "deploy", "staging", "production", "preview", "screenshot",
+    "Markdown", "CSS", "HTML", "SVG", "PNG", "CSV", "UUID", "SHA", "HTTP", "HTTPS", "URL", "CLI", "TUI", "UI", "UX",
+]
+
+
+class Dictation:
+    def __init__(self, api):
+        self.api = api
+        self.active = False
+        self._engine = None
+        self._request = None
+        self._task = None
+        self._recognizer = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def available() -> bool:
+        if sys.platform != "darwin":
+            return False
+        try:
+            import AVFoundation  # type: ignore  # noqa: F401
+            import Speech  # type: ignore  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
+    def info(self, lang: str = "") -> dict:
+        if not self.available():
+            return {"available": False, "reason": "the Speech framework is not installed (pip install pyobjc-framework-Speech pyobjc-framework-AVFoundation)"}
+        import Foundation  # type: ignore
+        import Speech  # type: ignore
+        rec = Speech.SFSpeechRecognizer.alloc().initWithLocale_(Foundation.NSLocale.localeWithLocaleIdentifier_(lang or "en-US")) if lang else Speech.SFSpeechRecognizer.alloc().init()
+        on_device = bool(rec and rec.supportsOnDeviceRecognition())
+        return {"available": bool(rec), "on_device": on_device, "auth": int(Speech.SFSpeechRecognizer.authorizationStatus()), "active": self.active,
+                "locale": str(rec.locale().localeIdentifier()) if rec else None}
+
+    def _push(self, **fields) -> None:
+        try:
+            self.api.window.evaluate_js("window.kcoderDictation && kcoderDictation(%s)" % json.dumps(fields))
+        except Exception as exc:  # noqa: BLE001
+            with open(APP_LOG_PATH, "a", encoding="utf-8") as log:
+                log.write(f"dictation push: {exc}\n")
+
+    def _authorize(self) -> str | None:
+        """Ask for speech recognition and microphone access once; a reason when refused."""
+        import AVFoundation  # type: ignore
+        import Speech  # type: ignore
+        if Speech.SFSpeechRecognizer.authorizationStatus() == 0:      # not determined: the system asks
+            done = threading.Event()
+            Speech.SFSpeechRecognizer.requestAuthorization_(lambda st: done.set())
+            done.wait(120)
+        if Speech.SFSpeechRecognizer.authorizationStatus() != 3:
+            return "speech recognition is not allowed for kcoder: System Settings → Privacy & Security → Speech Recognition"
+        if AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(AVFoundation.AVMediaTypeAudio) == 0:
+            done = threading.Event()
+            AVFoundation.AVCaptureDevice.requestAccessForMediaType_completionHandler_(AVFoundation.AVMediaTypeAudio, lambda ok: done.set())
+            done.wait(120)
+        if AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(AVFoundation.AVMediaTypeAudio) != 3:
+            return "microphone access is not allowed for kcoder: System Settings → Privacy & Security → Microphone"
+        return None
+
+    def start(self, context: list | None = None, lang: str = "") -> dict:
+        if not self.available():
+            return {"ok": False, "error": "on-device dictation needs the macOS Speech framework"}
+        with self._lock:
+            if self.active:
+                return {"ok": True, "already": True}
+            reason = self._authorize()
+            if reason:
+                return {"ok": False, "error": reason}
+            import AVFoundation  # type: ignore
+            import Foundation  # type: ignore
+            import Speech  # type: ignore
+            rec = Speech.SFSpeechRecognizer.alloc().initWithLocale_(Foundation.NSLocale.localeWithLocaleIdentifier_(lang)) if lang else Speech.SFSpeechRecognizer.alloc().init()
+            if rec is None or not rec.isAvailable():
+                return {"ok": False, "error": "speech recognition is not available for this language right now"}
+            if not rec.supportsOnDeviceRecognition():
+                return {"ok": False, "error": "on-device recognition is not available for this language, so dictation stays off (audio would leave the machine)"}
+            req = Speech.SFSpeechAudioBufferRecognitionRequest.alloc().init()
+            req.setShouldReportPartialResults_(True)
+            req.setRequiresOnDeviceRecognition_(True)
+            words = []
+            for w in list(context or []) + DEV_TERMS:
+                w = str(w or "").strip()
+                if w and w not in words:
+                    words.append(w)
+            req.setContextualStrings_(words[:300])
+            try:
+                req.setTaskHint_(1)      # SFSpeechRecognitionTaskHintDictation
+            except Exception:  # noqa: BLE001
+                pass
+            engine = AVFoundation.AVAudioEngine.alloc().init()
+            node = engine.inputNode()
+            fmt = node.outputFormatForBus_(0)
+            node.installTapOnBus_bufferSize_format_block_(0, 1024, fmt, lambda buf, when: req.appendAudioPCMBuffer_(buf))
+            engine.prepare()
+            ok, err = engine.startAndReturnError_(None)
+            if not ok:
+                node.removeTapOnBus_(0)
+                return {"ok": False, "error": f"the microphone could not be opened: {err}"}
+            self._engine, self._request, self._recognizer = engine, req, rec
+            self.active = True
+
+            def handler(result, error):
+                text = str(result.bestTranscription().formattedString()) if result is not None else ""
+                final = bool(result is not None and result.isFinal())
+                if result is not None:
+                    self._push(text=text, final=final)
+                if error is not None or final:
+                    msg = str(error.localizedDescription()) if error is not None else ""
+                    if error is not None and getattr(error, "code", lambda: 0)() in (216, 301, 1110) or "cancel" in msg.lower():
+                        msg = ""          # 216/301: cancelled or stopped by us; 1110: no speech detected
+                    self._teardown()
+                    self._push(done=True, error=msg or None)
+
+            self._task = rec.recognitionTaskWithRequest_resultHandler_(req, handler)
+            return {"ok": True, "on_device": True, "terms": len(words)}
+
+    def _teardown(self) -> None:
+        self.active = False
+        eng, self._engine = self._engine, None
+        self._request = None
+        self._task = None
+        if eng is not None:
+            try:
+                eng.inputNode().removeTapOnBus_(0)
+                eng.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def stop(self) -> dict:
+        with self._lock:
+            if not self.active:
+                return {"ok": True, "already": True}
+            req, eng = self._request, self._engine
+            try:
+                if eng is not None:
+                    eng.inputNode().removeTapOnBus_(0)
+                    eng.stop()
+                if req is not None:
+                    req.endAudio()       # the task delivers its final result, then the handler tears down
+            except Exception as exc:  # noqa: BLE001
+                self._teardown()
+                return {"ok": False, "error": str(exc)}
+            self._engine = None
+            return {"ok": True}
+
+
 class WindowApi:
     """Exposed to the page as window.pywebview.api.* in the native window."""
 
     window = None
     home_url = ""
 
+    def __init__(self):
+        self.dictation = Dictation(self)
+
     def is_native(self) -> bool:
         return True
+
+    def dictate_info(self, lang: str = "") -> dict:
+        """Can this window dictate on-device, and is it allowed to?"""
+        try:
+            return self.dictation.info(str(lang or ""))
+        except Exception as exc:  # noqa: BLE001
+            return {"available": False, "reason": str(exc)}
+
+    def dictate_start(self, context=None, lang: str = "") -> dict:
+        """Start on-device dictation; words arrive through window.kcoderDictation.
+        `context` biases recognition (repo names, branch names, the dev terms are added)."""
+        try:
+            return self.dictation.start(list(context or []), str(lang or ""))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    def dictate_stop(self) -> dict:
+        try:
+            return self.dictation.stop()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
 
     def save_file(self, name: str, content: str) -> dict:
         """Save text through the native save dialog (Downloads by default).
@@ -686,6 +874,9 @@ def install_mac_app(path: str = BUNDLE_PATH) -> str:
         "LSMinimumSystemVersion": "11.0",
         "NSHighResolutionCapable": True,
         "LSApplicationCategoryType": "public.app-category.developer-tools",
+        # on-device dictation into the composer (Speech framework + microphone); the audio never leaves the Mac
+        "NSMicrophoneUsageDescription": "kcoder dictates into the message box with on-device speech recognition. Audio never leaves this Mac.",
+        "NSSpeechRecognitionUsageDescription": "kcoder turns your voice into text on this Mac. Nothing is sent to a server.",
         "LSArchitecturePriority": [machine] + [a for a in ("arm64", "x86_64") if a != machine] if machine in ("arm64", "x86_64") else ["arm64", "x86_64"],
     }
     if has_icon:

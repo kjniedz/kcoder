@@ -157,7 +157,7 @@ def build_user_content(text: str, image_paths: list, kind: str):
         media_type = mimetypes.guess_type(path)[0] or "image/png"
         with open(path, "rb") as f:
             data = base64.standard_b64encode(f.read()).decode()
-        if kind == "anthropic":
+        if kind in ("anthropic", "claude"):     # Claude Code takes the same blocks over stream-json
             blocks.append({
                 "type": "image",
                 "source": {"type": "base64", "media_type": media_type, "data": data},
@@ -259,6 +259,7 @@ class Engine:
         self.before_turn = None        # callback(turn_start_index) run before the model sees a turn (checkpoints)
         self.scope = None              # directory the built-in write tools must stay inside (the worktree)
         self.router = None             # callback(text, context_tokens) -> (model, tier) when model is "auto"
+        self.quota_shift = None        # callback(model, text, context_tokens) -> cheaper model or None (weekly quota shift)
         self.on_handoff = None         # callback(summary, text, image_paths): start a fresh session instead of compacting in place
         self._last_send = ("", [])
         self.fallback_candidates = None  # callback(tier) -> [(provider, backend, model), ...]
@@ -452,13 +453,21 @@ class Engine:
                 self.emit("notice", text=f"checkpoint skipped: {exc}")
         text = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content if isinstance(b, dict))
         model, tier = self.model, None
+        shifted_from = None
         if model == routing.AUTO:
             if self.router is not None:
                 model, tier = self.router(text, self.last_input_tokens)
             else:
                 model, tier = routing.pick(self.provider, text, self.last_input_tokens)
+        elif self.quota_shift is not None:
+            try:
+                cheaper = self.quota_shift(model, text, self.last_input_tokens)
+            except Exception:  # noqa: BLE001 - the shift is advisory
+                cheaper = None
+            if cheaper and cheaper != model:
+                shifted_from, model, tier = model, cheaper, "small"
         self.turn_model = model
-        self.emit("turn_start", model=model, tier=tier)
+        self.emit("turn_start", model=model, tier=tier, **({"shifted_from": shifted_from} if shifted_from else {}))
         result = "ok"
         try:
             self._run_turn_with_fallback(turn_start, model, tier or routing.classify(text, self.last_input_tokens))

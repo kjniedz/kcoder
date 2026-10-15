@@ -105,6 +105,7 @@
       <button data-pane="menu" title="More">⋯</button>
     </div>
     <div class="cpane-find" hidden><input placeholder="find in this session…" autocomplete="off"><span class="count"></span><button data-find="prev" title="previous (⇧↩)">↑</button><button data-find="next" title="next (↩)">↓</button><button data-find="close" title="close (esc)">✕</button></div>
+    <div class="recap-slot" hidden></div>
     <div class="chat-log"></div>
     <button class="jump" hidden>↓ jump to latest</button>
     <div class="composer-slot"></div>
@@ -118,7 +119,7 @@
     <div class="composer-row">
       <span class="prompt-label">you&gt;</span>
       <textarea rows="1" placeholder="Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)"></textarea>
-      <button type="button" class="mic" title="Voice input: speak, the words land here; click again or pause to stop (⌘⇧M)">🎤</button>
+      <button type="button" class="mic" title="Voice input: click to start / stop, hold to talk (⌘⇧M toggles, ⌥Space push-to-talk)">🎤</button>
       <button type="submit" class="send" title="Send (Enter)">➤</button>
       <button type="button" class="stop" title="Interrupt (Esc)" hidden>■</button>
     </div>

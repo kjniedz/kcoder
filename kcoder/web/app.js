@@ -14,7 +14,7 @@ const SLASH = [
   ['/help', 'show commands'], ['/clear', 'reset conversation history'], ['/cd', 'change working directory'],
   ['/model', 'switch model or provider (all providers)'], ['/provider', 'same picker as /model'], ['/trust', 'auto | write | read | none | dry'], ['/auto', 'toggle auto-approve'],
   ['/title', 'set the chat title'], ['/name', 'rename the session'], ['/queue', 'add a follow-up task'],
-  ['/fork', 'fork this chat'], ['/compact', 'summarise history to free context'], ['/export', 'download as markdown'],
+  ['/fork', 'fork this chat'], ['/compact', 'summarise history to free context'], ['/export', 'download as markdown'], ['/recap', 'where we left off (/recap new rewrites it)'],
   ['/archive', 'archive this chat'], ['/shell', 'toggle the shell pane'], ['/grid', 'sessions: the grid'],
   ['/panes', 'sessions: 1 to 3 panes (/panes 2)'], ['/terminal', 'toggle this pane between chat and terminal view'],
 ];
@@ -67,6 +67,8 @@ const state = {
   statsDate: null,            // a single day picked in the stats view (YYYY-MM-DD)
   statsMetric: null,
   statsSort: { key: 'date', dir: -1 },
+  recapShown: new Map(),   // sid -> when the "where we left off" card was last shown in this app run
+  recaps: new Map(),       // sid -> the recap on screen
 };
 
 if (!state.winName) { state.winName = 'w' + Math.random().toString(36).slice(2, 7); sessionStorage.setItem('kcoder.win', state.winName); }
@@ -304,6 +306,7 @@ function onEvent(sid, ev) {
     setTimeout(() => { state.layout.panes.forEach((p, i) => { if (p === sid) assignPane(i, ev.to); }); if (state.sid === sid) { state.sid = ev.to; localStorage.setItem('kcoder.sid', ev.to); } toast(`${ev.name}: fresh session with a handoff summary`, 'ok'); }, 300);
   }
   if (ev.t === 'turn_start') store.turn = { input: 0, output: 0 };
+  if (ev.t === 'user') hideRecap(sid);
   if (ev.t === 'tool_output') { store.toolLive = store.toolLive || {}; store.toolLive[ev.id] = ((store.toolLive[ev.id] || '') + ev.delta).slice(-12000); queueRender(sid); return; }
   if (ev.t === 'tool_result' && store.toolLive) delete store.toolLive[ev.id];
   if (ev.t === 'assistant_start') { store.live = ''; store.streaming = true; }
@@ -434,7 +437,7 @@ function buildChatHtml(store, sid, opts = {}) {
     switch (e.t) {
       case 'user': {
         userTurn++;
-        const imgs = (e.images || []).map((i) => `<span>🖼 ${esc(i)}</span>`).join('');
+        const imgs = (e.images || []).map((i) => attachmentHtml(sid, i)).join('');
         out.push(`<div class="msg msg-user" data-turn="${userTurn}" data-i="${idx}"><span class="who">you&gt;</span><div class="bubble">${esc(e.text)}${imgs ? `<div class="images">${imgs}</div>` : ''}</div>` +
           (opts.compact ? '' : `<div class="actions"><button data-act="undo" title="Undo to here: restore the worktree and the conversation to just before this message">↶</button><button data-act="edit" title="Edit and resend">✎</button><button data-act="fork" title="Fork from here">⑂</button><button data-act="copy" title="Copy message">⧉</button></div>`) + `</div>`);
         break;
@@ -462,12 +465,12 @@ function buildChatHtml(store, sid, opts = {}) {
         break;
       }
       case 'usage':
-        if (!opts.compact) out.push(`<div class="note usage">✓ ${e.elapsed != null ? e.elapsed.toFixed ? e.elapsed.toFixed(1) + 's · ' : e.elapsed + 's · ' : ''}${fmtInt(e.input)} in → ${fmtInt(e.output)} out tokens${e.plan ? ' · on your plan' : e.cost ? ' · ' + fmtUsd(e.cost) : ''}</div>`);
+        if (!opts.compact) out.push(`<div class="note usage">${e.recap ? '📍 recap written · ' : '✓ '}${e.elapsed != null ? e.elapsed.toFixed ? e.elapsed.toFixed(1) + 's · ' : e.elapsed + 's · ' : ''}${fmtInt(e.input)} in → ${fmtInt(e.output)} out tokens${e.plan ? ' · on your plan' : e.cost ? ' · ' + fmtUsd(e.cost) : ''}</div>`);
         break;
       case 'error': out.push(`<div class="note err">${esc(e.text)}${e.fix === 'claude-login' ? ' <button class="primary" data-fix="claude">Reconnect Claude</button>' : e.fix === 'plan-limit' ? ' <button data-fix="claude">Claude plan</button>' : ` <button data-err="${esc(sid)}" title="what happened, send again, copy a report">details</button>`}</div>`); break;
       case 'notice': out.push(`<div class="note warn">${esc(e.text)}</div>`); break;
       case 'retry': out.push(`<div class="note warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</div>`); break;
-      case 'info': out.push(`<div class="note">${esc(e.text)}</div>`); break;
+      case 'info': out.push(`<div class="note${e.kind === 'quota_shift' ? ' shift' : ''}">${e.kind === 'quota_shift' ? '⇣ ' : ''}${esc(e.text)}</div>`); break;
       case 'system': out.push(`<div class="note">${esc(e.text)}${e.kind === 'interrupted' ? ' <button data-act="resume">resume</button>' : ''}</div>`); break;
       case 'compaction': out.push(`<div class="note marker">✂ context compacted here (${e.messages_before} messages → summary)</div>`); break;
       case 'compaction_start': out.push(`<div class="note">✂ compacting context (${fmtInt(e.tokens)} tokens)…</div>`); break;
@@ -660,12 +663,35 @@ function renderStatusBar() {
     `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'} today</button>`,
     `<button class="status-item spark" data-go="stats:tokens" title="tokens, last 7 days · open stats">${spark}</button>`,
   ];
+  const qm = quotaItemHtml(st.quota); if (qm) items.push(qm);
   const up = st.update || {};
   if (st.restarting) items.push(`<span class="status-item warn">restarting kcoderd…</span>`);
   else if (up.available) items.push(`<button class="status-item warn" data-upd="1" title="${esc((up.commits || []).join('\n'))}">${up.behind} new commit${up.behind === 1 ? '' : 's'}${up.failed ? ' · failed, rolled back' : ' · click to update'}</button>`);
   $('#status-items').innerHTML = items.join('<span class="sep">·</span>');
   const v = state.version || {};
   const vb = $('#btn-version'); vb.textContent = 'kcoder ' + (v.running || ''); vb.title = `kcoder ${v.running || ''}${v.installed && v.installed !== v.running ? ` (${v.installed} on disk, restart to use it)` : ''}${v.dev ? ' · git checkout' : ''} · settings`;
+}
+
+// ---- the weekly plan limit meter (kcoder/quota.py): used, reset, pace, forecast; labelled by source
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+function quotaWhen(ts) { if (!ts) return ''; const d = new Date(ts * 1000); const now = new Date(); const sameDay = d.toDateString() === now.toDateString(); const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); return sameDay ? `today ${t}` : d.toLocaleDateString([], { weekday: 'short' }) + ' ' + t; }
+function quotaPace(q) {
+  if (!q || q.source === 'none' || q.utilization == null) return '';
+  if (q.utilization >= 1) return 'limit reached';
+  if (!q.forecast_reliable) return 'too early to forecast';
+  if (q.forecast_hit && !q.on_track) return `at this pace you hit the limit ${quotaWhen(q.forecast_hit)}`;
+  if (q.projected_at_reset != null) return `on pace: ~${Math.round(Math.min(1, q.projected_at_reset) * 100)}% at the reset`;
+  return '';
+}
+function quotaLevelClass(q) { return !q ? '' : q.level === 'full' || q.level === 'warn90' ? 'bad' : q.level === 'warn75' || (q.forecast_reliable && !q.on_track) ? 'warn' : ''; }
+function quotaItemHtml(q) {
+  if (!q || q.source === 'none') return '';
+  const pct = Math.round((q.utilization || 0) * 100);
+  const bar = `<span class="qbar" aria-hidden="true"><i style="width:${Math.min(100, pct)}%"></i>${q.elapsed_fraction != null ? `<b style="left:${Math.round(q.elapsed_fraction * 100)}%" title="now"></b>` : ''}</span>`;
+  const pace = quotaPace(q);
+  const src = q.source === 'provider' ? 'from Claude Code' : 'estimate';
+  const title = `weekly plan limit · ${pct}% used (${src})${q.resets_at ? ' · resets ' + quotaWhen(q.resets_at) : ''}${pace ? '\n' + pace : ''}${q.shift_active ? '\nquota shift on: small turns run on the cheaper model' : ''}\nclick for the full meter`;
+  return `<button class="status-item quota ${quotaLevelClass(q)}" data-go="stats:quota" title="${esc(title)}">wk ${bar} <b>${pct}%</b>${q.resets_at ? ` <span class="dim">· resets ${esc(quotaWhen(q.resets_at))}</span>` : ''}${q.forecast_reliable && !q.on_track && q.utilization < 1 ? ` <span class="hit">· hits limit ${esc(quotaWhen(q.forecast_hit))}</span>` : ''}${q.shift_active ? ' <span class="shift" title="quota shift: small turns go to the cheaper model while the forecast says the limit runs out early">⇣ cheaper models</span>' : ''}</button>`;
 }
 
 function setView(v) {
@@ -1161,6 +1187,19 @@ document.addEventListener('click', (e) => {
   if (nativeApi()) { e.preventDefault(); e.stopPropagation(); openExternal(a.href); return; }
   if (!a.target || a.target === '_self') { a.target = '_blank'; a.rel = 'noopener'; }
 }, true);
+// ---- images in messages: served by kcoderd from the session's uploads folder (token-gated), full size in a dialog
+function uploadUrl(sid, name) { return `/uploads/${encodeURIComponent(sid)}/${encodeURIComponent(name)}?token=${encodeURIComponent(state.token || '')}`; }
+function attachmentHtml(sid, name) {
+  if (!/\.[a-z0-9]{2,5}$/i.test(name)) return `<span class="att-label">🖼 ${esc(name)}</span>`;   // rebuilt from an old history: no file
+  return `<img class="att-thumb" src="${uploadUrl(sid, name)}" alt="${esc(name)}" title="${esc(name)} · click to view" data-preview="${esc(uploadUrl(sid, name))}" data-name="${esc(name)}" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'), { className: 'att-label', textContent: '🖼 ' + this.alt }))">`;
+}
+function imagePreview(src, name) {
+  const d = openDialog(`<h2>${esc(name || 'image')}<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body image-preview"><img src="${esc(src)}" alt="${esc(name || '')}"></div>`, 'image');
+  d.classList.add('wide');
+  d.addEventListener('click', (e) => { if (e.target.closest('[data-x]') || e.target.tagName === 'IMG') closeDialog(); });
+}
+document.addEventListener('click', (e) => { const im = e.target.closest('[data-preview]'); if (im) { e.preventDefault(); imagePreview(im.dataset.preview, im.dataset.name || ''); } });
+
 function copyCode(btn) { const code = btn.parentElement.querySelector('code'); navigator.clipboard.writeText(code ? code.textContent : btn.parentElement.textContent); btn.textContent = 'copied'; setTimeout(() => (btn.textContent = 'copy'), 1200); }
 
 // ----------------------------------------------------------------------
@@ -1347,7 +1386,14 @@ function mountComposer(slot, sid, termStyle) {
   ta.addEventListener('keydown', (e) => onComposerKey(e, comp));
   const mic = $('.mic', form);
   if (!speechSupported()) mic.hidden = true;
-  else mic.addEventListener('click', () => toggleVoice(comp));
+  else {
+    mic.title = micTitle();
+    // click toggles; press and hold is push-to-talk (release stops)
+    mic.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; comp._micDown = Date.now(); if (!voiceActive(comp)) { comp._micStarted = true; startVoice(comp); } else comp._micStarted = false; });
+    mic.addEventListener('pointerup', () => { const held = Date.now() - (comp._micDown || 0); if (comp._micStarted && held >= 450) stopVoice(comp); comp._micDown = 0; });
+    mic.addEventListener('pointerleave', () => { if (comp._micDown && comp._micStarted && Date.now() - comp._micDown >= 450) { stopVoice(comp); comp._micDown = 0; } });
+    mic.addEventListener('click', (e) => { e.preventDefault(); if (comp._micStarted) { comp._micStarted = false; return; } if (voiceActive(comp)) stopVoice(comp); });
+  }
   ta.addEventListener('paste', (e) => onPaste(e, comp));
   form.addEventListener('drop', (e) => { if (state.dragChat) return; const files = Array.from(e.dataTransfer.files || []); if (files.length) { e.preventDefault(); e.stopPropagation(); addFiles(comp, files); } });
   form.addEventListener('dragover', (e) => { if (!state.dragChat) e.preventDefault(); });
@@ -1445,16 +1491,45 @@ function expandChip(comp, n) {
 function removeChip(comp, n) { const p = comp.pastes.get(n); if (!p) return; comp.ta.value = comp.ta.value.replace(p.tag, ''); comp.pastes.delete(n); comp.ta.dispatchEvent(new Event('input')); renderChips(comp); }
 function expandAll(comp, text) { for (const [, p] of comp.pastes) text = text.split(p.tag).join(p.text); return text; }
 
-function addImage(comp, file) {
+// Images: pasted (⌘V), dropped, or picked. Oversized Retina screenshots are scaled so the long side is at most
+// MAX_IMAGE_SIDE px (what the model is served anyway; a 2x screenshot of a 1440-wide window lands at 1x, text intact).
+// Screenshots stay PNG so text stays crisp; photos become JPEG.
+const MAX_IMAGE_SIDE = 1568, MAX_IMAGES = 12;
+async function prepareImage(file) {
+  const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('could not read ' + (file.name || 'the image'))); r.readAsDataURL(file); });
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('not an image: ' + (file.name || file.type))); i.src = dataUrl; });
+  const w = img.naturalWidth, h = img.naturalHeight; const long = Math.max(w, h);
+  const png = /png|gif|bmp|webp/.test(file.type) || !file.type;
+  const name = file.name && file.name !== 'image.png' ? file.name : `screenshot-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.${png ? 'png' : 'jpg'}`;
+  if (long <= MAX_IMAGE_SIDE && file.size <= 4 * 1024 * 1024) return { name, data_url: dataUrl, w, h, scaled: false };
+  const k = Math.min(1, MAX_IMAGE_SIDE / long); const cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
+  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; ctx.drawImage(img, 0, 0, cw, ch);
+  return { name: name.replace(/\.[a-z0-9]+$/i, png ? '.png' : '.jpg'), data_url: png ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.9), w: cw, h: ch, scaled: k < 1, from: [w, h] };
+}
+async function addImage(comp, file) {
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => { comp.images.push({ name: file.name || 'image.png', data_url: reader.result }); renderAtts(comp); };
-  reader.readAsDataURL(file);
+  if (comp.images.length >= MAX_IMAGES) { toast(`at most ${MAX_IMAGES} images per message`, 'warn'); return; }
+  const slot = { name: file.name || 'image', data_url: '', pending: true };   // keeps paste order while the images are prepared
+  comp.images.push(slot);
+  try { const im = await prepareImage(file); Object.assign(slot, im, { pending: false }); renderAtts(comp); if (im.scaled) toast(`${im.name}: scaled ${im.from[0]}×${im.from[1]} → ${im.w}×${im.h} to save tokens`, ''); }
+  catch (e) { comp.images.splice(comp.images.indexOf(slot), 1); renderAtts(comp); toast(e.message, 'err'); }
+}
+// does the session's model take images? (providers report which models do; "auto" needs both tiers to)
+function modelSeesImages(s) {
+  if (!s) return true;
+  const p = (state.providers || []).find((x) => x.id === s.provider); if (!p || p.vision === 'all') return true;
+  const list = Array.isArray(p.vision) ? p.vision : [];
+  const ok = (m) => !!m && list.includes(m);
+  if (s.model === 'auto') { const t = p.tiers || {}; return ok(t.small) && ok(t.large); }
+  return ok(s.model);
 }
 function renderAtts(comp) {
   comp.atts.hidden = comp.images.length === 0;
-  comp.atts.innerHTML = comp.images.map((im, i) => `<span class="attachment"><img src="${im.data_url}" alt="${esc(im.name)}" title="${esc(im.name)}"><span class="x" data-i="${i}">✕</span></span>`).join('');
-  for (const x of $$('.x', comp.atts)) x.onclick = () => { comp.images.splice(Number(x.dataset.i), 1); renderAtts(comp); };
+  const s = state.sessions.get(comp.sid);
+  const warn = comp.images.length && s && !modelSeesImages(s) ? `<div class="att-warn">⚠ ${esc(s.model)} can't take images: switch the model (/model) or they are left out</div>` : '';
+  comp.atts.innerHTML = comp.images.map((im, i) => im.pending ? `<span class="attachment pending" title="preparing ${esc(im.name)}…">…</span>` : `<span class="attachment" title="${esc(im.name)}${im.w ? ` · ${im.w}×${im.h}` : ''} · click to view"><img src="${im.data_url}" alt="${esc(im.name)}" data-preview="${im.data_url}" data-name="${esc(im.name)}"><span class="x" data-i="${i}" title="remove">✕</span></span>`).join('') + warn;
+  for (const x of $$('.x', comp.atts)) x.onclick = (e) => { e.stopPropagation(); comp.images.splice(Number(x.dataset.i), 1); renderAtts(comp); };
 }
 
 // slash + @ menus
@@ -1508,11 +1583,22 @@ async function submitComposer(comp) {
   const refs = Array.from(text.matchAll(/(?:^|\s)@([^\s@]+)/g)).map((m) => m[1]);
   if (refs.length) text += '\n\n(referenced files: ' + refs.map((r) => `${(s && s.project && s.project.path) || ''}/${r}`).join(', ') + ' - read them with read_file as needed)';
   const targets = (state.broadcast && state.view === 'chat' && comp.form.closest('.cpane')) ? Array.from(new Set(state.layout.panes.filter(Boolean))) : [sid];
+  if (comp.images.some((im) => im.pending)) { toast('one moment: an image is still being prepared', ''); return; }
+  let images = comp.images;
+  if (images.length) {
+    const blind = targets.map((t) => state.sessions.get(t)).filter((ts) => ts && !modelSeesImages(ts));
+    if (blind.length) {
+      const ok = await confirmDialog(`${blind.map((b) => b.model).join(', ')} can't take images`, `${images.length} image${images.length === 1 ? '' : 's'} would be left out. Send the text alone? Cancel to keep the images and switch the model with /model first.`);
+      if (!ok) return;
+      images = [];
+      if (!text) return;
+    }
+  }
   try {
     for (const t of targets) {
       const ts = state.sessions.get(t);
       const busy = ts && (ts.status === 'working' || ts.status === 'waiting');
-      const r = await request('send', { sid: t, text, images: comp.images, queue_if_busy: busy });
+      const r = await request('send', { sid: t, text, images: images.map((im) => ({ name: im.name, data_url: im.data_url })), queue_if_busy: busy });
       historyFor(t).push(text);
       if (r.queued) toast(`${ts ? ts.name + ': ' : ''}queued as follow-up #${r.position}`, 'ok');
     }
@@ -1545,6 +1631,7 @@ async function slashCommand(sid, line) {
       case '/fork': { const r = await request('fork', { sid }); toast('forked → ' + r.session.name, 'ok'); return true; }
       case '/compact': await request('compact', { sid }); toast('compacting…'); return true;
       case '/export': await exportChat(sid); return true;
+      case '/recap': { if (state.view !== 'chat') setLayout('1'); const p = $$('#split .cpane').find((x) => x.dataset.sid === sid); if (!p) { assignPane(state.layout.focus, sid); } state.recapShown.set(sid, Date.now() / 1000); showRecap(sid, arg === 'new' || arg === 'fresh' || arg === 'refresh'); return true; }
       case '/archive': await request('archive', { sid }); return true;
       case '/shell': setPaneView(sid, paneViewOf(sid) === 'shell' ? 'chat' : 'shell'); if (state.view !== 'wall') { setView('wall'); } focusPane(sid); return true;
       case '/wall': case '/grid': setLayout('grid'); return true;
@@ -1856,15 +1943,61 @@ function renderClaudeButton() {
   if (!c || !c.installed && !c.logged_in && c.on_plan === undefined) { b.textContent = 'Claude'; b.className = ''; return; }
   const lim = c.limits || [];
   b.className = !c.on_plan ? 'warn' : lim.length ? 'warn' : '';
-  const use = (c.usage || []).filter((u) => !u.stale && (u.limit === 'five_hour' || u.limit === 'seven_day'));
+  const meter = ((state.stats || {}).quota || {}).source && (state.stats.quota.source !== 'none');   // the status bar's weekly meter covers the week
+  const use = (c.usage || []).filter((u) => !u.stale && (u.limit === 'five_hour' || (u.limit === 'seven_day' && !meter)));
   b.textContent = !c.on_plan ? 'connect Claude' : lim.length ? `plan limit${lim.some((l) => l.scope === 'all') ? '' : ' · ' + lim.map((l) => l.scope).join(', ')}` : use.length ? 'plan ' + use.map((u) => `${PLAN_SHORT[u.limit]} ${planPct(u)}`).join(' · ') : 'plan ✓';
   if (!lim.length && use.some((u) => u.utilization >= 0.8)) b.className = 'warn';
   b.title = !c.on_plan ? (c.problem || 'not connected') : lim.length ? lim.map(claudeLimitText).join('\n') : `On your Claude plan${c.email ? ' as ' + c.email : ''}. kcoder never uses credits or an API key.` + ((c.usage || []).length ? '\n' + c.usage.map(planUsageText).join('\n') + '\nFrom Claude Code\'s rate-limit reports; updated on every turn. Click for the per-session share.' : '');
 }
-// ---- voice input: the browser's speech recognition dictates into the composer ----
-function speechSupported() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
-function toggleVoice(comp) {
+// ---- voice input: in the app window the Mac's on-device recognition (audio never leaves the machine, words biased
+// towards repo names and dev terms); in a browser tab the Web Speech API. Either way the words only land in the
+// composer for editing; nothing is ever sent by voice. ----
+function nativeDictation() { const a = nativeApi(); return a && typeof a.dictate_start === 'function' ? a : null; }
+function speechSupported() { return !!(nativeDictation() || window.SpeechRecognition || window.webkitSpeechRecognition); }
+function dictationContext() {
+  const words = new Set();
+  for (const p of state.projects || []) if (p.name) words.add(p.name);
+  for (const s of state.sessions.values()) { if (s.project && s.project.name) words.add(s.project.name); if (s.worktree && s.worktree.branch) words.add(s.worktree.branch); if (s.name) words.add(s.name); }
+  for (const c of (state.chats || []).slice(0, 60)) if (c.project && c.project.name) words.add(c.project.name);
+  return Array.from(words).slice(0, 120);
+}
+let voiceComp = null;   // the composer dictation is going into (one at a time)
+window.kcoderDictation = (m) => {   // called by the app window with partial and final results
+  const comp = voiceComp; if (!comp) return;
+  const ta = comp.ta;
+  if (m.text != null) { ta.value = comp._voiceBase + m.text; ta.dispatchEvent(new Event('input')); if (m.final) comp._voiceBase = ta.value.replace(/\s*$/, ' '); }
+  if (m.done) {
+    endVoice(comp);
+    if (m.error) toast('dictation: ' + m.error, 'err');
+  }
+};
+function endVoice(comp) {
+  const mic = $('.mic', comp.form); if (mic) { mic.classList.remove('listening'); mic.title = micTitle(); }
+  comp._voice = false; if (voiceComp === comp) voiceComp = null;
+  const ta = comp.ta; ta.value = ta.value.replace(/\s+$/, ''); ta.dispatchEvent(new Event('input')); ta.focus();
+}
+function micTitle() { return nativeDictation() ? 'Voice input, on-device: click to start / stop, hold to talk, ⌥Space push-to-talk, ⌘⇧M toggle. Words land here for you to edit; nothing is sent by itself.' : 'Voice input: speak, the words land here; click again or pause to stop (⌘⇧M, hold ⌥Space to talk)'; }
+function voiceActive(comp) { return !!(comp._voice || comp._rec); }
+async function startVoice(comp) {
+  if (voiceActive(comp)) return;
+  if (voiceComp && voiceComp !== comp) stopVoice(voiceComp);
+  const api = nativeDictation();
+  if (!api) { toggleVoice(comp); return; }
+  const mic = $('.mic', comp.form); const ta = comp.ta;
+  comp._voiceBase = ta.value ? ta.value.replace(/\s*$/, ' ') : '';
+  comp._voice = true; voiceComp = comp;
+  if (mic) { mic.classList.add('listening'); mic.title = 'Listening (on-device)… click or release to stop'; }
+  let r; try { r = await api.dictate_start(dictationContext(), navigator.language || 'en-US'); } catch (e) { r = { ok: false, error: e.message }; }
+  if (!r || !r.ok) { endVoice(comp); toast(r && r.error ? r.error : 'dictation could not start', 'err'); }
+}
+function stopVoice(comp) {
   if (comp._rec) { comp._rec.stop(); return; }
+  if (!comp._voice) return;
+  const api = nativeDictation(); if (api) api.dictate_stop().catch(() => endVoice(comp)); else endVoice(comp);
+}
+function toggleVoice(comp) {
+  if (voiceActive(comp)) { stopVoice(comp); return; }
+  if (nativeDictation()) { startVoice(comp); return; }
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { toast('voice input is not available in this browser', 'warn'); return; }
   const rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = navigator.language || 'en-US';
@@ -1877,7 +2010,7 @@ function toggleVoice(comp) {
     ta.value = base + finals + interim; ta.dispatchEvent(new Event('input'));
   };
   rec.onerror = (e) => { if (e.error === 'not-allowed') toast('microphone access was refused; allow it for kcoder and try again', 'err'); else if (e.error !== 'aborted' && e.error !== 'no-speech') toast('voice input: ' + e.error, 'err'); };
-  rec.onend = () => { comp._rec = null; mic.classList.remove('listening'); mic.title = 'Voice input: speak, the words land here; click again or pause to stop (⌘⇧M)'; ta.value = (base + finals).replace(/\s+$/, ''); ta.dispatchEvent(new Event('input')); ta.focus(); };
+  rec.onend = () => { comp._rec = null; mic.classList.remove('listening'); mic.title = micTitle(); ta.value = (base + finals).replace(/\s+$/, ''); ta.dispatchEvent(new Event('input')); ta.focus(); };
   try { rec.start(); } catch (e) { toast('voice input could not start: ' + e.message, 'err'); return; }
   comp._rec = rec; mic.classList.add('listening'); mic.title = 'Listening… click to stop';
 }
@@ -1999,6 +2132,11 @@ async function settingsDialog() {
     ${chk('ci_autofix', cfg.ci_autofix !== false, 'Auto-fix on CI failure', 'a red check on a session\'s PR sends the failing log to that session; its fix is pushed through the usual review gate (at most three rounds per PR)')}
     ${chk('handoff', cfg.handoff !== false, 'Automatic handoff', 'at the compaction point the session writes a handoff summary and continues as a fresh session in the same worktree (off: the history is summarised in place)')}
     <label class="setting"><span>Claude plan price (USD / month) <span class="help">the stats page's "paid for itself" badges compare API-equivalent usage with it</span></span><input type="number" min="0" step="1" data-set="plan_price_usd" value="${Number(cfg.plan_price_usd == null ? 200 : cfg.plan_price_usd)}"></label>
+    <div class="label-h">weekly plan limit</div>
+    ${(() => { const q = cfg.quota || {}; return `<label class="setting"><span>Weekly limit (tokens, 0 = none) <span class="help">used when Claude Code has not reported the real weekly number: the meter estimates from plan tokens since the reset</span></span><input type="number" min="0" step="1000000" data-set="quota_limit_tokens" value="${Number(q.limit_tokens || 0)}"></label>
+    ${sel('quota_reset_weekday', String(q.reset_weekday || 0), 'Resets on', WEEKDAYS.map((d, i) => [String(i), d]))}
+    ${sel('quota_reset_hour', String(q.reset_hour || 0), 'at (hour, local time)', Array.from({ length: 24 }, (_, h) => [String(h), `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`]))}
+    ${chk('quota_shift', !!q.shift, 'Quota shift', 'when the forecast says the weekly limit runs out before the reset, small turns in sessions pinned to the big model run on the cheaper tier (always shown in the status bar while active)')}`; })()}
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
     <div class="label-h">accounts</div>
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
@@ -2016,7 +2154,7 @@ async function settingsDialog() {
       if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
       if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
       if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
-      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'ci_autofix' ? { ci_autofix: el.checked } : k === 'plan_price_usd' ? { plan_price_usd: Number(el.value) } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : { [k]: el.value };
+      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'ci_autofix' ? { ci_autofix: el.checked } : k === 'plan_price_usd' ? { plan_price_usd: Number(el.value) } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : k === 'quota_shift' ? { quota_shift: el.checked } : k === 'quota_limit_tokens' ? { quota_limit_tokens: Number(el.value) || 0 } : k === 'quota_reset_weekday' || k === 'quota_reset_hour' ? { [k]: Number(el.value) } : { [k]: el.value };
       const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');
     } catch (err) { toast(err.message, 'err'); }
   });
@@ -2238,7 +2376,7 @@ async function instructionsDialog(sid) {
 }
 
 // ---- task queue view ----
-let tasksData = null, tasksTimer = null, schedulesData = null;
+let tasksData = null, tasksTimer = null, schedulesData = null; const tasksImages = [];   // images attached to the task being written (kept across re-renders)
 async function renderTasksView(force) {
   if (state.view !== 'tasks') return;
   if (!force && tasksTimer) return;
@@ -2263,8 +2401,9 @@ async function renderTasksView(force) {
         <label>provider<select name="provider">${provs.map((p) => `<option value="${esc(p.id)}" ${p.id === def.id ? 'selected' : ''} ${p.configured ? '' : 'disabled'}>${esc(p.label)}</option>`).join('')}</select></label>
         <label>model<select name="model"><option value="">provider default</option>${(def.models || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
         <label>trust<select name="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select></label></div>
-      <label>task<textarea name="text" placeholder="what should it do? It runs in its own worktree as soon as a slot is free, and lands in review when done. Paste a GitHub issue URL and the issue becomes the task (repo optional); the PR closes it." required></textarea></label>
-      <div class="row"><span class="help">finished tasks wait in review; nothing is pushed on its own</span><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add to queue</button></div>
+      <label>task<textarea name="text" placeholder="what should it do? It runs in its own worktree as soon as a slot is free, and lands in review when done. Paste a GitHub issue URL and the issue becomes the task (repo optional); the PR closes it. Paste or drop screenshots too." required></textarea></label>
+      <div class="attachments" id="tq-atts" hidden></div>
+      <div class="row"><span class="help">finished tasks wait in review; nothing is pushed on its own · ⌘V or drop images to attach them</span><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add to queue</button></div>
     </form>
     <h3>running</h3><div class="task-list">${by('running').map((x) => row(x, false)).join('') || '<div class="empty-row">nothing running</div>'}</div>
     <h3>queued</h3><div class="task-list" id="tq-queued">${by('queued').map((x) => row(x, true)).join('') || '<div class="empty-row">queue is empty</div>'}</div>
@@ -2274,9 +2413,21 @@ async function renderTasksView(force) {
   sform.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(sform); try { await request('schedules', { action: 'add', name: fd.get('name'), repo: fd.get('repo'), text: fd.get('text'), every: fd.get('every'), at: fd.get('at'), weekday: Number(fd.get('weekday')), pr: fd.get('pr') === 'on' }); toast('schedule added', 'ok'); schedulesData = null; renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
   $('#sc-list', body).addEventListener('click', async (e) => { const b = e.target.closest('[data-s]'); if (!b) return; const id = b.closest('.task').dataset.sid; try { if (b.dataset.s === 'remove' && !(await confirmDialog('Remove this schedule?', ''))) return; await request('schedules', { action: b.dataset.s, id }); if (b.dataset.s === 'run') toast('queued a run', 'ok'); schedulesData = null; renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
   const form = $('#tq-form', body);
+  // the task composer takes images like a session composer: a stand-in comp whose model is the picked one
+  const tcomp = { sid: null, form, ta: form.querySelector('[name=text]'), atts: $('#tq-atts', body), images: tasksImages, pastes: new Map() };
+  tcomp.ta.addEventListener('paste', (e) => { const imgs = Array.from(e.clipboardData.items || []).filter((i) => i.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); imgs.forEach((i) => addImage(tcomp, i.getAsFile())); } });
+  form.addEventListener('dragover', (e) => e.preventDefault());
+  form.addEventListener('drop', (e) => { const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/')); if (files.length) { e.preventDefault(); files.forEach((f) => addImage(tcomp, f)); } });
+  renderAtts(tcomp);
+  const taskModel = () => { const fd = new FormData(form); return { provider: fd.get('provider'), model: fd.get('model') || ((provs.find((x) => x.id === fd.get('provider')) || {}).default_model) }; };
   form.querySelector('[name=provider]').addEventListener('change', (e) => { const p = provs.find((x) => x.id === e.target.value) || {}; form.querySelector('[name=model]').innerHTML = '<option value="">provider default</option>' + (p.models || []).map((m) => `<option>${esc(m)}</option>`).join(''); });
   form.querySelector('[name=trust]').value = (state.config && state.config.default_trust) || 'auto';
-  form.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(form); try { await request('tasks', { action: 'add', text: fd.get('text'), repo: fd.get('repo'), provider: fd.get('provider'), model: fd.get('model') || null, trust: fd.get('trust') }); toast('task queued', 'ok'); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault(); const fd = new FormData(form);
+    let images = tasksImages;
+    if (images.length && !modelSeesImages(taskModel())) { const ok = await confirmDialog(`${taskModel().model} can't take images`, `${images.length} image${images.length === 1 ? '' : 's'} would be left out. Queue the text alone? Cancel to pick a model that takes images.`); if (!ok) return; images = []; }
+    try { await request('tasks', { action: 'add', text: fd.get('text'), repo: fd.get('repo'), provider: fd.get('provider'), model: fd.get('model') || null, trust: fd.get('trust'), images: images.map((im) => ({ name: im.name, data_url: im.data_url })) }); tasksImages.length = 0; toast('task queued', 'ok'); renderTasksView(true); } catch (err) { toast(err.message, 'err'); }
+  });
   $('#tq-max', body).addEventListener('change', async (e) => { try { const r = await request('config', { max_concurrent: Number(e.target.value) }); state.config = r.config; toast('up to ' + r.config.max_concurrent + ' at once', 'ok'); } catch (err) { toast(err.message, 'err'); } });
   body.onclick = async (e) => {
     const q = e.target.closest('[data-tq]'); if (q) { try { await request('tasks', { action: q.dataset.tq }); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } return; }
@@ -2550,7 +2701,8 @@ const SHORTCUTS = [
   { id: 'open', group: 'sessions', combo: 'Enter', label: 'focus the current session on the wall', scope: 'plain', when: () => state.view === 'wall' && !state.focus && !!state.sid, run: () => focusPane(state.sid) },
   { id: 'view', group: 'sessions', combo: 'v', label: 'pane view: chat ↔ terminal (grid panes also: shell → preview)', scope: 'plain', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
   { id: 'pin', group: 'sessions', combo: 'p', label: 'pin the focused session to this window', scope: 'plain', when: () => !!state.focus, run: () => togglePin(state.focus) },
-  { id: 'voice', group: 'sessions', combo: 'mod+shift+m', label: 'voice input into the composer (start / stop)', scope: 'app', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { focusComposer(); const f = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.composer') : null; const form = f || $('.pane.focused .composer') || $('.composer'); if (form && form._comp) toggleVoice(form._comp); } },
+  { id: 'voice', group: 'sessions', combo: 'mod+shift+m', label: 'voice input into the composer (start / stop)', scope: 'app', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { const comp = activeComposer(); if (comp) toggleVoice(comp); } },
+  { id: 'ptt', group: 'sessions', keys: '⌥Space (hold)', label: 'push-to-talk: dictate while held, release to stop (also: hold the 🎤 button)', scope: 'composer' },
   { id: 'slash', group: 'sessions', combo: '/', label: 'slash commands (/model, /trust, …)', scope: 'plain', when: () => state.view !== 'wall' || !!state.focus, run: () => { focusComposer(); const ta = document.activeElement; if (ta && ta.tagName === 'TEXTAREA') { ta.value = '/'; ta.dispatchEvent(new Event('input')); } } },
   { id: 'send', group: 'sessions', keys: '↩', label: 'send', scope: 'composer' },
   { id: 'newline', group: 'sessions', keys: '⇧↩', label: 'newline', scope: 'composer' },
@@ -2587,6 +2739,19 @@ const SHORTCUTS = [
   { id: 'dialog-submit', group: 'navigation', keys: '⌘↩', label: 'submit a multi-line dialog', scope: 'dialog' },
 ];
 const KEY_GROUPS = ['panes', 'sessions', 'review', 'queue', 'navigation'];
+function activeComposer() { focusComposer(); const f = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.composer') : null; const form = f || $('.pane.focused .composer') || $('.composer'); return form && form._comp ? form._comp : null; }
+// push-to-talk: hold ⌥Space (release either key to stop); repeats are ignored so holding never restarts it
+document.addEventListener('keydown', (e) => {
+  if (!(e.altKey && e.code === 'Space') || e.metaKey || e.ctrlKey || e.repeat || state.dialog) return;
+  e.preventDefault(); if (!speechSupported()) return;
+  const comp = activeComposer(); if (!comp || voiceActive(comp)) return;
+  comp._ptt = true; startVoice(comp);
+}, true);
+document.addEventListener('keyup', (e) => {
+  if (e.code !== 'Space' && e.key !== 'Alt') return;
+  const comp = voiceComp || (($('.composer:focus-within') || {})._comp); if (!comp || !comp._ptt) return;
+  comp._ptt = false; stopVoice(comp);
+}, true);
 function parseCombo(c) {
   const parts = c.split('+'); const key = parts.pop();
   return { key, mod: parts.includes('mod'), shift: parts.includes('shift'), alt: parts.includes('alt'), ctrl: parts.includes('ctrl'), plain: !parts.length };
@@ -2760,6 +2925,50 @@ function toggleCpaneView(pane) {
   const slot = $('.composer-slot', pane); slot.innerHTML = ''; mountComposer(slot, sid, term);
   renderCpaneBar(pane); renderCpaneLog(pane); focusComposer();
 }
+// ---- "where we left off": a cached recap (kcoder/recap.py) over the transcript, with the live branch state
+function recapIdle(s) { return Math.max(0, Date.now() / 1000 - (s && s.last_activity || 0)); }
+function maybeRecap(pane, sid) {
+  const slot = $('.recap-slot', pane); if (!slot) return;
+  if (pane._recapSid !== sid) { pane._recapSid = sid; slot.hidden = true; slot.innerHTML = ''; }
+  const s = state.sessions.get(sid); if (!s || (s.messages || 0) < 2 || cpaneViewOf(sid) === 'term') return;
+  const shown = state.recapShown.get(sid);
+  const idle = recapIdle(s);
+  if (shown && !(idle >= 86400 && (s.last_activity || 0) > shown)) { if (state.recaps.has(sid)) renderRecap(pane, sid); return; }
+  state.recapShown.set(sid, Date.now() / 1000);
+  request('recap', { sid, action: 'peek' }).then((r) => {
+    const c = r.recap;
+    if (c && !c.stale && c.dismissed) return;          // dismissed, and nothing happened since
+    showRecap(sid, false);
+  }).catch(() => {});
+}
+async function showRecap(sid, refresh) {
+  const panes = $$('#split .cpane').filter((p) => p.dataset.sid === sid); if (!panes.length) return;
+  for (const p of panes) { const slot = $('.recap-slot', p); slot.hidden = false; slot.innerHTML = `<div class="recap-card loading"><span class="spin">◐</span> ${refresh ? 'rewriting' : 'writing'} the recap with a small model…</div>`; }
+  try { const r = await request('recap', { sid, action: refresh ? 'refresh' : 'get' }); state.recaps.set(sid, r.recap); }
+  catch (e) { for (const p of panes) { const slot = $('.recap-slot', p); slot.innerHTML = `<div class="recap-card err">recap: ${esc(e.message)} <button data-recap="close">✕</button></div>`; } return; }
+  for (const p of panes) renderRecap(p, sid);
+}
+function branchLine(b) {
+  if (!b || !b.git) return '';
+  const parts = [`<b>${esc(b.branch || '?')}</b>`, b.dirty ? `<span class="warn">${b.dirty} uncommitted file${b.dirty === 1 ? '' : 's'}</span>` : 'clean tree', b.unpushed ? `<span class="warn">${b.unpushed} unpushed commit${b.unpushed === 1 ? '' : 's'}</span>` : 'nothing to push'];
+  if (b.behind) parts.push(`${b.behind} behind`);
+  if (b.pr) parts.push(`<a href="${esc(b.pr.url)}" target="_blank" rel="noopener">PR #${esc(b.pr.number)}</a> ${esc((b.pr.state || 'open').toLowerCase())}${b.pr.draft ? ' (draft)' : ''}${b.pr.checks ? ' · checks ' + esc(b.pr.checks) : ''}`);
+  return `<div class="branch">⎇ ${parts.join(' · ')}</div>`;
+}
+function renderRecap(pane, sid) {
+  const slot = $('.recap-slot', pane); const r = state.recaps.get(sid); if (!slot || !r) return;
+  slot.hidden = false;
+  const idle = r.idle_seconds != null ? r.idle_seconds : recapIdle(state.sessions.get(sid));
+  slot.innerHTML = `<div class="recap-card"><div class="rh"><span class="t">📍 where we left off</span><span class="dim">· idle ${age(Date.now() / 1000 - idle)} · ${esc((r.model || '').split('/').pop())}${r.cached ? ' · cached' : ' · just written'}${r.at ? ' · ' + age(r.at) + ' ago' : ''}</span><span class="spacer"></span><button data-recap="refresh" title="rewrite the recap">↻</button><button data-recap="close" title="dismiss (comes back after new activity)">✕</button></div><div class="md">${renderMarkdown(r.text || '')}</div>${branchLine(r.branch)}</div>`;
+}
+function hideRecap(sid) { state.recaps.delete(sid); for (const p of $$('#split .cpane')) if (p.dataset.sid === sid) { const slot = $('.recap-slot', p); if (slot) { slot.hidden = true; slot.innerHTML = ''; } } }
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-recap]'); if (!b) return;
+  const pane = b.closest('.cpane'); const sid = pane && pane.dataset.sid; if (!sid) return;
+  if (b.dataset.recap === 'refresh') showRecap(sid, true);
+  else { hideRecap(sid); request('recap', { sid, action: 'dismiss' }).catch(() => {}); }
+});
+
 function renderCpaneLog(pane) {
   const sid = pane.dataset.sid; const log = $('.chat-log', pane);
   const term = cpaneViewOf(sid) === 'term';
@@ -2769,6 +2978,7 @@ function renderCpaneLog(pane) {
   if (term) { const stick = nearBottom(log); log.innerHTML = buildTermHtml(store, sid, {}); if (stick) log.scrollTop = log.scrollHeight; pane._rendered = null; $('.jump', pane).hidden = true; return; }
   renderLogInto(pane, log, sid, store, {}, log);
   if (pane._find && pane._find.q) runFind(pane, false);
+  if (store.loaded) maybeRecap(pane, sid);
 }
 
 function wireCpane(pane) {
@@ -2964,6 +3174,7 @@ async function renderStatsView(force) {
     try { statsData = await request('stats_full', { days: state.statsDays, date: state.statsDate || null }); } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
     if (state.view !== 'stats') return;
   }
+  if (!statsData.quota || force) { try { statsData.quota = (await request('quota')).quota; } catch { statsData.quota = { source: 'none' }; } }
   const d = statsData; const S = d.summary; const m = state.statsMetric;
   // the period every number on the page is for: a day, today, the last N days, or all time
   const P = d.date ? fmtDate(d.date) : d.days === 1 ? 'today' : d.days === 0 ? 'all time' : `${d.days} days`;
@@ -3081,6 +3292,7 @@ async function renderStatsView(force) {
     { k: 'insertions', label: '+', f: (c) => plus(c.insertions) }, { k: 'deletions', label: '-', f: (c) => minus(c.deletions) }, { k: 'files', label: 'files', f: (c) => fmtInt(c.files) },
     { k: 'pushed', label: 'state', f: (c) => `<span class="badge ${c.pushed ? 'pushed' : 'local'}">${c.pushed ? 'pushed' : 'local only'}</span>`, cls: 'l', sort: (c) => (c.pushed ? 1 : 0) },
   ], d.commits, { sort: { key: 'ts', dir: -1 }, tall: true, fixed: true, row: (c) => ` data-sha="${esc(c.sha)}"`, empty: 'no commits from sessions in this range' });
+  const quotaCard = quotaCardHtml(d.quota, m === 'quota');
   box.innerHTML = `
     <div class="stats-head"><h2>stats</h2>
       <div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
@@ -3090,6 +3302,7 @@ async function renderStatsView(force) {
       <span class="spacer"></span>
       <button id="stats-csv" title="save the daily table for this range as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
     </div>
+    ${quotaCard}
     <div class="summary six">${summary}</div>
     ${(d.window || {}).n === 1 ? '' : `<div class="two"><div class="card hl"><h3>${CHARTS[charted][0]} · ${P} <span class="badge">charted</span></h3>${CHARTS[charted][1]}</div><div class="card"><h3>${CHARTS[other][0]} · ${P}</h3>${CHARTS[other][1]}</div></div>`}
     <div class="card"><h3>daily</h3><div id="stats-daily"></div></div>
@@ -3114,12 +3327,33 @@ async function renderStatsView(force) {
     const cb = e.target.closest('[data-cal]'); if (cb) { state.statsCal = cb.dataset.cal; localStorage.setItem('kcoder.statsCal', state.statsCal); renderStatsView(false); return; }
     const mc = e.target.closest('.card.metric[data-metric]'); if (mc) { state.statsMetric = mc.dataset.metric; renderStatsView(false); return; }
     if (e.target.closest('[data-clear-day]')) { state.statsDate = null; renderStatsView(true); return; }
+    if (e.target.closest('[data-x="settings"]')) { settingsDialog(); return; }
     const dd = e.target.closest('[data-day]'); if (dd && !e.target.closest('th')) { state.statsDate = dd.dataset.day; renderStatsView(true); return; }
     const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
     if (e.target.closest('a')) return;
     const tr = e.target.closest('tr[data-open]'); if (tr) { assignPane(state.layout.focus, tr.dataset.open); setView('chat'); return; }
     const cr = e.target.closest('tr[data-sha]'); if (cr) cr.classList.toggle('open');
   };
+}
+function quotaCardHtml(q, hl) {
+  q = q || { source: 'none' };
+  const pct = Math.round((q.utilization || 0) * 100);
+  const src = q.source === 'provider' ? '<span class="badge">from Claude Code</span>' : q.source === 'estimate' ? '<span class="badge est">estimate</span>' : '<span class="badge est">no data</span>';
+  const days = (q.daily || []); const mx = Math.max(1, ...days.map((r) => r.tokens));
+  const bars = days.length ? `<div class="qdays">${days.map((r) => `<span title="${esc(fmtDate(r.date))}: ${fmtInt(r.tokens)} plan tokens"><i style="height:${Math.max(2, Math.round(r.tokens / mx * 36))}px"></i><b>${esc(new Date(r.date + 'T00:00:00').toLocaleDateString([], { weekday: 'narrow' }))}</b></span>`).join('')}</div>` : '';
+  const pace = quotaPace(q);
+  const five = q.five_hour ? `<div class="row"><span>5-hour window</span><b>${Math.round(q.five_hour.utilization * 100)}% <span class="dim">· resets ${esc(quotaWhen(q.five_hour.resets_at))}</span></b></div>` : '';
+  const body = q.source === 'none'
+    ? `<div class="help plain">${esc(q.source_label || '')}</div><div class="row"><span>plan tokens this week <span class="dim">(since ${esc(quotaWhen(q.window_start))})</span></span><b>${fmtTokens(q.used_tokens || 0)}</b></div>${bars}${five}<div class="row"><button data-x="settings">Set a weekly limit in Settings</button></div>`
+    : `<div class="qmeter ${quotaLevelClass(q)}"><div class="qfill" style="width:${Math.min(100, pct)}%"></div>${q.elapsed_fraction != null ? `<div class="qnow" style="left:${Math.round(q.elapsed_fraction * 100)}%" title="where the week is now: ${Math.round(q.elapsed_fraction * 100)}% of the window has passed"></div>` : ''}<span class="qpct">${pct}%</span></div>
+      <div class="row"><span>used</span><b>${pct}%${q.source === 'estimate' ? ` <span class="dim">· ${fmtTokens(q.used_tokens || 0)} of ${fmtTokens(q.limit_tokens || 0)} tokens</span>` : q.used_tokens ? ` <span class="dim">· ${fmtTokens(q.used_tokens)} plan tokens this window</span>` : ''}</b></div>
+      <div class="row"><span>resets</span><b>${esc(quotaWhen(q.resets_at))} <span class="dim">· ${Math.round((q.elapsed_fraction || 0) * 100)}% of the week has passed</span></b></div>
+      <div class="row"><span>pace</span><b class="${q.forecast_reliable && !q.on_track ? 'warn' : ''}">${esc(pace || '-')}</b></div>
+      ${q.projected_at_reset != null && q.forecast_reliable ? `<div class="row"><span>projected at the reset</span><b>${Math.round(Math.min(2, q.projected_at_reset) * 100)}%</b></div>` : ''}
+      ${five}${bars}
+      <div class="row"><span>quota shift</span><b>${q.shift_active ? '<span class="warn">on: small turns run on the cheaper model</span>' : q.shift_enabled ? 'armed · the forecast is fine' : 'off <span class="dim">(Settings)</span>'}</b></div>
+      <div class="help plain">${esc(q.source_label || '')}. Warnings at 75% and 90%.</div>`;
+  return `<div class="card quota${hl ? ' hl' : ''}" id="quota-card"><h3>weekly plan limit ${src}<span class="spacer"></span><span class="dim">${q.seen ? 'reported ' + age(q.seen) + ' ago' : ''}</span></h3>${body}</div>`;
 }
 const DAILY_COLS = [
   { k: 'date', label: 'day', f: (r) => fmtDate(r.date), cls: 'l' }, { k: 'input', label: 'tokens in', f: (r) => fmtTokens(r.input) }, { k: 'output', label: 'out', f: (r) => fmtTokens(r.output) }, { k: 'total', label: 'total', f: (r) => fmtTokens(r.total) },

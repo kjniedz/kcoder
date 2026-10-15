@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -179,6 +180,33 @@ PROVIDERS = {
         default_model="xiaokai",
     ),
 }
+
+
+# models that take images. Claude (plan and API) always does; for the OpenAI-compatible
+# providers only the multimodal models are listed, so a screenshot is never sent to a model
+# that would error or silently ignore it.
+_VISION_ALL = {"claude", "anthropic"}
+_VISION_MODELS = {
+    "kimi": ("kimi-latest",),
+    "xiaomi": ("MiMo-V2.5-Pro", "MiMo-V2.5"),
+}
+_VISION_HINT = re.compile(r"(vl|vision|omni|-v\d|4o|gpt-5|gemini|pixtral|llava)", re.I)
+
+
+def supports_images(provider_id: str, model: str | None) -> bool:
+    if provider_id in _VISION_ALL:
+        return True
+    m = (model or "").strip()
+    if m in _VISION_MODELS.get(provider_id, ()):
+        return True
+    return bool(m) and bool(_VISION_HINT.search(m))
+
+
+def vision_models(provider) -> list | str:
+    """'all' or the subset of `provider.models` that accept images (for the app)."""
+    if provider.id in _VISION_ALL:
+        return "all"
+    return [m for m in provider.models if supports_images(provider.id, m)]
 
 
 def _openai_tools() -> list:
@@ -695,8 +723,11 @@ class ClaudeCodeBackend:
 
         last = messages[-1]
         prompt = _prompt_text(last)
+        blocks = _prompt_blocks(last)      # text + image blocks: sent as a stream-json user message
         trust = getattr(hooks, "trust", "read")
         args = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
+        if blocks is not None:
+            args += ["--input-format", "stream-json"]
         if model:
             args += ["--model", model]
         if trust == "auto":
@@ -714,6 +745,7 @@ class ClaudeCodeBackend:
         settings = _claude_settings(getattr(hooks, "sid", None))
         if settings:
             args += ["--settings", settings]
+        args += list(getattr(hooks, "claude_args", None) or [])   # one-off calls (recaps) add --tools "" etc.
         cwd = getattr(hooks, "cwd", None) or os.getcwd()
         env = _claude_env()
         if getattr(hooks, "session_env", None):
@@ -722,7 +754,10 @@ class ClaudeCodeBackend:
         if hasattr(hooks, "proc"):
             hooks.proc = proc
         try:
-            proc.stdin.write(prompt)
+            if blocks is not None:
+                proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": blocks}}) + "\n")
+            else:
+                proc.stdin.write(prompt)
             proc.stdin.close()
         except (BrokenPipeError, OSError):
             pass
@@ -898,16 +933,32 @@ def _prompt_text(msg: dict) -> str:
     content = msg.get("content")
     if isinstance(content, str):
         return content
-    parts = []
+    return "\n".join(b["text"] for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+
+
+def _prompt_blocks(msg: dict) -> list | None:
+    """The user message as Anthropic content blocks when it carries images
+    (Claude Code only takes images over stream-json input); None for text."""
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return None
+    out = []
     imgs = 0
-    for b in content or []:
+    for b in content:
+        if not isinstance(b, dict):
+            continue
         if b.get("type") == "text":
-            parts.append(b["text"])
-        elif b.get("type") in ("image", "image_url"):
+            out.append({"type": "text", "text": b.get("text", "")})
+        elif b.get("type") == "image":
+            out.append(b)
             imgs += 1
-    if imgs:
-        parts.append(f"({imgs} image(s) were attached; see the uploads folder of this session)")
-    return "\n".join(parts)
+        elif b.get("type") == "image_url":   # an OpenAI-style block from an older history
+            url = (b.get("image_url") or {}).get("url") or ""
+            if url.startswith("data:"):
+                header, _, data = url.partition(",")
+                out.append({"type": "image", "source": {"type": "base64", "media_type": header[5:].split(";")[0] or "image/png", "data": data}})
+                imgs += 1
+    return out if imgs else None
 
 
 def _kill(proc) -> None:

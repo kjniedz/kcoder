@@ -23,3 +23,18 @@ here so any session can pick up where the last one stopped.
 | 15 | **Light-theme pass and a compact density setting**. | done (light theme checked, only the preview frame keeps a fixed white; Settings → Density comfortable / compact, `html[data-density]` overrides) |
 
 Dropped from the list: 4 (per-session budgets), 6 (plan-then-fan-out).
+
+## Daily flow and visibility pass (2026-10-15)
+
+Seven features in two phases; each phase is verified on an isolated daemon
+(fake `claude` records what it was sent), committed and pushed.
+
+| # | Feature | Status |
+|---|---|---|
+| 1 | **Paste screenshots**: ⌘V and drag into any composer and the task composer, several per message; thumbnails above the input (remove, click to view); Retina screenshots scaled to 1568 px on the long side; saved with the session and shown in the transcript; a model that cannot take images is called out before the send. | done (`prepareImage` / `addImage` in app.js; `/uploads/<sid>/<file>?token=` route; Claude Code gets image blocks over `--input-format stream-json`; `providers.supports_images`) |
+| 2 | **Weekly plan limit meter**: used, reset, pace and forecast in the status bar, the full meter on the stats page; Claude Code's own numbers when reported, else an estimate from history against a limit and reset day set in Settings, labelled either way; warnings at 75% and 90%; optional quota shift to cheaper models, off by default and always visible when on. | done (`kcoder/quota.py`; requests `quota`, `config` quota_* fields; `Engine.quota_shift`) |
+| 3 | **Where we left off**: a recap card on a session idle 24h+ or after an app restart: done, pending, open decisions, branch state; cheap model, cached, rewritten only on new activity; dismissible; `/recap`. | done (`kcoder/recap.py`, request `recap` get / refresh / peek / dismiss; `.recap-slot` in the chat pane) |
+| 4 | **Voice input**: on-device macOS transcription in the app window (Speech framework, `requiresOnDeviceRecognition`), biased towards repo names and dev terms; push-to-talk (hold ⌥Space or the mic button), click to toggle; words only land in the input, never sent. | done (`Dictation` in `kcoder/app.py`, `window.kcoderDictation`; Info.plist usage strings; Web Speech API in a browser tab) |
+| 5 | **Deploy status per repo**: Cloudflare Pages/Workers, Railway, Supabase targets from the repo's config, read-only through the provider CLIs; badge in the pane header and sidebar; "open in session" sends a failed deploy log to the repo's session. | phase 2 |
+| 6 | **Session timeline**: a scrubber with one mark per turn (tools, files, errors, tokens); click jumps the transcript and shows the diff as of that turn; filters; undo to here through the existing checkpoints. | phase 2 |
+| 7 | **kcoder Wrapped**: weekly (Monday) and monthly (the 1st) recap cards with an archive on the stats page; PNG export through the save dialog; brand tokens and the KCODER banner. | phase 2 |
