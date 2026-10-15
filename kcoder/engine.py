@@ -714,15 +714,19 @@ class Engine:
                   truncated=len(content) > TOOL_RESULT_PREVIEW, is_error=is_error, external=True)
 
     def usage(self, input_tokens: int, output_tokens: int, cache_read: int = 0,
-              cache_write: int = 0, cost: float | None = None) -> None:
+              cache_write: int = 0, cost: float | None = None, context: int | None = None) -> None:
         """`input_tokens` is the full prompt size (cached portions included);
-        cache_read/cache_write break out the parts billed at cache rates."""
-        self.last_input_tokens = int(input_tokens or 0)
+        cache_read/cache_write break out the parts billed at cache rates.
+        `context` is the prompt size of the last model call when `input_tokens`
+        covers several calls (Claude Code reports the turn's total); it is what
+        the compaction / handoff threshold and the context meter go by."""
+        self.last_input_tokens = int(context if context is not None else (input_tokens or 0))
         fields = dict(
             input=int(input_tokens or 0),
             output=int(output_tokens or 0),
             cache_read=int(cache_read or 0),
             cache_write=int(cache_write or 0),
+            context=self.last_input_tokens,
             model=self._current[2] if self._current else (self.turn_model or self.model),
             provider=self._current[0].id if self._current else self.provider.id,
             elapsed=round(time.monotonic() - self._turn_started, 2),

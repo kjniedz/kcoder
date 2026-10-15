@@ -778,6 +778,7 @@ class ClaudeCodeBackend:
         got_result = False
         pending_tools: dict[str, str] = {}
         prog_in = prog_out = 0      # running token totals for the live status line
+        context = 0                 # prompt size of the latest model call (= the context the session is at)
 
         def flush_assistant():
             nonlocal blocks
@@ -857,10 +858,13 @@ class ClaudeCodeBackend:
                             emit("assistant_end", text=text)
                 elif t == "assistant":
                     mu = (d.get("message") or {}).get("usage") or {}
-                    if mu and hasattr(hooks, "progress"):
-                        prog_in += int(mu.get("input_tokens") or 0) + int(mu.get("cache_read_input_tokens") or 0) + int(mu.get("cache_creation_input_tokens") or 0)
-                        prog_out += int(mu.get("output_tokens") or 0)
-                        hooks.progress(prog_in, prog_out)
+                    if mu:
+                        call_in = int(mu.get("input_tokens") or 0) + int(mu.get("cache_read_input_tokens") or 0) + int(mu.get("cache_creation_input_tokens") or 0)
+                        context = call_in or context
+                        if hasattr(hooks, "progress"):
+                            prog_in += call_in
+                            prog_out += int(mu.get("output_tokens") or 0)
+                            hooks.progress(prog_in, prog_out)
                     for b in (d.get("message") or {}).get("content") or []:
                         bt = b.get("type")
                         if bt == "text":
@@ -893,11 +897,16 @@ class ClaudeCodeBackend:
                 elif t == "result":
                     got_result = True
                     self.session_id = d.get("session_id") or self.session_id
+                    # The result's usage is the sum over every model call of the turn (what the
+                    # turn cost), not the size of the conversation: a turn with ten tool calls
+                    # at 30k context reports 300k input. The context the session is at is the
+                    # prompt size of the last call, taken from the assistant messages above.
                     u = d.get("usage") or {}
                     cr = int(u.get("cache_read_input_tokens") or 0)
                     cw = int(u.get("cache_creation_input_tokens") or 0)
-                    hooks.usage(int(u.get("input_tokens") or 0) + cr + cw, int(u.get("output_tokens") or 0),
-                                cache_read=cr, cache_write=cw, cost=float(d.get("total_cost_usd") or 0.0))
+                    total_in = int(u.get("input_tokens") or 0) + cr + cw
+                    hooks.usage(total_in, int(u.get("output_tokens") or 0), cache_read=cr, cache_write=cw,
+                                cost=float(d.get("total_cost_usd") or 0.0), context=min(context, total_in) if context else None)
                     if d.get("is_error") or d.get("subtype") not in (None, "success"):
                         text_ = f"{d.get('subtype') or ''} {str(d.get('result') or '')}"
                         low = text_.lower()
