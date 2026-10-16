@@ -632,13 +632,16 @@ table.grid tr[data-sha] { cursor: pointer; }
 .funview { flex-direction: column; }
 .fun-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 28px; }
 .mine { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; position: relative; }
-.mine-head { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; position: relative; }
+.mine-head { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; position: relative; padding-top: 6px; }
 .mine-btn { background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 14px 18px; cursor: pointer; user-select: none; -webkit-user-select: none; transition: transform .06s; }
 .mine-btn:hover { border-color: var(--accent); }
 .mine-btn:active { transform: scale(.97); }
-.mine-btn .banner { margin: 0; font-size: 9px; animation: none; }
-.mine-nums { display: flex; flex-direction: column; gap: 4px; }
-.mine-bank { font-size: 26px; font-weight: 700; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+.mine-btn .banner { margin: 0; font-size: 14px; animation: none; }
+.mine-btn { padding: 18px 26px; border-radius: 14px; box-shadow: 0 0 0 rgba(127, 197, 255, 0); transition: transform .06s, box-shadow .2s, border-color .2s; }
+.mine-btn:hover { box-shadow: 0 0 28px rgba(127, 197, 255, .18); }
+@media (max-width: 700px) { .mine-btn .banner { font-size: 9px; } }
+.mine-nums { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.mine-bank { font-size: 44px; line-height: 1.1; font-weight: 700; color: var(--accent-text); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .mine-nums .dim, .mine .dim { color: var(--fg-mute); }
 .mine-note { min-height: 16px; font-size: 12px; color: var(--green); }
 .mine-combo { color: var(--yellow); font-weight: 600; }
@@ -649,8 +652,11 @@ table.grid tr[data-sha] { cursor: pointer; }
 @keyframes minegold { from { transform: scale(1); } to { transform: scale(1.1); } }
 .mine-rel { margin-top: 6px; } .mine-rel .ds { color: var(--fg-mute); font-size: 11px; margin-top: 3px; }
 .mine-ach { display: flex; flex-wrap: wrap; gap: 6px; }
-.mine-ach span { font-size: 11px; padding: 2px 9px; border-radius: 10px; border: 1px solid var(--line-2); color: var(--fg-mute); cursor: default; }
+.mine-ach span { font-size: 11px; padding: 2px 9px; border-radius: 10px; border: 1px solid var(--line-2); color: var(--fg-mute); cursor: pointer; }
+.mine-ach span:hover { border-color: var(--fg-dim); color: var(--fg); }
 .mine-ach span.on { border-color: var(--accent); color: var(--accent-text); background: var(--bg-3); }
+.mine-ach span.sel { outline: 1px solid var(--yellow); outline-offset: 1px; }
+.mine-ach-info { margin-top: 8px; font-size: 12px; color: var(--fg-dim); min-height: 16px; } .mine-ach-info .on { color: var(--green); }
 .mine-pop { position: absolute; pointer-events: none; font-weight: 700; color: var(--accent-text); animation: minepop .8s ease-out forwards; z-index: 2; }
 @keyframes minepop { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-40px); } }
 .mine-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; align-items: start; }
@@ -667,8 +673,15 @@ table.grid tr[data-sha] { cursor: pointer; }
 .mine-ups { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .mine-up { display: flex; align-items: center; gap: 10px; }
 .mine-up .ds { color: var(--fg-mute); font-size: 11px; flex: 1; }
+.mine-up button { white-space: nowrap; }
 .mine-up button:disabled { opacity: .45; cursor: default; }
 .mine .card h3:not(:first-child) { margin-top: 12px; }
+.mine .card h3 { display: flex; align-items: center; gap: 8px; }
+.mine .card h3 .link { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px; }
+.mine .card h3 .link:disabled { opacity: .4; cursor: default; }
+.mine-qty { margin-left: auto; display: inline-flex; gap: 2px; }
+.mine-qty button { padding: 0 7px; font-size: 10.5px; text-transform: none; letter-spacing: 0; border-color: var(--line); color: var(--fg-mute); }
+.mine-qty button.sel { border-color: var(--accent); color: var(--accent-text); background: var(--bg-3); }
 .tasks-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 10px; }
 .tasks-body h3 { margin: 10px 0 2px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; }
 .task-add { display: flex; flex-direction: column; gap: 8px; }

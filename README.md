@@ -318,8 +318,10 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   tokens and spend them on agents that mine on their own (Haiku intern,
   Sonnet builder, Opus architect, a second pane, a worktree, a cron
   schedule, the task queue, the fleet) and on upgrades that double them
-  (three tiers each, at 10, 25 and 50 owned). Fast clicks in a row build a
-  combo up to ×3. Surprises pop up now and then while the tab is on screen
+  (four tiers each: doublings at 10, 25 and 50 owned, then a ×4 scale-up at
+  100), with a ×1 / ×10 / ×100 / max buy amount on the agents card and a
+  "buy all affordable" button on the upgrades. Fast clicks in a row build a
+  combo up to ×5. Surprises pop up now and then while the tab is on screen
   (a free retry, a prompt cache hit, a rate limit lifted, the intern's
   stash): click one before it goes for a lump of tokens or a timed boost.
   Milestones (first hire, a million mined, night shift, well rested...) each
