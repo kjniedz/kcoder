@@ -317,12 +317,21 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
 - **Fun** (alt+4): the **token mine**, a clicker. Click the KCODER banner for
   tokens and spend them on agents that mine on their own (Haiku intern,
   Sonnet builder, Opus architect, a second pane, a worktree, a cron
-  schedule, the task queue, the fleet) and on upgrades that double them.
-  Real work feeds the mine: every finished turn in any session pays its
-  output tokens into the bank and every commit made from a session pays a
-  bonus of a minute of mining. The mine keeps going for up to eight hours
-  while the tab is away; progress lives in the browser and is mirrored
-  through kcoderd so the app window and a browser tab share one mine.
+  schedule, the task queue, the fleet) and on upgrades that double them
+  (three tiers each, at 10, 25 and 50 owned). Fast clicks in a row build a
+  combo up to ×3. Surprises pop up now and then while the tab is on screen
+  (a free retry, a prompt cache hit, a rate limit lifted, the intern's
+  stash): click one before it goes for a lump of tokens or a timed boost.
+  Milestones (first hire, a million mined, night shift, well rested...) each
+  add 2% to the mine for good, and once a million tokens have been mined
+  all time you can cut a release: agents, upgrades and bank reset, stars
+  stay, +10% each forever (one star at a million, ten at a billion). A
+  one-line wire under the banner reports what the agents are up to. Real
+  work feeds the mine: every finished turn in any session pays its output
+  tokens into the bank and every commit made from a session pays a bonus
+  of a minute of mining. The mine keeps going for up to eight hours while
+  the tab is away; progress lives in the browser and is mirrored through
+  kcoderd so the app window and a browser tab share one mine.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, the weekly plan
   limit (token limit, reset day and hour, quota shift), plus links to your
