@@ -497,7 +497,7 @@ const LONG_HAUL_VERBS = ['Still summiting', 'Above the treeline', 'Are we there 
 const VERB_EVERY_MS = 4000, LONG_HAUL_AFTER_MS = 10 * 60 * 1000;
 function pickVerb(sid, elapsedMs) {
   const v = state.verbs.get(sid) || { verb: '', at: 0, recent: [] };
-  const pool = elapsedMs >= LONG_HAUL_AFTER_MS ? LONG_HAUL_VERBS : WORK_VERBS;
+  const pool = elapsedMs >= LONG_HAUL_AFTER_MS ? LONG_HAUL_VERBS : workVerbs();   // the star shop can swap the set
   const now = Date.now();
   if (!v.verb || now - v.at >= VERB_EVERY_MS || !pool.includes(v.verb)) {
     const cands = pool.filter((x) => !v.recent.includes(x));
@@ -3392,7 +3392,7 @@ async function renderStatsView(force) {
     ${lh.length ? `<div class="row stack"><span>long hauls <span class="dim">· verbs past ten minutes</span></span><b><span class="verbs">${lh.map(([v, n]) => `<span class="lh">${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</span></b></div>` : ''}
     ${rec(`${P} is`, S.fun ? esc(S.fun) : null)}
     ${rec('secret badges', secret.length ? secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ') : '<span class="dim">none found yet</span>')}
-    ${rec('token mine', `${fmtFull(mineLoad().bank)} tokens banked · ${fmtMine(Math.round(mineRate(mineLoad()) * 10) / 10)}/s${mineLoad().stars ? ` · ${fmtInt(mineLoad().stars)} star${mineLoad().stars === 1 ? '' : 's'}` : ''} <span class="dim">· <button class="link" data-go-fun>open the fun tab</button></span>`)}
+    ${rec('token mine', `${fmtFull(mineLoad().bank)} tokens banked · ${fmtMine(Math.round(mineRate(mineLoad()) * 10) / 10)}/s${mineLoad().starsEver ? ` · ${fmtInt(mineLoad().stars)} star${mineLoad().stars === 1 ? '' : 's'}${mineLoad().spent ? ` (${fmtInt(mineLoad().starsEver)} earned)` : ''}` : ''}${mineRank(mineLoad()) ? ` · rank: ${esc(mineRank(mineLoad()))}` : ''} <span class="dim">· <button class="link" data-go-fun>open the fun tab</button></span>`)}
     <div class="row"><span>${latestWrapped ? `<button class="link" data-wrapped="${esc(latestWrapped.key)}">latest Wrapped: ${esc(wrappedPeriodLabel(latestWrapped))}</button>` : '<span class="dim">no Wrapped card yet</span>'}</span></div></div>`;
   // achievements: next up (three closest locked badges) above the badge wall; hidden badges show only once earned
   const A = d.achievements || { badges: [], next_up: [], records: {} };
@@ -3490,7 +3490,7 @@ async function wrappedDialog(key, opts = {}) {
   const paid = card.paid_multiple != null ? `${card.paid_multiple}× the plan's share (${fmtUsd(card.plan_share)})` : '';
   const html = `<div class="wrapped-card" id="wrapped-card">
     <pre class="banner compact">${BANNER}</pre>
-    <div class="wh"><span class="wt">kcoder wrapped</span><span class="wp">${esc(wrappedPeriodLabel(card))}${card.complete ? '' : ' · so far'}</span></div>
+    <div class="wh"><span class="wt">kcoder wrapped</span><span class="wp">${esc(wrappedPeriodLabel(card))}${card.complete ? '' : ' · so far'}${mineRank(mineLoad()) ? ` · ${esc(mineRank(mineLoad()))}` : ''}</span></div>
     <div class="wgrid">
       ${tile('tokens', fmtTokens(card.tokens), `${fmtTokens(card.input)} in · ${fmtTokens(card.output)} out`)}
       ${tile('lines', `<span class="ok">+${fmtCompact(card.lines_added)}</span> <span class="warn">−${fmtCompact(card.lines_removed)}</span>`, `net ${fmtSigned(card.net)} · ${fmtInt(card.files)} files`)}
@@ -3622,7 +3622,9 @@ const MINE_UNITS = [
   { id: 'cron', glyph: '◷', name: 'cron schedule', desc: 'runs at 6 AM whether you are up or not', cost: 1.4e6, rate: 1400, tiers: ['morning brief', 'nightly dependency bumps', 'weekend releases', 'every minute'] },
   { id: 'queue', glyph: '≣', name: 'task queue', desc: 'the whole backlog, one slot at a time', cost: 2e7, rate: 7800, tiers: ['trust: auto', 'more slots', 'a priority lane', 'auto-scaling'] },
   { id: 'fleet', glyph: '⚑', name: 'the fleet', desc: 'ten agents, one keyboard', cost: 3.3e8, rate: 44000, tiers: ['Wrapped', 'paid for itself', 'a second fleet', 'an armada'] },
-];
+  { id: 'daemon', glyph: '⚙', name: 'the daemon', desc: 'kcoderd itself, mining between restarts', cost: 5.1e9, rate: 2.6e5, tiers: ['launch agent', 'self-update', 'a second daemon', 'a daemon per machine'], need: 'daemon' },
+  { id: 'mythos', glyph: '✶', name: 'Mythos', desc: 'the one above Opus; it mines in ways nobody can explain', cost: 7.5e10, rate: 1.6e6, tiers: ['an approved organisation', 'the long context', 'the overnight run', 'a constellation'], need: 'mythos' },
+];   // `need` names the star shop perk that makes the agent hireable
 const MINE_TIERS = [[10, 10, 2], [25, 100, 2], [50, 1000, 2], [100, 10000, 4]];   // [agents owned to unlock, cost as a multiple of the agent's base price, multiplier]; the fourth tier is the scale-up
 const MINE_UPGRADES = [
   { id: 'kbd', name: 'mechanical keyboard', desc: 'clicks are worth twice as much', cost: 100, click: 2 },
@@ -3651,9 +3653,9 @@ const MINE_MILESTONES = [
   { id: 'agents10', name: 'a team', desc: 'ten agents at once', test: (g) => mineAgents(g) >= 10 },
   { id: 'agents100', name: 'an org chart', desc: 'a hundred agents at once', test: (g) => mineAgents(g) >= 100 },
   { id: 'agents500', name: 'a campus', desc: 'five hundred agents at once', test: (g) => mineAgents(g) >= 500 },
-  { id: 'oneofeach', name: 'the full stack', desc: 'one of every agent', test: (g) => MINE_UNITS.every((u) => g.units[u.id]) },
+  { id: 'oneofeach', name: 'the full stack', desc: 'one of every agent', test: (g) => mineUnitsOpen(g).every((u) => g.units[u.id]) },
   { id: 'fleet', name: 'admiral', desc: 'buy the fleet', test: (g) => (g.units.fleet || 0) >= 1 },
-  { id: 'allups', name: 'maxed out', desc: 'every upgrade bought', test: (g) => g.ups.length >= MINE_UPGRADES.length },
+  { id: 'allups', name: 'maxed out', desc: 'every upgrade bought', test: (g) => g.ups.length >= mineUpgradesAll(g).length },
   { id: 'total1k', name: 'a thousand', desc: '1,000 tokens mined all time', test: (g) => g.total >= 1e3 },
   { id: 'total1m', name: 'a million', desc: '1,000,000 tokens mined all time', test: (g) => g.total >= 1e6 },
   { id: 'total1b', name: 'a billion', desc: '1,000,000,000 tokens mined all time', test: (g) => g.total >= 1e9 },
@@ -3666,26 +3668,35 @@ const MINE_MILESTONES = [
   { id: 'gold1', name: 'quick hands', desc: 'catch a surprise', test: (g) => g.caught >= 1 },
   { id: 'gold25', name: 'lucky streak', desc: 'catch 25 surprises', test: (g) => g.caught >= 25 },
   { id: 'night', name: 'night shift', desc: 'click between 2 and 5 AM', test: (g) => !!g.night },
-  { id: 'away', name: 'well rested', desc: 'come back after the eight-hour away cap', test: (g) => !!g.capped },
+  { id: 'away', name: 'well rested', desc: 'come back after the away cap (eight hours to start)', test: (g) => !!g.capped },
   { id: 'release1', name: 'v1.0', desc: 'cut a release', test: (g) => g.releases >= 1 },
   { id: 'release5', name: 'semver veteran', desc: 'cut five releases', test: (g) => g.releases >= 5 },
-  { id: 'stars10', name: 'trending', desc: 'ten stars', test: (g) => g.stars >= 10 },
+  { id: 'stars10', name: 'trending', desc: 'ten stars earned', test: (g) => g.starsEver >= 10 },
+  { id: 'spend1', name: 'patron', desc: 'spend a star in the star shop', test: (g) => g.spent >= 1 },
+  { id: 'spend10', name: 'a regular', desc: 'spend ten stars in the star shop', test: (g) => g.spent >= 10 },
+  { id: 'daemon1', name: 'self-hosted', desc: 'hire the daemon', test: (g) => (g.units.daemon || 0) >= 1 },
+  { id: 'mythos1', name: 'approved organisation', desc: 'hire Mythos', test: (g) => (g.units.mythos || 0) >= 1 },
 ];
 // the wire: one line of news under the banner, picked from what fits the mine right now (state lines count three times)
 const MINE_NEWS = [
   [(g) => !mineAgents(g), 'the mine is quiet. somebody should hire an intern.'],
-  [(g) => g.units.intern >= 1, 'an intern fetched a token, then fetched it again to be sure.'],
+  [(g) => g.units.intern >= 1, (g) => `${mineWho(g, 'intern', 'an intern')} fetched a token, then fetched it again to be sure.`],
   [(g) => g.units.intern >= 10, 'the interns have formed a union. first demand: more context.'],
-  [(g) => g.units.intern >= 25, 'an intern was caught thinking. extended thinking, apparently.'],
-  [(g) => g.units.builder >= 1, 'a Sonnet builder shipped a feature nobody asked for. it is good.'],
+  [(g) => g.units.intern >= 25, (g) => `${mineWho(g, 'intern', 'an intern')} was caught thinking. extended thinking, apparently.`],
+  [(g) => g.units.builder >= 1, (g) => `${mineWho(g, 'builder', 'a Sonnet builder')} shipped a feature nobody asked for. it is good.`],
   [(g) => g.units.builder >= 10, 'the builders have been in plan mode since Tuesday.'],
-  [(g) => g.units.architect >= 1, 'the Opus architect has been thinking for forty minutes. the diagram is beautiful.'],
+  [(g) => g.units.architect >= 1, (g) => `${mineWho(g, 'architect', 'the Opus architect')} has been thinking for forty minutes. the diagram is beautiful.`],
   [(g) => g.units.architect >= 10, 'ten architects agreed on a name. it took all day.'],
-  [(g) => g.units.pane >= 1, 'the second pane is watching the first pane.'],
-  [(g) => g.units.worktree >= 1, 'a worktree was found living on its own. it has been merged.'],
+  [(g) => g.units.pane >= 1, (g) => `${mineWho(g, 'pane', 'the second pane')} is watching the first pane.`],
+  [(g) => g.units.worktree >= 1, (g) => `${mineWho(g, 'worktree', 'a worktree')} was found living on its own. it has been merged.`],
   [(g) => g.units.cron >= 1, 'the 6 AM cron ran. you were asleep. the tests passed anyway.'],
   [(g) => g.units.queue >= 1, 'the task queue reports: three done, one waiting on you. as always.'],
-  [(g) => g.units.fleet >= 1, 'the fleet has elected a captain. it is a Haiku intern.'],
+  [(g) => g.units.fleet >= 1, (g) => `${mineWho(g, 'fleet', 'the fleet')} has elected a captain. it is ${mineWho(g, 'intern', 'a Haiku intern')}.`],
+  [(g) => g.units.daemon >= 1, (g) => `${mineWho(g, 'daemon', 'the daemon')} restarted itself and mined straight through it.`],
+  [(g) => g.units.mythos >= 1, (g) => `${mineWho(g, 'mythos', 'Mythos')} cleared the backlog. the backlog is bigger now. nobody can explain it.`],
+  [(g) => mineHas(g, 'auto'), 'the cron clicker has not missed a second. it is unsettling.'],
+  [(g) => Object.keys(g.names).length > 0, (g) => `${mineWho(g, 'intern', 'an intern')} asked to be called something else. request noted.`],
+  [(g) => g.spent > 0, (g) => `${fmtInt(g.spent)} star${g.spent === 1 ? '' : 's'} spent in the shop. the repo is down to ${fmtInt(g.stars)}. worth it.`],
   [(g) => g.ups.includes('kbd'), 'the mechanical keyboard can be heard from the next building.'],
   [(g) => g.ups.includes('dictation'), 'dictation heard "git push" and did not. good dictation.'],
   [(g) => g.ups.includes('omni'), 'the command palette has a command for opening the command palette.'],
@@ -3706,7 +3717,57 @@ const MINE_NEWS = [
   [() => true, 'tests pass. the test is assert True.'],
   [() => true, 'a surprise was seen near the agents card. it left before anyone clicked.'],
 ];
-const MINE_AWAY_CAP = 8 * 3600;
+// the star shop: a star buys a permanent perk for the mine or a change to kcoder itself. the star goes
+// for good, and its 10% with it (the mine runs on stars held; the rank follows stars ever earned)
+const MINE_SHOP = [
+  { id: 'head', group: 'perk', name: 'head start', desc: 'every release begins with ten interns and the mechanical keyboard', cost: 1 },
+  { id: 'shift', group: 'perk', name: 'longer shift', desc: 'the away cap goes from 8 hours to 16, then to 24', cost: 1, max: 2 },
+  { id: 'coach', group: 'perk', name: 'combo coach', desc: 'first the combo window stretches from 0.9 to 1.5 seconds, then the cap lifts from ×5 to ×6', cost: 1, max: 2 },
+  { id: 'lucky', group: 'perk', name: 'lucky', desc: 'surprises show up twice as often and stay twice as long', cost: 2 },
+  { id: 'double', group: 'perk', name: 'real work pays double', desc: 'real turns and commits pay twice into the bank', cost: 2 },
+  { id: 'auto', group: 'perk', name: 'the cron clicker', desc: 'clicks the banner once a second at full combo while the tab is on screen', cost: 3 },
+  { id: 'keep', group: 'perk', name: 'keep one', desc: 'pick one upgrade; it survives every release', cost: 3 },
+  { id: 'daemon', group: 'perk', name: 'a ninth agent', desc: 'the daemon itself becomes hireable, priced past the fleet', cost: 5 },
+  { id: 'mythos', group: 'perk', name: 'a tenth agent', desc: 'Mythos becomes hireable, priced past the daemon', cost: 10, need: 'daemon' },
+  { id: 'skin-gold', group: 'kcoder', name: 'gold banner', desc: 'the KCODER banner in gold, everywhere it shows', cost: 1 },
+  { id: 'skin-neon', group: 'kcoder', name: 'neon banner', desc: 'pink to cyan with a glow', cost: 1 },
+  { id: 'skin-matrix', group: 'kcoder', name: 'matrix banner', desc: 'green rain, top to bottom', cost: 1 },
+  { id: 'skin-amber', group: 'kcoder', name: 'retro amber banner', desc: 'the terminal your first computer had', cost: 1 },
+  { id: 'names', group: 'kcoder', name: 'name your agents', desc: 'click an agent\'s name on the agents card to rename it; the wire follows', cost: 1 },
+  { id: 'confetti', group: 'kcoder', name: 'confetti on commit', desc: 'a short burst over the app whenever a session commits, with an off switch', cost: 1 },
+  { id: 'pet', group: 'kcoder', name: 'a status bar pet', desc: 'a little creature in the status bar that works while sessions work and naps when they stop', cost: 2 },
+  { id: 'pet-cat', group: 'kcoder', name: 'pet: a cat', desc: 'a different pet for the status bar', cost: 1, need: 'pet' },
+  { id: 'pet-dog', group: 'kcoder', name: 'pet: a dog', desc: 'a different pet for the status bar', cost: 1, need: 'pet' },
+  { id: 'pet-bear', group: 'kcoder', name: 'pet: a bear', desc: 'a different pet for the status bar', cost: 1, need: 'pet' },
+  { id: 'pet-flip', group: 'kcoder', name: 'pet: the table flipper', desc: 'a different pet for the status bar; it has opinions', cost: 1, need: 'pet' },
+  { id: 'verbs-pirate', group: 'kcoder', name: 'pirate verbs', desc: 'sessions swab the deck and count doubloons while they work', cost: 2 },
+  { id: 'verbs-victorian', group: 'kcoder', name: 'Victorian verbs', desc: 'sessions take the air and ring for tea while they work', cost: 2 },
+  { id: 'verbs-minecraft', group: 'kcoder', name: 'Minecraft verbs', desc: 'sessions punch trees and avoid creepers while they work', cost: 2 },
+];
+const MINE_SKINS = { gold: 'gold', neon: 'neon', matrix: 'matrix', amber: 'retro amber' };
+const MINE_VERB_SETS = {
+  pirate: ['Swabbing the deck', 'Hoisting the mainsail', 'Plundering', 'Keelhauling the bug', 'Walking the plank', 'Splicing the mainbrace', 'Counting doubloons', 'Reading the charts', 'Battening down', 'Parleying', 'Weighing anchor', 'Scuttling', 'Shivering timbers'],
+  victorian: ['Perambulating', 'Taking the air', 'Consulting the almanac', 'Composing a letter', 'Dusting the ledger', 'Awaiting the post', 'Adjusting the monocle', 'Stoking the boiler', 'Ringing for tea', 'Making enquiries', 'Retiring to the study', 'Telegraphing ahead'],
+  minecraft: ['Mining diamonds', 'Punching trees', 'Crafting a table', 'Smelting', 'Enchanting', 'Avoiding creepers', 'Digging straight down', 'Brewing potions', 'Taming a wolf', 'Building a dirt hut', 'Trading with villagers', 'Sleeping through the night'],
+};
+const MINE_PETS = {
+  blob: { name: 'the blob', work: ['(•‿•)', '(•◡•)', '(•‿•)', '(•ᴗ•)'], idle: '(•_•)', sleep: '(-‿-) z' },
+  cat: { name: 'a cat', work: ['(=^･ω･^=)', '(=^･ｪ･^=)'], idle: '(=^･ω･^=)', sleep: '(=^-ω-^=) z' },
+  dog: { name: 'a dog', work: ['(ᵔᴥᵔ)', '(ᵔᴥᵔ)ﾉ'], idle: '(ᵔᴥᵔ)', sleep: '(-ᴥ-) z' },
+  bear: { name: 'a bear', work: ['ʕ•ᴥ•ʔ', 'ʕ•ᴥ•ʔﾉ'], idle: 'ʕ•ᴥ•ʔ', sleep: 'ʕ-ᴥ-ʔ z' },
+  flip: { name: 'the table flipper', work: ['(╯°□°)╯︵ ┻━┻', '(ノ°□°)ノ︵ ┻━┻'], idle: '(°□°) ┬─┬', sleep: '(-□-) ┬─┬ z' },
+};
+const MINE_RANKS = [[1, 'token miner'], [3, 'foreman'], [5, 'pit boss'], [10, 'token baron'], [25, 'mining magnate'], [50, 'a constellation'], [100, 'the Milky Way']];
+const mineRank = (g) => { let r = ''; for (const [n, name] of MINE_RANKS) if (g.starsEver >= n) r = name; return r; };
+const mineHas = (g, id) => (g.shop[id] || 0) > 0;
+const mineLevel = (g, id) => g.shop[id] || 0;
+const mineUnitsOpen = (g) => MINE_UNITS.filter((u) => !u.need || mineHas(g, u.need));
+const mineUpgradesAll = (g) => MINE_UPGRADES.filter((up) => !up.unit || mineUnitsOpen(g).some((u) => u.id === up.unit));
+const mineAwayCap = (g) => [8, 16, 24][Math.min(2, mineLevel(g, 'shift'))] * 3600;
+const mineComboWindow = (g) => mineHas(g, 'coach') ? 1500 : 900;
+const mineComboCap = (g) => mineLevel(g, 'coach') >= 2 ? 100 : 80;
+const mineWho = (g, id, plain) => g.names[id] || plain;
+const mineUnitName = (g, u) => g.names[u.id] || u.name;
 const MINE_WORDS = ['million', 'billion', 'trillion', 'quadrillion', 'quintillion', 'sextillion'];
 let mine = null, mineTimer = null, mineSaveTimer = null, mineTicks = 0, mineNoteTimer = null, mineGold = null, mineNewsLast = '';
 const mineCombo = { n: 0, at: 0 };   // fast clicks in a row (transient)
@@ -3718,14 +3779,16 @@ const fmtMine = (n) => {   // prices and rates: full up to a million, then "4.5 
   return `${v < 10 ? v.toFixed(2) : v < 100 ? v.toFixed(1) : fmtInt(Math.round(v))} ${MINE_WORDS[i]}`;
 };
 function mineNormalize(g) {
-  const n = { v: 2, bank: 0, total: 0, clicks: 0, units: {}, ups: [], ach: [], real: { turns: 0, tokens: 0, commits: 0, bonus: 0 }, caught: 0, bestCombo: 0, night: false, capped: false, releases: 0, stars: 0, boost: null, clickBoost: null, last: Date.now(), started: Date.now(), ...(g && typeof g === 'object' ? g : {}) };
+  const n = { v: 3, bank: 0, total: 0, clicks: 0, units: {}, ups: [], ach: [], real: { turns: 0, tokens: 0, commits: 0, bonus: 0 }, caught: 0, bestCombo: 0, night: false, capped: false, releases: 0, stars: 0, starsEver: 0, spent: 0, shop: {}, names: {}, cos: {}, keepUp: '', boost: null, clickBoost: null, last: Date.now(), started: Date.now(), ...(g && typeof g === 'object' ? g : {}) };
   n.real = { turns: 0, tokens: 0, commits: 0, bonus: 0, ...(n.real || {}) }; n.units = n.units || {}; n.ups = Array.isArray(n.ups) ? n.ups : []; n.ach = Array.isArray(n.ach) ? n.ach : [];
-  for (const k of ['bank', 'total', 'clicks', 'last', 'started', 'caught', 'bestCombo', 'releases', 'stars']) n[k] = Number(n[k]) || 0;
+  const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}); n.shop = obj(n.shop); n.names = obj(n.names); n.cos = { skin: '', verbs: '', pet: '', confetti: true, ...obj(n.cos) }; n.keepUp = typeof n.keepUp === 'string' ? n.keepUp : '';
+  for (const k of ['bank', 'total', 'clicks', 'last', 'started', 'caught', 'bestCombo', 'releases', 'stars', 'starsEver', 'spent']) n[k] = Number(n[k]) || 0;
+  n.starsEver = Math.max(n.starsEver, n.stars);   // a mine saved before the shop: every star it has is one it earned
   for (const k of ['boost', 'clickBoost']) if (n[k] && !(Number(n[k].until) > 0 && Number(n[k].mult) > 1)) n[k] = null;
   return n;
 }
 function mineLoad() { if (mine) return mine; let g = null; try { g = JSON.parse(localStorage.getItem('kcoder.mine') || 'null'); } catch {} mine = mineNormalize(g); return mine; }
-function mineAdopt(theirs) { const g = mineLoad(); const t = mineNormalize(theirs); if (t.total > g.total) { mine = t; mineSave(true); if (state.view === 'fun') { const b = $('#fun-body'); delete b.dataset.built; renderFunView(); } } }
+function mineAdopt(theirs) { const g = mineLoad(); const t = mineNormalize(theirs); if (t.total > g.total) { mine = t; mineSave(true); mineApplyCosmetics(); if (state.view === 'fun') { const b = $('#fun-body'); delete b.dataset.built; renderFunView(); } } }
 function uiStateOut() { const out = { layout: state.layout, order: state.order, view: state.view, saved: Date.now() }; if (mine) out.mine = mine; return out; }
 const mineStarsFor = (total) => Math.floor(Math.cbrt(Math.max(0, total) / 1e6));   // 1 star at a million mined all time, 10 at a billion, 100 at a trillion
 const mineMult = (g) => (1 + 0.1 * g.stars) * (1 + 0.02 * g.ach.length);   // stars and milestones lift everything
@@ -3733,19 +3796,19 @@ function mineBaseRate(g) { let r = 0; for (const u of MINE_UNITS) { let m = 1; f
 const mineBoostOn = (b, now = Date.now()) => !!(b && b.until > now && b.mult > 1);
 function mineRate(g) { return mineBaseRate(g) * (mineBoostOn(g.boost) ? g.boost.mult : 1); }
 function mineClickValue(g) { let v = 1, sec = 0; for (const up of MINE_UPGRADES) if (g.ups.includes(up.id)) { if (up.click) v *= up.click; if (up.clickSec) sec += up.clickSec; } return v * mineMult(g) * (mineBoostOn(g.clickBoost) ? g.clickBoost.mult : 1) + mineRate(g) * sec; }
-const mineComboMult = (n) => 1 + Math.min(Math.max(0, n - 1), 80) * 0.05;   // ×1 on the first click, ×3 after forty fast ones, ×5 after eighty
+const mineComboMult = (n, g) => 1 + Math.min(Math.max(0, n - 1), g ? mineComboCap(g) : 80) * 0.05;   // ×1 on the first click, ×3 after forty fast ones, ×5 after eighty (×6 after a hundred with the combo coach)
 const mineUnitCost = (u, n) => Math.ceil(u.cost * Math.pow(1.15, n));
 const mineUnitCostN = (u, owned, n) => Math.ceil(u.cost * Math.pow(1.15, owned) * (Math.pow(1.15, n) - 1) / 0.15);   // n agents in a row from `owned`
 const mineMaxAffordable = (u, owned, bank) => Math.max(0, Math.floor(Math.log(bank * 0.15 / (u.cost * Math.pow(1.15, owned)) + 1) / Math.log(1.15)));
 let mineQty = 1;   // the buy amount picked on the agents card: 1, 10, 100 or 'max'
 const mineBuyCount = (u, g) => mineQty === 'max' ? mineMaxAffordable(u, g.units[u.id] || 0, g.bank) : mineQty;
 function mineAccrue() {
-  const g = mineLoad(); const now = Date.now(); const dt = Math.min(MINE_AWAY_CAP, Math.max(0, (now - g.last) / 1000));
+  const g = mineLoad(); const now = Date.now(); const cap = mineAwayCap(g); const dt = Math.min(cap, Math.max(0, (now - g.last) / 1000));
   if (dt > 0) {
     const base = mineBaseRate(g); let got = base * dt;
     if (mineBoostOn(g.boost, g.last)) got += base * (g.boost.mult - 1) * Math.min(dt, Math.max(0, (Math.min(g.boost.until, now) - g.last) / 1000));
-    g.bank += got; g.total += got; if (dt >= MINE_AWAY_CAP) g.capped = true;
-    if (dt > 120 && got >= 1) mineNote(`mined ${fmtFull(got)} while you were away (${fmtDur(Math.round(dt))}${dt >= MINE_AWAY_CAP ? ', the eight-hour cap' : ''})`);
+    g.bank += got; g.total += got; if (dt >= cap) g.capped = true;
+    if (dt > 120 && got >= 1) mineNote(`mined ${fmtFull(got)} while you were away (${fmtDur(Math.round(dt))}${dt >= cap ? `, the ${cap / 3600}-hour cap` : ''})`);
   }
   if (g.boost && g.boost.until <= now) g.boost = null;
   if (g.clickBoost && g.clickBoost.until <= now) g.clickBoost = null;
@@ -3765,8 +3828,9 @@ function mineCheck(g) {   // milestones: tested after anything that changes the 
 function mineOnEvent(sid, ev) {
   const key = `${sid}:${ev.t}:${ev.ts || ''}:${ev.commit || ''}`; if (mineSeen.includes(key)) return; mineSeen.push(key); if (mineSeen.length > 200) mineSeen.shift();
   const g = mineAccrue();
-  if (ev.t === 'usage') { const got = Math.max(0, Math.round(Number(ev.output) || 0)); if (!got) return; g.bank += got; g.total += got; g.real.turns += 1; g.real.tokens += got; mineNote(`+${fmtFull(got)} from a real turn`); }
-  else { const bonus = Math.max(100, Math.round(mineRate(g) * 60)); g.bank += bonus; g.total += bonus; g.real.commits += 1; g.real.bonus += bonus; mineNote(`+${fmtFull(bonus)} for commit ${ev.commit}`); }
+  const x = mineHas(g, 'double') ? 2 : 1;
+  if (ev.t === 'usage') { const got = Math.max(0, Math.round(Number(ev.output) || 0)) * x; if (!got) return; g.bank += got; g.total += got; g.real.turns += 1; g.real.tokens += got; mineNote(`+${fmtFull(got)} from a real turn${x > 1 ? ', doubled' : ''}`); }
+  else { const bonus = Math.max(100, Math.round(mineRate(g) * 60)) * x; g.bank += bonus; g.total += bonus; g.real.commits += 1; g.real.bonus += bonus; mineNote(`+${fmtFull(bonus)} for commit ${ev.commit}${x > 1 ? ', doubled' : ''}`); if (mineHas(g, 'confetti') && g.cos.confetti) confettiBurst(); }
   mineSave(); mineCheck(g); if (state.view === 'fun') mineRefresh();
 }
 function mineBuy(kind, id) {
@@ -3779,7 +3843,7 @@ function mineBuy(kind, id) {
 function mineUpgradesOpen(g) { return MINE_UPGRADES.filter((up) => !g.ups.includes(up.id) && (!up.need || g.ups.includes(up.need)) && (!up.unit || (g.units[up.unit] || 0) >= up.owned)); }
 function mineClick(e) {
   const g = mineAccrue(); const now = Date.now();
-  mineCombo.n = now - mineCombo.at < 900 ? mineCombo.n + 1 : 1; mineCombo.at = now; const cm = mineComboMult(mineCombo.n); if (cm > g.bestCombo) g.bestCombo = cm;
+  mineCombo.n = now - mineCombo.at < mineComboWindow(g) ? mineCombo.n + 1 : 1; mineCombo.at = now; const cm = mineComboMult(mineCombo.n, g); if (cm > g.bestCombo) g.bestCombo = cm;
   const v = mineClickValue(g) * cm; g.bank += v; g.total += v; g.clicks += 1; const h = new Date().getHours(); if (h >= 2 && h < 5) g.night = true; mineSave();
   const head = $('.mine-head'); const r = head.getBoundingClientRect(); const pop = document.createElement('span'); pop.className = 'mine-pop'; pop.textContent = `+${fmtMine(Math.round(v * 10) / 10)}`;
   pop.style.left = `${(e.clientX || r.left + 60) - r.left + 8}px`; pop.style.top = `${(e.clientY || r.top + 40) - r.top - 10}px`; head.appendChild(pop); setTimeout(() => pop.remove(), 800);
@@ -3791,7 +3855,7 @@ function mineSpawnSurprise(id) {   // a bubble somewhere on the tab for twelve s
   if (!s) { let r = Math.random() * MINE_SURPRISES.reduce((a, x) => a + x.weight, 0); s = MINE_SURPRISES.find((x) => (r -= x.weight) < 0) || MINE_SURPRISES[0]; }
   const el = document.createElement('button'); el.className = 'mine-gold'; el.type = 'button'; el.dataset.gold = s.id; el.textContent = s.name;
   el.style.left = `${8 + Math.floor(Math.random() * 70)}%`; el.style.top = `${Math.min(Math.max(60, Math.floor(Math.random() * wrap.offsetHeight)), Math.max(60, wrap.offsetHeight - 60))}px`;
-  wrap.appendChild(el); mineGold = { s, el, timer: setTimeout(() => { if (mineGold && mineGold.el === el) { el.remove(); mineGold = null; } }, 12000) };
+  wrap.appendChild(el); mineGold = { s, el, timer: setTimeout(() => { if (mineGold && mineGold.el === el) { el.remove(); mineGold = null; } }, mineHas(mineLoad(), 'lucky') ? 24000 : 12000) };
 }
 function mineCatch() {
   if (!mineGold) return; const { s, el, timer } = mineGold; clearTimeout(timer); el.remove(); mineGold = null;
@@ -3802,10 +3866,62 @@ function mineCatch() {
   mineSave(); mineCheck(g); mineRefresh();
 }
 async function mineRelease() {
-  let g = mineAccrue(); const can = mineStarsFor(g.total) - g.stars; if (can < 1) return;
-  const ok = await confirmDialog(`Cut release v${g.releases + 1}?`, `Every agent, upgrade and banked token goes. You keep ${can} new star${can === 1 ? '' : 's'} (+${can * 10}% to the mine, forever), the milestones, the clicks and the real-work counters.`);
-  if (!ok) return; g = mineAccrue(); g.stars += mineStarsFor(g.total) - g.stars; g.releases += 1; g.bank = 0; g.units = {}; g.ups = []; g.boost = null; g.clickBoost = null;
+  let g = mineAccrue(); const can = mineStarsFor(g.total) - g.starsEver; if (can < 1) return;
+  const keep = mineHas(g, 'keep') && MINE_UPGRADES.find((x) => x.id === g.keepUp && g.ups.includes(x.id));
+  const ok = await confirmDialog(`Cut release v${g.releases + 1}?`, `Every agent, upgrade and banked token goes. You keep ${can} new star${can === 1 ? '' : 's'} (+${can * 10}% to the mine, or spend them in the star shop), the milestones, the clicks and the real-work counters.${mineHas(g, 'head') ? ' Head start: ten interns and the keyboard come straight back.' : ''}${keep ? ` Keep one: ${keep.name} survives.` : ''}`);
+  if (!ok) return; g = mineAccrue(); const got = mineStarsFor(g.total) - g.starsEver; g.stars += got; g.starsEver += got; g.releases += 1; g.bank = 0; g.units = {}; g.ups = []; g.boost = null; g.clickBoost = null;
+  if (mineHas(g, 'head')) { g.units.intern = 10; g.ups.push('kbd'); }
+  if (keep && !g.ups.includes(keep.id)) g.ups.push(keep.id);
   mineSave(true); mineCheck(g); mineNote(`v${g.releases} shipped: ${g.stars} star${g.stars === 1 ? '' : 's'} on the repo`); mineRefresh();
+}
+async function mineShopBuy(id) {   // a star for a perk or a cosmetic; the star and its 10% go for good
+  const g = mineAccrue(); const it = MINE_SHOP.find((x) => x.id === id); if (!it) return;
+  const lvl = mineLevel(g, id); if (lvl >= (it.max || 1) || (it.need && !mineHas(g, it.need)) || g.stars < it.cost) return;
+  const after = (1 + 0.1 * (g.stars - it.cost)) * (1 + 0.02 * g.ach.length);
+  const ok = await confirmDialog(`Spend ${it.cost} star${it.cost === 1 ? '' : 's'} on ${it.name}?`, `${it.desc}. The star${it.cost === 1 ? ' goes' : 's go'} for good: the mine drops from ×${mineMult(g).toFixed(2)} to ×${after.toFixed(2)}.`);
+  if (!ok) return; const h = mineAccrue(); if (h.stars < it.cost) return;
+  h.stars -= it.cost; h.spent += it.cost; h.shop[id] = lvl + 1;
+  if (id === 'head') { if ((h.units.intern || 0) < 10) h.units.intern = 10; if (!h.ups.includes('kbd')) h.ups.push('kbd'); }   // the perk starts now, not at the next release
+  if (id.startsWith('skin-')) h.cos.skin = id.slice(5); if (id.startsWith('verbs-')) h.cos.verbs = id.slice(6);
+  if (id === 'pet') h.cos.pet = 'blob'; if (id.startsWith('pet-')) h.cos.pet = id.slice(4); if (id === 'confetti') h.cos.confetti = true;
+  mineSave(true); mineCheck(h); mineApplyCosmetics(); mineNote(`${it.name}: yours, for ${it.cost} star${it.cost === 1 ? '' : 's'}`); mineRefresh();
+  if (id === 'keep') mineKeepPick(); else if (id === 'names') toast('click an agent\'s name on the agents card to rename it', 'ok'); else if (id === 'confetti') confettiBurst();
+}
+async function mineKeepPick() {
+  const g = mineLoad(); const owned = MINE_UPGRADES.filter((up) => g.ups.includes(up.id));
+  if (!owned.length) { toast('keep one: pick an upgrade once you own one (under "your setup" in the shop)'); return; }
+  const v = await chooseDialog('Keep one: which upgrade survives every release?', owned.map((up) => [up.id, up.name, up.unit ? up.unit : 'clicks']));
+  if (!v) return; g.keepUp = v; mineSave(); mineNote(`keep one: ${MINE_UPGRADES.find((x) => x.id === v).name} survives every release`); mineRefresh();
+}
+async function mineRename(id) {
+  const g = mineLoad(); const u = MINE_UNITS.find((x) => x.id === id); if (!u || !mineHas(g, 'names')) return;
+  const v = await promptDialog(`Name your ${u.name}`, 'Shown on the agents card and in the wire. Leave it empty to put the old name back.', g.names[id] || '');
+  if (v == null) return; const name = v.slice(0, 24); if (name) g.names[id] = name; else delete g.names[id]; mineSave(); mineRefresh();
+}
+// cosmetics bought with stars reach outside the tab: the banner skin (a data attribute on <html> the CSS keys on),
+// the status bar pet, the working verbs (pickVerb asks workVerbs) and confetti when a session commits
+function mineApplyCosmetics() {
+  const g = mineLoad(); const skin = g.cos.skin && mineHas(g, `skin-${g.cos.skin}`) ? g.cos.skin : '';
+  if (skin) document.documentElement.dataset.skin = skin; else delete document.documentElement.dataset.skin;
+  const pet = g.cos.pet && mineHas(g, 'pet') && (g.cos.pet === 'blob' || mineHas(g, `pet-${g.cos.pet}`)) ? g.cos.pet : '';
+  const el = $('#status-pet'); if (!el) return; el.hidden = !pet;
+  if (pet && !petTimer) petTimer = setInterval(petTick, 700); if (!pet && petTimer) { clearInterval(petTimer); petTimer = null; }
+  if (pet) petTick();
+}
+let petTimer = null, petFrame = 0, petIdleSince = Date.now();
+function petTick() {
+  const g = mineLoad(); const p = MINE_PETS[g.cos.pet]; const el = $('#status-pet'); if (!p || !el) return;
+  const working = Array.from(state.sessions.values()).filter((s) => s.status === 'working').length; const now = Date.now(); if (working) petIdleSince = now; petFrame += 1;
+  const asleep = !working && now - petIdleSince > 5 * 60 * 1000; const text = working ? p.work[petFrame % p.work.length] : asleep ? p.sleep : p.idle;
+  if (el.textContent !== text) el.textContent = text;
+  el.title = `${p.name}: ${working ? `working alongside ${working} session${working === 1 ? '' : 's'}` : asleep ? 'napping' : 'waiting for something to do'} · the status bar pet, from the star shop`;
+}
+function workVerbs() { const g = mine || mineLoad(); const set = g.cos.verbs && mineHas(g, `verbs-${g.cos.verbs}`) ? MINE_VERB_SETS[g.cos.verbs] : null; return set || WORK_VERBS; }
+function confettiBurst() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  let box = $('#confetti'); if (!box) { box = document.createElement('div'); box.id = 'confetti'; box.className = 'confetti'; document.body.appendChild(box); }
+  const colors = ['var(--accent)', 'var(--green)', 'var(--yellow)', 'var(--red)', 'var(--fg)'];
+  for (let i = 0; i < 70; i++) { const s = document.createElement('i'); s.style.left = `${Math.random() * 100}%`; s.style.background = colors[i % colors.length]; s.style.animationDelay = `${Math.random() * 0.5}s`; s.style.animationDuration = `${1.4 + Math.random() * 1.2}s`; s.style.width = `${6 + Math.random() * 6}px`; box.appendChild(s); setTimeout(() => s.remove(), 3400); }
 }
 function mineNews(g) {
   const pool = []; for (const [test, text] of MINE_NEWS) { if (!test(g)) continue; const t = typeof text === 'function' ? text(g) : text; if (t === mineNewsLast) continue; for (let i = 0; i < (test.length ? 3 : 1); i++) pool.push(t); }
@@ -3820,14 +3936,18 @@ function renderFunView() {
         <div class="mine-nums"><div class="mine-bank"><span data-m="bank">0</span> tokens</div><div class="dim"><span data-m="rate">0</span> per second · <span data-m="click">1</span> per click<span class="mine-combo" data-m="combo"></span></div><div class="mine-boost" data-m="boost"></div><div class="dim">click the banner; real turns and commits pay in too; surprises show up now and then, click them before they go</div><div class="mine-note" id="mine-note"></div></div></div>
       <div class="mine-ticker"><span class="dim">the wire</span><span id="mine-news"></span></div>
       <div class="mine-grid">
-        <div class="card"><h3>agents<span class="mine-qty" id="mine-qty" title="how many to hire per click">${[1, 10, 100, 'max'].map((q) => `<button data-qty="${q}" class="${q === 1 ? 'sel' : ''}">${q === 'max' ? 'max' : `×${q}`}</button>`).join('')}</span></h3><div class="mine-units">${MINE_UNITS.map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join('')}</div></div>
+        <div class="card"><h3>agents<span class="mine-qty" id="mine-qty" title="how many to hire per click">${[1, 10, 100, 'max'].map((q) => `<button data-qty="${q}" class="${q === 1 ? 'sel' : ''}">${q === 'max' ? 'max' : `×${q}`}</button>`).join('')}</span></h3><div class="mine-units" id="mine-units"></div></div>
         <div class="card"><h3>upgrades<button class="link" data-mine="ups-all" title="buy every upgrade on offer that the bank covers, cheapest first">buy all affordable</button></h3><div class="mine-ups" id="mine-ups"></div>
-          <h3>releases</h3><div class="row"><span>stars</span><b data-m="stars"></b></div><div class="row"><span>releases cut</span><b data-m="releases"></b></div><div class="row"><span>the mine runs at</span><b data-m="mult"></b></div><div class="mine-rel" data-m="rel"></div>
+          <h3>releases</h3><div class="row"><span>stars held</span><b data-m="stars"></b></div><div class="row"><span>stars earned</span><b data-m="starsever"></b></div><div class="row"><span>rank</span><b data-m="rank"></b></div><div class="row"><span>releases cut</span><b data-m="releases"></b></div><div class="row"><span>the mine runs at</span><b data-m="mult"></b></div><div class="mine-rel" data-m="rel"></div>
           <h3>from real work</h3><div class="row"><span>turns paid in</span><b data-m="turns"></b></div><div class="row"><span>tokens from real turns</span><b data-m="rtokens"></b></div><div class="row"><span>commits</span><b data-m="commits"></b></div><div class="row"><span>commit bonuses</span><b data-m="bonus"></b></div>
           <h3>all time</h3><div class="row"><span>tokens mined</span><b data-m="total"></b></div><div class="row"><span>clicks</span><b data-m="clicks"></b></div><div class="row"><span>best combo</span><b data-m="bestcombo"></b></div><div class="row"><span>surprises caught</span><b data-m="caught"></b></div><div class="row"><span>mining since</span><b data-m="since"></b></div>
           <div class="row"><span><button class="link" data-mine="reset">start over</button></span></div></div>
       </div>
-      <div class="card"><h3>milestones <span class="dim" data-m="achn"></span></h3><div class="mine-ach" id="mine-ach"></div><div class="mine-ach-info" id="mine-ach-info">click a milestone to see what it takes</div></div></div>`;
+      <div class="card"><h3>milestones <span class="dim" data-m="achn"></span></h3><div class="mine-ach" id="mine-ach"></div><div class="mine-ach-info" id="mine-ach-info">click a milestone to see what it takes</div></div>
+      <div class="card mine-shop"><h3>the star shop <span class="dim" data-m="shopn"></span></h3><div class="ds">a star buys a permanent perk for the mine or a change to kcoder itself. the star goes for good, and its 10% with it; the rank keeps counting every star you ever earned.</div>
+        <h3>perks for the mine</h3><div class="mine-ups" id="mine-shop-perk"></div>
+        <h3>customize kcoder</h3><div class="mine-ups" id="mine-shop-kcoder"></div>
+        <div class="mine-setup" id="mine-setup"></div></div></div>`;
     box.dataset.built = '1';
     $('#mine-btn').addEventListener('click', mineClick);
     box.addEventListener('click', async (e) => {
@@ -3838,30 +3958,37 @@ function renderFunView() {
       const b = e.target.closest('[data-buy]'); if (b) { mineBuy('unit', b.dataset.buy); return; }
       const u = e.target.closest('[data-up]'); if (u) { mineBuy('up', u.dataset.up); return; }
       if (e.target.closest('[data-mine="release"]')) { mineRelease(); return; }
-      if (e.target.closest('[data-mine="reset"]')) { if (await confirmDialog('Start the token mine over?', 'Every agent, upgrade, star, milestone and token goes; the real-work counters too.')) { mine = mineNormalize(null); mineSave(true); delete box.dataset.built; renderFunView(); } }
+      const st = e.target.closest('[data-star]'); if (st) { mineShopBuy(st.dataset.star); return; }
+      const cs = e.target.closest('[data-cos]'); if (cs) { const g = mineLoad(); if (cs.dataset.cos === 'confetti') g.cos.confetti = cs.dataset.val === 'on'; else g.cos[cs.dataset.cos] = cs.dataset.val; mineSave(); mineApplyCosmetics(); mineRefresh(); if (cs.dataset.cos === 'confetti' && g.cos.confetti) confettiBurst(); return; }
+      if (e.target.closest('[data-mine="keep-pick"]')) { mineKeepPick(); return; }
+      const rn = e.target.closest('[data-rename]'); if (rn) { mineRename(rn.dataset.rename); return; }
+      if (e.target.closest('[data-mine="reset"]')) { if (await confirmDialog('Start the token mine over?', 'Every agent, upgrade, star, milestone and token goes; the real-work counters and everything from the star shop too.')) { mine = mineNormalize(null); mineSave(true); mineApplyCosmetics(); delete box.dataset.built; renderFunView(); } }
     });
     mineNews(g);
   }
   mineRefresh();
   if (!mineTimer) mineTimer = setInterval(() => {
     if (state.view !== 'fun' || document.hidden || !$('#fun-body').dataset.built) { clearInterval(mineTimer); mineTimer = null; mineSave(); return; }
-    mineAccrue(); mineRefresh(); mineTicks += 1; if (mineTicks % 15 === 0) mineSave(); if (mineTicks % 20 === 0) mineNews(mineLoad());
-    if (!mineGold && !state.dialog && Math.random() < 1 / 150) mineSpawnSurprise();   // about one every two and a half minutes on screen
+    const g = mineAccrue(); if (mineHas(g, 'auto')) { const v = mineClickValue(g) * (1 + mineComboCap(g) * 0.05); g.bank += v; g.total += v; }   // the cron clicker: one click a second at full combo, only while watching
+    mineRefresh(); mineTicks += 1; if (mineTicks % 15 === 0) mineSave(); if (mineTicks % 20 === 0) mineNews(g);
+    if (!mineGold && !state.dialog && Math.random() < (mineHas(g, 'lucky') ? 1 / 75 : 1 / 150)) mineSpawnSurprise();   // about one every two and a half minutes on screen (half that with lucky)
   }, 1000);
 }
 function mineRefresh() {
   const box = $('#fun-body'); if (!box || !box.dataset.built) return;
   const g = mineLoad(); const now = Date.now(); const rate = mineRate(g); const set = (k, v) => { const el = box.querySelector(`[data-m="${k}"]`); if (el && el.textContent !== String(v)) el.textContent = v; };
   set('bank', fmtFull(g.bank)); set('rate', fmtMine(Math.round(rate * 10) / 10)); set('click', fmtMine(Math.round(mineClickValue(g) * 10) / 10));
-  set('combo', now - mineCombo.at < 900 && mineCombo.n >= 5 ? ` · combo ×${mineComboMult(mineCombo.n).toFixed(2)}` : '');
+  set('combo', now - mineCombo.at < mineComboWindow(g) && mineCombo.n >= 5 ? ` · combo ×${mineComboMult(mineCombo.n, g).toFixed(2)}` : '');
   const boosts = [g.boost, g.clickBoost].filter((b) => mineBoostOn(b, now)).map((b) => `${b.name}: ${b.id === 'stash' ? 'clicks' : 'the mine'} ×${b.mult} for ${Math.ceil((b.until - now) / 1000)} s`); set('boost', boosts.join(' · '));
   set('turns', fmtInt(g.real.turns)); set('rtokens', fmtFull(g.real.tokens)); set('commits', fmtInt(g.real.commits)); set('bonus', fmtFull(g.real.bonus));
   set('total', fmtFull(g.total)); set('clicks', fmtInt(g.clicks)); set('bestcombo', g.bestCombo ? `×${g.bestCombo.toFixed(2)}` : '×1'); set('caught', fmtInt(g.caught)); set('since', fmtDate(new Date(g.started).toISOString().slice(0, 10)));
-  set('stars', fmtInt(g.stars)); set('releases', fmtInt(g.releases)); set('mult', `×${mineMult(g).toFixed(2)}`);
-  const can = mineStarsFor(g.total) - g.stars; const rel = box.querySelector('[data-m="rel"]');
-  const relKey = can > 0 ? `go:${can}` : `next:${g.stars + 1}`;
-  if (rel.dataset.key !== relKey) { rel.dataset.key = relKey; rel.innerHTML = can > 0 ? `<button data-mine="release">cut release v${g.releases + 1}: +${can} star${can === 1 ? '' : 's'}</button><div class="ds">agents and bank reset; stars stay, +10% each forever</div>` : `<div class="ds">next star at ${fmtFull(Math.pow(g.stars + 1, 3) * 1e6)} tokens mined all time</div>`; }
-  for (const u of MINE_UNITS) {
+  set('stars', fmtInt(g.stars)); set('starsever', fmtInt(g.starsEver)); set('rank', mineRank(g) || 'none yet (one star)'); set('releases', fmtInt(g.releases)); set('mult', `×${mineMult(g).toFixed(2)}`);
+  const can = mineStarsFor(g.total) - g.starsEver; const rel = box.querySelector('[data-m="rel"]');
+  const relKey = can > 0 ? `go:${can}` : `next:${g.starsEver + 1}`;
+  if (rel.dataset.key !== relKey) { rel.dataset.key = relKey; rel.innerHTML = can > 0 ? `<button data-mine="release">cut release v${g.releases + 1}: +${can} star${can === 1 ? '' : 's'}</button><div class="ds">agents and bank reset; stars stay, +10% each or spend them in the shop</div>` : `<div class="ds">next star at ${fmtFull(Math.pow(g.starsEver + 1, 3) * 1e6)} tokens mined all time</div>`; }
+  const unitsEl = $('#mine-units'); const ukey = `${mineUnitsOpen(g).map((u) => u.id).join(',')}|${JSON.stringify(g.names)}|${mineHas(g, 'names') ? 1 : 0}`;
+  if (unitsEl.dataset.key !== ukey) { unitsEl.dataset.key = ukey; unitsEl.innerHTML = mineUnitsOpen(g).map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${mineHas(g, 'names') ? `<span class="rn" data-rename="${u.id}" title="rename">${esc(mineUnitName(g, u))}</span>` : esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join(''); }
+  for (const u of mineUnitsOpen(g)) {
     const row = box.querySelector(`[data-unit="${u.id}"]`); const n = g.units[u.id] || 0; const cost = mineUnitCost(u, n);
     let m = 1; for (const up of MINE_UPGRADES) if (up.unit === u.id && g.ups.includes(up.id)) m *= up.mult;
     row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * m * mineMult(g) * 10) / 10)}/s` : '';
@@ -3871,14 +3998,33 @@ function mineRefresh() {
   }
   const open = mineUpgradesOpen(g); const key = open.map((u) => u.id).join(',');
   const ups = $('#mine-ups');
-  if (ups.dataset.key !== key) { ups.dataset.key = key; ups.innerHTML = open.length ? open.map((up) => `<div class="mine-up"><div><b>${esc(up.name)}</b><div class="ds">${esc(up.desc)}</div></div><button data-up="${up.id}">${fmtMine(up.cost)} tokens</button></div>`).join('') : `<div class="dim">${g.ups.length === MINE_UPGRADES.length ? 'every upgrade bought' : 'more appear as you buy agents'}</div>`; }
+  if (ups.dataset.key !== key) { ups.dataset.key = key; ups.innerHTML = open.length ? open.map((up) => `<div class="mine-up"><div><b>${esc(up.name)}</b><div class="ds">${esc(up.desc)}</div></div><button data-up="${up.id}">${fmtMine(up.cost)} tokens</button></div>`).join('') : `<div class="dim">${g.ups.length >= mineUpgradesAll(g).length ? 'every upgrade bought' : 'more appear as you buy agents'}</div>`; }
   for (const up of open) { const b = ups.querySelector(`[data-up="${up.id}"]`); if (b) b.disabled = g.bank < up.cost; }
   const all = box.querySelector('[data-mine="ups-all"]'); const canAll = open.some((up) => up.cost <= g.bank); if (all.disabled === canAll) all.disabled = !canAll;
   const ach = $('#mine-ach'); const akey = g.ach.join(',');
   if (ach.dataset.key !== akey) { ach.dataset.key = akey; ach.innerHTML = MINE_MILESTONES.map((m) => `<span class="${g.ach.includes(m.id) ? 'on' : ''}" data-ach="${m.id}" title="${esc(m.desc)}">${esc(m.name)}</span>`).join(''); set('achn', `${g.ach.length} of ${MINE_MILESTONES.length} · +${g.ach.length * 2}%`); }
+  // the star shop: rows per group (an item needing another shows once that one is owned), then the pickers for what is owned
+  const shopKey = `${g.stars}|${JSON.stringify(g.shop)}|${g.keepUp}|${JSON.stringify(g.cos)}|${g.ups.includes(g.keepUp)}`; const shopEl = $('#mine-shop-perk');
+  if (shopEl.dataset.key !== shopKey) {
+    shopEl.dataset.key = shopKey;
+    const row = (it) => { const lvl = mineLevel(g, it.id), max = it.max || 1; return `<div class="mine-up"><div><b>${esc(it.name)}</b>${max > 1 ? ` <span class="dim">${lvl} of ${max}</span>` : ''}<div class="ds">${esc(it.desc)}</div></div>${lvl >= max ? '<span class="owned">owned</span>' : `<button data-star="${it.id}" ${g.stars < it.cost ? 'disabled' : ''}>${it.cost} star${it.cost === 1 ? '' : 's'}</button>`}</div>`; };
+    const open = (it) => !it.need || mineHas(g, it.need);
+    shopEl.innerHTML = MINE_SHOP.filter((it) => it.group === 'perk' && open(it)).map(row).join('');
+    $('#mine-shop-kcoder').innerHTML = MINE_SHOP.filter((it) => it.group === 'kcoder' && open(it)).map(row).join('');
+    set('shopn', `${fmtInt(g.stars)} star${g.stars === 1 ? '' : 's'} to spend · ${fmtInt(g.spent)} spent`);
+    const pick = (k, cur, opts) => `<span class="mine-qty">${opts.map(([v, label]) => `<button data-cos="${k}" data-val="${esc(v)}" class="${cur === v ? 'sel' : ''}">${esc(label)}</button>`).join('')}</span>`;
+    const lines = [];
+    const skins = Object.entries(MINE_SKINS).filter(([id]) => mineHas(g, `skin-${id}`)); if (skins.length) lines.push(`<div class="row"><span>banner</span>${pick('skin', mineHas(g, `skin-${g.cos.skin}`) ? g.cos.skin : '', [['', 'kcoder blue'], ...skins])}</div>`);
+    const vsets = Object.keys(MINE_VERB_SETS).filter((id) => mineHas(g, `verbs-${id}`)); if (vsets.length) lines.push(`<div class="row"><span>working verbs</span>${pick('verbs', mineHas(g, `verbs-${g.cos.verbs}`) ? g.cos.verbs : '', [['', 'the usual'], ...vsets.map((id) => [id, id])])}</div>`);
+    if (mineHas(g, 'pet')) lines.push(`<div class="row"><span>status bar pet</span>${pick('pet', g.cos.pet === 'blob' || mineHas(g, `pet-${g.cos.pet}`) ? g.cos.pet : '', [['', 'off'], ...Object.entries(MINE_PETS).filter(([id]) => id === 'blob' || mineHas(g, `pet-${id}`)).map(([id, p]) => [id, p.name])])}</div>`);
+    if (mineHas(g, 'confetti')) lines.push(`<div class="row"><span>confetti on commit</span>${pick('confetti', g.cos.confetti ? 'on' : 'off', [['on', 'on'], ['off', 'off']])}</div>`);
+    if (mineHas(g, 'keep')) { const up = MINE_UPGRADES.find((x) => x.id === g.keepUp); lines.push(`<div class="row"><span>keep one</span><b>${up ? esc(up.name) + (g.ups.includes(up.id) ? '' : ' <span class="dim">(not owned right now)</span>') : '<span class="dim">not picked yet</span>'} <button class="link" data-mine="keep-pick">${up ? 'change' : 'pick'}</button></b></div>`); }
+    if (mineHas(g, 'names')) lines.push(`<div class="row"><span>names</span><b class="dim">click an agent's name on the agents card to rename it</b></div>`);
+    $('#mine-setup').innerHTML = lines.length ? `<h3>your setup</h3>${lines.join('')}` : '';
+  }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.view === 'fun') renderFunView(); });
 
-renderHeader(); renderViews();
+mineApplyCosmetics(); renderHeader(); renderViews();
 connect();
 

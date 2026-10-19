@@ -672,7 +672,8 @@ table.grid tr[data-sha] { cursor: pointer; }
 .mine-unit button:disabled { opacity: .45; cursor: default; }
 .mine-ups { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .mine-up { display: flex; align-items: center; gap: 10px; }
-.mine-up .ds { color: var(--fg-mute); font-size: 11px; flex: 1; }
+.mine-up > div:first-child { flex: 1; min-width: 0; }
+.mine-up .ds { color: var(--fg-mute); font-size: 11px; }
 .mine-up button { white-space: nowrap; }
 .mine-up button:disabled { opacity: .45; cursor: default; }
 .mine .card h3:not(:first-child) { margin-top: 12px; }
@@ -682,6 +683,24 @@ table.grid tr[data-sha] { cursor: pointer; }
 .mine-qty { margin-left: auto; display: inline-flex; gap: 2px; }
 .mine-qty button { padding: 0 7px; font-size: 10.5px; text-transform: none; letter-spacing: 0; border-color: var(--line); color: var(--fg-mute); }
 .mine-qty button.sel { border-color: var(--accent); color: var(--accent-text); background: var(--bg-3); }
+.mine-unit .rn { cursor: pointer; border-bottom: 1px dashed var(--line-2); } .mine-unit .rn:hover { color: var(--accent-text); border-bottom-color: var(--accent); }
+.mine-shop > .ds { color: var(--fg-mute); font-size: 11px; margin: -4px 0 4px; }
+.mine-up .owned { color: var(--green); font-size: 11px; white-space: nowrap; }
+.mine-setup h3 { margin-top: 12px; } .mine-setup .row { align-items: center; margin: 4px 0; } .mine-setup .row b { display: inline-flex; align-items: center; gap: 6px; }
+.mine-setup .mine-qty { margin-left: 0; flex-wrap: wrap; justify-content: flex-end; }
+/* banner skins from the star shop: a data attribute on <html>, after the themes so a skin wins in both */
+html[data-skin="gold"] { --gradient: linear-gradient(90deg, #FFF1B8 0%, #F5B301 55%, #8A5A00 100%); }
+html[data-skin="neon"] { --gradient: linear-gradient(90deg, #FF4FD8 0%, #B26BFF 50%, #5CF6FF 100%); }
+html[data-skin="neon"] .banner { filter: drop-shadow(0 0 6px rgba(178, 107, 255, .55)); }
+html[data-skin="matrix"] { --gradient: linear-gradient(180deg, #D8FFD0 0%, #00FF41 45%, #0B3D12 100%); }
+html[data-skin="matrix"] .banner { filter: drop-shadow(0 0 5px rgba(0, 255, 65, .45)); }
+html[data-skin="amber"] { --gradient: linear-gradient(90deg, #FFE0A3 0%, #FFB000 60%, #7A4A00 100%); }
+html[data-skin="amber"] .banner { filter: drop-shadow(0 0 4px rgba(255, 176, 0, .4)); }
+/* the status bar pet and confetti on commit, both from the star shop */
+.statusbar .pet { font-family: var(--mono); color: var(--accent-text); letter-spacing: 0; padding: 0 8px; cursor: default; } .statusbar .pet:hover { background: none; color: var(--accent-text); }
+.confetti { position: fixed; inset: 0; pointer-events: none; z-index: 60; overflow: hidden; }
+.confetti i { position: absolute; top: -14px; width: 8px; height: 12px; border-radius: 2px; opacity: .95; animation: confetti 2s linear forwards; }
+@keyframes confetti { to { transform: translateY(105vh) rotate(720deg); opacity: .7; } }
 .tasks-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 10px; }
 .tasks-body h3 { margin: 10px 0 2px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; }
 .task-add { display: flex; flex-direction: column; gap: 8px; }

@@ -327,13 +327,25 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   Milestones (first hire, a million mined, night shift, well rested...) each
   add 2% to the mine for good, and once a million tokens have been mined
   all time you can cut a release: agents, upgrades and bank reset, stars
-  stay, +10% each forever (one star at a million, ten at a billion). A
-  one-line wire under the banner reports what the agents are up to. Real
+  stay, +10% each (one star at a million, ten at a billion). Stars also
+  spend in the **star shop**: a star goes for good, and its 10% with it,
+  for a permanent perk (head start, a longer away cap, a wider combo
+  window and a ×6 cap, luckier surprises, real work paying double, the
+  cron clicker, one upgrade that survives releases, the daemon and Mythos
+  as a ninth and tenth agent) or for a change to kcoder itself (gold, neon,
+  matrix and amber banner skins, naming your agents, confetti when a
+  session commits, a status bar pet with a cat, a dog, a bear and the
+  table flipper, and pirate, Victorian or Minecraft working verbs). The
+  rank (token miner, foreman, pit boss, token baron...) follows stars ever
+  earned and shows on the stats page and the Wrapped card. A one-line wire
+  under the banner reports what the agents are up to, by name if you have
+  named them. Real
   work feeds the mine: every finished turn in any session pays its output
   tokens into the bank and every commit made from a session pays a bonus
-  of a minute of mining. The mine keeps going for up to eight hours while
-  the tab is away; progress lives in the browser and is mirrored through
-  kcoderd so the app window and a browser tab share one mine.
+  of a minute of mining. The mine keeps going for up to eight hours (24 with
+  the longer shift perk) while the tab is away; progress lives in the browser
+  and is mirrored through kcoderd so the app window and a browser tab share
+  one mine.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, the weekly plan
   limit (token limit, reset day and hour, quota shift), plus links to your
