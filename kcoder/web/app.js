@@ -24,7 +24,7 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtInt = (n) => (n || 0).toLocaleString();
 const fmtUsd = (n) => (n >= 100 ? '$' + Math.round(n).toLocaleString() : n >= 10 ? '$' + n.toFixed(1) : '$' + (n || 0).toFixed(2));
-const fmtTokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k' : String(n || 0));
+const fmtTokens = (n) => (n >= 1e12 ? (n / 1e12).toFixed(n >= 1e13 ? 1 : 2) + 'T' : n >= 1e9 ? (n / 1e9).toFixed(n >= 1e10 ? 1 : 2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'k' : String(n || 0));
 const age = (ts) => { const d = Math.max(0, Date.now() / 1000 - (ts || 0)); return d < 60 ? Math.floor(d) + 's' : d < 3600 ? Math.floor(d / 60) + 'm' : d < 86400 ? Math.floor(d / 3600) + 'h' : Math.floor(d / 86400) + 'd'; };
 const shortHome = (p) => (p || '').replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~');
 const stripAnsi = (s) => String(s ?? '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
@@ -3263,7 +3263,7 @@ const fmtDur = (sec) => { sec = Math.round(sec || 0); if (sec < 60) return sec +
 const fmtDate = (d) => { if (!d) return ''; const t = new Date(d + 'T00:00:00'); return isNaN(t) ? d : t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + (t.getFullYear() !== new Date().getFullYear() ? ' ' + t.getFullYear() : ''); };
 const fmtPct = (x) => `${Math.round((x || 0) * 100)}%`;
 const fmtNum = (v) => (v == null ? '-' : Number.isInteger(v) ? fmtInt(v) : Math.abs(v) >= 100 ? fmtInt(Math.round(v)) : v.toFixed(1));
-const fmtCompact = (v) => { v = Math.round(v || 0); const a = Math.abs(v); const body = a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e5 ? Math.round(a / 1e3) + 'k' : a >= 1e3 ? (a / 1e3).toFixed(1) + 'k' : String(a); return (v < 0 ? '\u2212' : '') + body; };
+const fmtCompact = (v) => { v = Math.round(v || 0); const a = Math.abs(v); const body = a >= 1e9 ? (a / 1e9).toFixed(a >= 1e10 ? 1 : 2) + 'B' : a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e5 ? Math.round(a / 1e3) + 'k' : a >= 1e3 ? (a / 1e3).toFixed(1) + 'k' : String(a); return (v < 0 ? '\u2212' : '') + body; };
 const fmtSigned = (v) => (v > 0 ? '+' : '') + fmtCompact(v);
 const plus = (v) => `<span class="ok">+${fmtInt(Math.round(v || 0))}</span>`, minus = (v) => `<span class="warn">-${fmtInt(Math.round(v || 0))}</span>`;
 const TOOL_NAMES = { run_bash: 'Bash', read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List' };
