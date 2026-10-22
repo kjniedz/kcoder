@@ -317,35 +317,47 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
 - **Fun** (alt+4): the **token mine**, a clicker. Click the KCODER banner for
   tokens and spend them on agents that mine on their own (Haiku intern,
   Sonnet builder, Opus architect, a second pane, a worktree, a cron
-  schedule, the task queue, the fleet) and on upgrades that double them
-  (four tiers each: doublings at 10, 25 and 50 owned, then a ×4 scale-up at
-  100), with a ×1 / ×10 / ×100 / max buy amount on the agents card and a
-  "buy all affordable" button on the upgrades. Fast clicks in a row build a
-  combo up to ×5. Surprises pop up now and then while the tab is on screen
-  (a free retry, a prompt cache hit, a rate limit lifted, the intern's
-  stash): click one before it goes for a lump of tokens or a timed boost.
-  Milestones (first hire, a million mined, night shift, well rested...) each
-  add 2% to the mine for good, and once a million tokens have been mined
-  all time you can cut a release: agents, upgrades and bank reset, stars
-  stay, +10% each (one star at a million, ten at a billion). Stars also
-  spend in the **star shop**: a star goes for good, and its 10% with it,
-  for a permanent perk (head start, a longer away cap, a wider combo
-  window and a ×6 cap, luckier surprises, real work paying double, the
-  cron clicker, one upgrade that survives releases, the daemon and Mythos
-  as a ninth and tenth agent) or for a change to kcoder itself (gold, neon,
-  matrix and amber banner skins, naming your agents, confetti when a
-  session commits, a status bar pet with a cat, a dog, a bear and the
-  table flipper, and pirate, Victorian or Minecraft working verbs). The
-  rank (token miner, foreman, pit boss, token baron...) follows stars ever
-  earned and shows on the stats page and the Wrapped card. A one-line wire
-  under the banner reports what the agents are up to, by name if you have
-  named them. Real
-  work feeds the mine: every finished turn in any session pays its output
-  tokens into the bank and every commit made from a session pays a bonus
-  of a minute of mining. The mine keeps going for up to eight hours (24 with
-  the longer shift perk) while the tab is away; progress lives in the browser
-  and is mirrored through kcoderd so the app window and a browser tab share
-  one mine.
+  schedule, the task queue, the fleet) and on upgrades that multiply them
+  (thirteen tiers each: doublings at 10, 25 and 50 owned, a ×4 scale-up at
+  100, then a tier every hundred agents to 1,000 with ×10 each and a
+  ×1,000 at 500 and at 1,000, so the first agents catch up late in the
+  game), with a ×1 / ×10 / ×100 / max buy amount on the agents card, a
+  "buy all affordable" button on the upgrades, and under every agent how
+  many more it takes to reach its next tier and how long that is at the
+  current rate (unaffordable upgrades say how long too). Fast clicks in a
+  row build a combo up to ×5. Surprises pop up now and then in the part of
+  the tab that is on screen (a free retry, a prompt cache hit, a rate limit
+  lifted, the intern's stash): click one before it goes for a lump of tokens
+  or a timed boost. Milestones (first hire, a million mined, night shift,
+  well rested...) each add 2% to the mine for good, and once a million
+  tokens have been mined all time you can cut a release: agents, upgrades
+  and bank reset, stars stay, +10% each (one star at a million, ten at a
+  billion). Three **sprints** a day (click 250 times, mine two hours' worth,
+  catch two surprises, hire thirty agents, pay in five real turns, cut a
+  release...) each pay stars when done, more the higher the rank, and a day
+  with all three done extends a streak. Stars also spend in the **star
+  shop**: a star goes for good, and its 10% with it, for a permanent perk
+  (head start, an away cap up to a week, a wider combo window and a ×6 cap,
+  luckier surprises and longer boosts, real work paying double, the cron
+  clicker, procurement that buys upgrades on its own, one upgrade that
+  survives releases, bulk licensing and volume pricing that cut upgrade and
+  agent prices, sponsors and the trophy case that raise what each star and
+  milestone is worth, and the daemon, Mythos, the software factory and the
+  founder as a ninth to twelfth agent) or for a change to kcoder itself
+  (gold, neon, matrix, amber, monochrome and rainbow banner skins, naming
+  your agents, confetti when a session commits, a status bar pet with a
+  cat, a dog, a bear, a duck, a dragon and the table flipper, and pirate,
+  Victorian or Minecraft working verbs); what is owned folds into one line.
+  The rank (token miner, foreman, pit boss, token baron... up to the
+  multiverse) follows stars ever earned and shows on the stats page and the
+  Wrapped card. A one-line wire under the banner reports what the agents
+  are up to, by name if you have named them. Real work feeds the mine:
+  every finished turn in any session pays its output tokens into the bank
+  and every commit made from a session pays a bonus of a minute of mining.
+  The mine keeps going for up to eight hours (a week with every longer
+  shift) while the tab is away; progress lives in the browser and is
+  mirrored through kcoderd so the app window and a browser tab share one
+  mine.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, the weekly plan
   limit (token limit, reset day and hour, quota shift), plus links to your
