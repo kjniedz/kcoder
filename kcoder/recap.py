@@ -25,13 +25,13 @@ MAX_EXCERPT = 14_000
 MAX_ITEM = 1_500
 
 RECAP_SYSTEM = (
-    "You write a short 'where we left off' recap of a coding session for the person who ran it. "
+    "You write a very short 'where we left off' recap of a coding session for the person who ran it. "
     "Use only what is in the transcript and the facts given; never invent. Do not use any tools. "
-    "Answer in markdown with exactly these three headings, each followed by 1 to 4 short bullets "
-    "(plain sentences, no sub-bullets, no preamble, no closing line):\n"
-    "### Done\n### Pending\n### Open decisions\n"
-    "Under Open decisions put questions the person still has to answer, or 'none'. "
-    "Name files, commands and branches exactly as they appear. Keep the whole recap under 140 words."
+    "Answer in markdown with exactly these two headings, each followed by 1 to 3 bullets of at most "
+    "fifteen words (plain sentences, no sub-bullets, no preamble, no closing line):\n"
+    "### Done\n### Next\n"
+    "Under Next put what is still to do and any question the person still has to answer. "
+    "Name files, commands and branches exactly as they appear. Keep the whole recap under 60 words."
 )
 
 

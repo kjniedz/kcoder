@@ -899,21 +899,24 @@ html[data-density="compact"] table td, html[data-density="compact"] table th { p
 .card.quota .qdays b { font-size: 9px; color: var(--fg-mute); font-weight: 400; }
 .card.quota .row b.warn { color: var(--yellow); }
 .note.shift { color: var(--running); }
-.recap-slot { flex: 0 0 auto; padding: 8px 16px 0; }
-.recap-card { background: var(--bg-3); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); border-radius: 6px; padding: 6px 10px 8px; font-size: 12px; }
-.recap-card.loading { color: var(--fg-dim); }
-.recap-card.err { border-left-color: var(--red); color: var(--red); }
-.recap-card .rh { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; }
-.recap-card .rh .t { color: var(--accent-text); font-weight: 700; }
+.recap-slot { flex: 0 0 auto; padding: 6px 16px 0; }
+.recap-card { background: var(--bg-3); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); border-radius: 6px; padding: 3px 8px 5px; font-size: 11.5px; line-height: 1.35; }
+.recap-card.loading { color: var(--fg-dim); padding: 5px 8px; }
+.recap-card.err { border-left-color: var(--red); color: var(--red); padding: 5px 8px; }
+.recap-card .rh { display: flex; gap: 6px; align-items: center; min-height: 20px; white-space: nowrap; overflow: hidden; }
+.recap-card .rh .t { border: none; background: none; padding: 0; color: var(--accent-text); font-weight: 700; font-size: 11.5px; flex: 0 0 auto; }
+.recap-card .rh .t:hover { text-decoration: underline; }
+.recap-card .rh .dim, .recap-card .rh .branch { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.recap-card .rh .branch .warn { color: var(--yellow); }
 .recap-card .rh .spacer { flex: 1; }
-.recap-card .rh button { border: none; background: none; color: var(--fg-mute); padding: 0 4px; }
-.recap-card .rh button:hover { color: var(--accent-text); }
-.recap-card .md h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-dim); margin: 6px 0 2px; }
-.recap-card .md ul { margin: 0; padding-left: 18px; }
-.recap-card .md li { margin: 1px 0; }
-.recap-card .md p { margin: 2px 0; }
-.recap-card .branch { margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--line-2); color: var(--fg-dim); font-size: 11.5px; }
-.recap-card .branch .warn { color: var(--yellow); }
+.recap-card .rh button:not(.t) { border: none; background: none; color: var(--fg-mute); padding: 0 3px; }
+.recap-card .rh button:not(.t):hover { color: var(--accent-text); }
+.recap-card .md { max-height: 112px; overflow: auto; padding-right: 4px; }
+.recap-card.fold .md { display: none; }
+.recap-card .md h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-dim); margin: 3px 0 0; }
+.recap-card .md ul { margin: 0; padding-left: 16px; }
+.recap-card .md li { margin: 0; }
+.recap-card .md p { margin: 1px 0; }
 .recap-card .spin { display: inline-block; animation: spin 1s linear infinite; }
 .pane.compact .recap-slot { display: none; }
 

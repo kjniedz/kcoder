@@ -927,7 +927,7 @@ function renderLogInto(holder, log, sid, store, opts, scroller) {
   if (!incremental || changed) groupTools(log);
   holder._rendered = { sig: 1, sid, store, optsKey, count: store.list.length, live: store.live, streaming, status, toolSig, toolIds: Object.keys(store.toolLive || {}) };
   const jump = holder.querySelector ? holder.querySelector('.jump') : null;
-  if (stick) { scroller.scrollTop = scroller.scrollHeight; if (jump) jump.hidden = true; }
+  if (stick) { scroller.scrollTop = scroller.scrollHeight; if (jump) jump.hidden = true; holder._pin = true; requestAnimationFrame(() => { if (holder._pin !== false && scroller.isConnected) scroller.scrollTop = scroller.scrollHeight; }); }
   else if (jump && changed) jump.hidden = false;
 }
 // Consecutive tool calls fold into one row. Runs the same way after a full
@@ -2987,24 +2987,29 @@ async function showRecap(sid, refresh) {
   catch (e) { for (const p of panes) { const slot = $('.recap-slot', p); slot.innerHTML = `<div class="recap-card err">recap: ${esc(e.message)} <button data-recap="close">✕</button></div>`; } return; }
   for (const p of panes) renderRecap(p, sid);
 }
-function branchLine(b) {
+function branchBits(b) {
   if (!b || !b.git) return '';
-  const parts = [`<b>${esc(b.branch || '?')}</b>`, b.dirty ? `<span class="warn">${b.dirty} uncommitted file${b.dirty === 1 ? '' : 's'}</span>` : 'clean tree', b.unpushed ? `<span class="warn">${b.unpushed} unpushed commit${b.unpushed === 1 ? '' : 's'}</span>` : 'nothing to push'];
+  const parts = [`⎇ <b>${esc(b.branch || '?')}</b>`];
+  if (b.dirty) parts.push(`<span class="warn">${b.dirty} uncommitted</span>`);
+  if (b.unpushed) parts.push(`<span class="warn">${b.unpushed} unpushed</span>`);
+  if (!b.dirty && !b.unpushed) parts.push('clean, pushed');
   if (b.behind) parts.push(`${b.behind} behind`);
-  if (b.pr) parts.push(`<a href="${esc(b.pr.url)}" target="_blank" rel="noopener">PR #${esc(b.pr.number)}</a> ${esc((b.pr.state || 'open').toLowerCase())}${b.pr.draft ? ' (draft)' : ''}${b.pr.checks ? ' · checks ' + esc(b.pr.checks) : ''}`);
-  return `<div class="branch">⎇ ${parts.join(' · ')}</div>`;
+  if (b.pr) parts.push(`<a href="${esc(b.pr.url)}" target="_blank" rel="noopener">PR #${esc(b.pr.number)}</a> ${esc((b.pr.state || 'open').toLowerCase())}${b.pr.draft ? ' (draft)' : ''}${b.pr.checks ? ', checks ' + esc(b.pr.checks) : ''}`);
+  return `<span class="branch" title="branch state now">· ${parts.join(' · ')}</span>`;
 }
 function renderRecap(pane, sid) {
   const slot = $('.recap-slot', pane); const r = state.recaps.get(sid); if (!slot || !r) return;
   slot.hidden = false;
+  const fold = localStorage.getItem('kcoder.recapFold') === '1';
   const idle = r.idle_seconds != null ? r.idle_seconds : recapIdle(state.sessions.get(sid));
-  slot.innerHTML = `<div class="recap-card"><div class="rh"><span class="t">📍 where we left off</span><span class="dim">· idle ${age(Date.now() / 1000 - idle)} · ${esc((r.model || '').split('/').pop())}${r.cached ? ' · cached' : ' · just written'}${r.at ? ' · ' + age(r.at) + ' ago' : ''}</span><span class="spacer"></span><button data-recap="refresh" title="rewrite the recap">↻</button><button data-recap="close" title="dismiss (comes back after new activity)">✕</button></div><div class="md">${renderMarkdown(r.text || '')}</div>${branchLine(r.branch)}</div>`;
+  slot.innerHTML = `<div class="recap-card${fold ? ' fold' : ''}"><div class="rh"><button class="t" data-recap="fold" title="${fold ? 'show' : 'fold'} the recap">${fold ? '▸' : '▾'} where we left off</button><span class="dim">· ${age(Date.now() / 1000 - idle)} ago</span>${branchBits(r.branch)}<span class="spacer"></span><button data-recap="refresh" title="rewrite the recap (${esc((r.model || '').split('/').pop())}, ${r.cached ? 'cached' : 'just written'}${r.at ? ' ' + age(r.at) + ' ago' : ''})">↻</button><button data-recap="close" title="dismiss (comes back after new activity)">✕</button></div><div class="md">${renderMarkdown(r.text || '')}</div></div>`;
 }
 function hideRecap(sid) { state.recaps.delete(sid); for (const p of $$('#split .cpane')) if (p.dataset.sid === sid) { const slot = $('.recap-slot', p); if (slot) { slot.hidden = true; slot.innerHTML = ''; } } }
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-recap]'); if (!b) return;
   const pane = b.closest('.cpane'); const sid = pane && pane.dataset.sid; if (!sid) return;
   if (b.dataset.recap === 'refresh') showRecap(sid, true);
+  else if (b.dataset.recap === 'fold') { localStorage.setItem('kcoder.recapFold', localStorage.getItem('kcoder.recapFold') === '1' ? '0' : '1'); for (const p of $$('#split .cpane')) if (p.dataset.sid === sid) renderRecap(p, sid); }
   else { hideRecap(sid); request('recap', { sid, action: 'dismiss' }).catch(() => {}); }
 });
 
@@ -3084,6 +3089,7 @@ async function turnDiffDialog(sid, turn) {
   });
 }
 
+function pinLog(pane) { const log = $('.chat-log', pane); log.scrollTop = log.scrollHeight; pane._pin = true; $('.jump', pane).hidden = true; }
 function renderCpaneLog(pane) {
   const sid = pane.dataset.sid; const log = $('.chat-log', pane);
   const term = cpaneViewOf(sid) === 'term';
@@ -3122,8 +3128,13 @@ function wireCpane(pane) {
     const b = e.target.closest('[data-act]'); if (b && sid) { handleAction(b, sid); return; }
     if (e.target.dataset.copy) copyCode(e.target);
   });
-  log.addEventListener('scroll', () => { if (nearBottom(log)) $('.jump', pane).hidden = true; });
-  $('.jump', pane).addEventListener('click', () => { log.scrollTop = log.scrollHeight; $('.jump', pane).hidden = true; });
+  // The log stays pinned to the newest message until the reader scrolls up: when its box changes
+  // (the recap card or the composer growing, a resize, the view coming on screen) or an image in it
+  // finishes loading, a pinned log goes back to the bottom instead of leaving "jump to latest" to click.
+  log.addEventListener('scroll', () => { pane._pin = nearBottom(log); if (pane._pin) $('.jump', pane).hidden = true; });
+  $('.jump', pane).addEventListener('click', () => pinLog(pane));
+  if (window.ResizeObserver) new ResizeObserver(() => { if (pane._pin !== false) pinLog(pane); }).observe(log);
+  log.addEventListener('load', () => { if (pane._pin !== false) pinLog(pane); }, true);
   const fb = $('.cpane-find', pane); const fin = $('input', fb);
   fin.addEventListener('input', () => runFind(pane, true));
   fin.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); stepFind(pane, e.shiftKey ? -1 : 1); } else if (e.key === 'Escape') { e.preventDefault(); closeFind(pane); } });

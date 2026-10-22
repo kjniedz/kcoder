@@ -265,12 +265,18 @@ dialog; **check on stats** opens the stats page on exactly that date range
 so every number can be compared.
 
 **Where we left off.** Opening a session that sat idle for a day, or any
-session after the app restarted, shows a recap card at the top of its chat:
-what was done, what is pending, open decisions, and the branch state
-(uncommitted files, unpushed commits, the PR and its checks). The recap is
-written by a cheap model (Haiku on your plan, no tools) and cached; it is
-only written again when the session has new activity. ✕ dismisses it, ↻
-rewrites it, `/recap` shows it any time (`/recap new` rewrites).
+session after the app restarted, shows a small recap card at the top of its
+chat: a header line with how long ago the session was active and the branch
+state (uncommitted files, unpushed commits, the PR and its checks), then a
+few words on what was done and what is next, under sixty words. Clicking the
+title folds the card to its header line, and it stays folded until clicked
+again. The recap is written by a cheap model (Haiku on your plan, no tools)
+and cached; it is only written again when the session has new activity. ✕
+dismisses it, ↻ rewrites it, `/recap` shows it any time (`/recap new`
+rewrites). The chat itself stays pinned to the newest message: when the
+recap card appears, the composer grows or an image finishes loading, a chat
+that was at the bottom goes back to the bottom on its own, and "jump to
+latest" only shows once you have scrolled up and something new arrived.
 
 **Theme and density.** Settings (⌘,) has the theme (dark, light, follow the
 system) and a density switch: comfortable, or compact for tighter spacing
