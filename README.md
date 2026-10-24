@@ -366,26 +366,41 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   your agents, confetti when a session commits, a status bar pet with a
   cat, a dog, a bear, a duck, a dragon and the table flipper, and pirate,
   Victorian or Minecraft working verbs); what is owned folds into one line.
-  With a thousand stars held you can **go public**: every star held becomes
-  shares (the cube root, more with a secondary offering), a currency that
-  never goes away, adds 8% to everything per share, compounding, and buys
-  what stars cannot on the exchange (the acquirer, the regulator, the AGI
-  and the open-source fork as a fourteenth to seventeenth agent, a second
-  wire, dividends that pay a star per share on every clean day, the buyback
-  that doubles commit bonuses per level, and the prospectus). Stars,
-  releases and the release star count start over on the new listing, and
-  from then on stars past a thousand lift the mine by their square root
-  rather than in full; the rank, the milestones, the real-work counters and
-  everything from the shop stay. The releases card keeps a clock on the
-  current run, your best time, and the last six runs. Milestones come in
-  families that always have a next chip (every thousandfold of tokens
-  mined, releases, commits, turns, clicks, stars, sprints, streaks, perfect
-  days, weeks, listings, shares and agents).
+  With a thousand stars held you can **go public** as KCDR: every star held
+  becomes shares with a 25% first-day pop (more with a secondary offering),
+  and from then on the exchange card runs a market. Shares have a price in
+  stars; shares × price is the market cap, and every star of it lifts the
+  mine like a star held does, in full, so a listing never makes the mine
+  weaker. The price drifts up on its own, jumps for good on every real
+  commit and release and on clean sprint days, and news (an analyst
+  upgrade, a short report, an earnings beat, a letter from the regulator,
+  meme stock Monday, a flash crash, a short squeeze...) knocks it about for
+  ten minutes or so before it fades: buy the dips with stars, sell the pops
+  for stars to spend in the shop, at a 1% spread. The card shows the quote
+  and the day's change, an hour of tape, the cap, your cost basis, the high
+  and the change since listing, and buy and sell buttons for 1, 10, 100 or
+  all. Shares also buy what stars cannot (the acquirer, the regulator, the
+  AGI and the open-source fork as a fourteenth to seventeenth agent, an
+  analyst who shows the fair value, a prime broker who narrows the spread,
+  index inclusion for a faster drift, investor relations for bigger commit
+  jumps, volatility, the hype machine, dividends that pay 1% of the cap per
+  level on every clean day, a second wire, the buyback and the prospectus).
+  Stars, releases and the release star count start over on the new
+  listing, and from then on stars held past a thousand lift the mine by
+  their square root rather than in full; the rank, the milestones, the
+  real-work counters and everything from the shop stay. A later listing
+  turns the stars held into more shares at the market's price, with the pop
+  again on the stars earned on that listing. The releases card keeps a
+  clock on the current run, your best time, and the last six runs.
+  Milestones come in families that always have a next chip (every
+  thousandfold of tokens mined, releases, commits, turns, clicks, stars,
+  sprints, streaks, perfect days, weeks, listings, shares, trades, the
+  share price since listing, the market cap and agents).
   The rank (token miner, foreman, pit boss, token baron... the multiverse,
   the omniverse, the simulation, the heat death, the reboot and on by
   powers of ten) follows stars ever earned over every listing, with a
-  public-company rank (listed, small cap... too big to fail) from shares
-  held, and shows on the stats page and the Wrapped card. A one-line wire
+  public-company rank (listed, small cap... too big to fail) from the
+  market cap, and shows on the stats page and the Wrapped card. A one-line wire
   under the banner reports what the agents are up to, by name if you have
   named them. Real work feeds the mine:
   every finished turn in any session pays its output tokens into the bank
