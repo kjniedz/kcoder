@@ -702,6 +702,12 @@ table.grid tr[data-sha] { cursor: pointer; }
 .mine-sprint > div:first-child { flex: 1; min-width: 0; } .mine-sprint .ds { color: var(--fg-mute); font-size: 11px; } .mine-sprint.on b { color: var(--green); }
 .mine-sprint .bar { width: 90px; height: 6px; background: var(--bg-3); border-radius: 3px; overflow: hidden; flex: none; } .mine-sprint .bar i { display: block; height: 100%; background: var(--accent); }
 .mine-sprints-note { color: var(--fg-mute); font-size: 11px; margin-top: 6px; }
+.mine-sprint .tag { display: inline-block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; padding: 0 5px; border-radius: 3px; margin-right: 6px; vertical-align: 1px; background: var(--bg-3); color: var(--fg-dim); border: 1px solid var(--line-2); }
+.mine-sprint.hard .tag { color: var(--yellow); border-color: var(--yellow); } .mine-sprint.hard .bar i { background: var(--yellow); }
+.mine-sprint.week .tag { color: var(--accent-text); border-color: var(--accent); }
+.mine-week { margin-top: 4px; border-top: 1px dashed var(--line-2); } .mine-week .mine-sprint { border-top: none; }
+.mine-runs { margin-top: 6px; font-size: 11px; color: var(--fg-mute); line-height: 1.6; } .mine-runs .dim { text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-right: 6px; } .mine-runs > span:not(.dim) { display: inline-block; margin-right: 10px; }
+.mine-ticker .w2 { margin-left: 10px; }
 .mine-setup h3 { margin-top: 12px; } .mine-setup .row { align-items: center; margin: 4px 0; } .mine-setup .row b { display: inline-flex; align-items: center; gap: 6px; }
 .mine-setup .mine-qty { margin-left: 0; flex-wrap: wrap; justify-content: flex-end; }
 /* banner skins from the star shop: a data attribute on <html>, after the themes so a skin wins in both */

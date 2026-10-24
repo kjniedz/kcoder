@@ -338,26 +338,56 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   well rested...) each add 2% to the mine for good, and once a million
   tokens have been mined all time you can cut a release: agents, upgrades
   and bank reset, stars stay, +10% each (one star at a million, ten at a
-  billion). Three **sprints** a day (click 250 times, mine two hours' worth,
-  catch two surprises, hire thirty agents, pay in five real turns, cut a
-  release...) each pay stars when done, more the higher the rank, and a day
-  with all three done extends a streak. Stars also spend in the **star
-  shop**: a star goes for good, and its 10% with it, for a permanent perk
-  (head start, an away cap up to a week, a wider combo window and a ×6 cap,
-  luckier surprises and longer boosts, real work paying double, the cron
-  clicker, procurement that buys upgrades on its own, one upgrade that
-  survives releases, bulk licensing and volume pricing that cut upgrade and
-  agent prices, sponsors and the trophy case that raise what each star and
-  milestone is worth, and the daemon, Mythos, the software factory and the
-  founder as a ninth to twelfth agent) or for a change to kcoder itself
+  billion). Three **sprints** a day and a hard one that triples a goal and
+  its pay, new at midnight, plus one sprint for the week paid five times
+  over (click, mine, catch, hire, buy upgrades or agent tiers, pay in real
+  turns, commits or tokens, a ×5 combo, a hundred agents in one go, cut a
+  release, cut one inside your best time...). Goals scale with how much you
+  usually do in a day and with the run, and every sprint pays a share of the
+  stars earned on the current listing (0.4% per unit of weight, so a clean
+  day pays about 2% at any size, never under a star); a day with all three
+  regular sprints done extends a streak, the hard one on top makes a perfect
+  day. Stars also spend in the **star shop**: a star goes for good, and its
+  10% with it, for a permanent perk (head start, an away cap up to a week, a
+  wider combo window and a ×6 cap, luckier surprises and longer boosts, real
+  work paying double, the cron clicker, procurement that buys upgrades on
+  its own, one upgrade that survives releases, bulk licensing and volume
+  pricing that cut upgrade and agent prices, sponsors and the trophy case
+  that raise what each star and milestone is worth, and the daemon, Mythos,
+  the software factory, the founder and the board as a ninth to thirteenth
+  agent), for a perk with no last level (VPs of engineering at +25% to every
+  agent each, ergonomics at +25% per click, the release party for commit
+  bonuses, onboarding for a bigger head start; each level costs twice the
+  one before and never under 2% of the stars earned on the listing), for a
+  funding round (the agents run ×2 until the next release, priced at 5% of
+  the stars held and doubling within the run) or a bounty (the first open
+  sprint counts as done for twice its pay), or for a change to kcoder itself
   (gold, neon, matrix, amber, monochrome and rainbow banner skins, naming
   your agents, confetti when a session commits, a status bar pet with a
   cat, a dog, a bear, a duck, a dragon and the table flipper, and pirate,
   Victorian or Minecraft working verbs); what is owned folds into one line.
-  The rank (token miner, foreman, pit boss, token baron... up to the
-  multiverse) follows stars ever earned and shows on the stats page and the
-  Wrapped card. A one-line wire under the banner reports what the agents
-  are up to, by name if you have named them. Real work feeds the mine:
+  With a thousand stars held you can **go public**: every star held becomes
+  shares (the cube root, more with a secondary offering), a currency that
+  never goes away, adds 8% to everything per share, compounding, and buys
+  what stars cannot on the exchange (the acquirer, the regulator, the AGI
+  and the open-source fork as a fourteenth to seventeenth agent, a second
+  wire, dividends that pay a star per share on every clean day, the buyback
+  that doubles commit bonuses per level, and the prospectus). Stars,
+  releases and the release star count start over on the new listing, and
+  from then on stars past a thousand lift the mine by their square root
+  rather than in full; the rank, the milestones, the real-work counters and
+  everything from the shop stay. The releases card keeps a clock on the
+  current run, your best time, and the last six runs. Milestones come in
+  families that always have a next chip (every thousandfold of tokens
+  mined, releases, commits, turns, clicks, stars, sprints, streaks, perfect
+  days, weeks, listings, shares and agents).
+  The rank (token miner, foreman, pit boss, token baron... the multiverse,
+  the omniverse, the simulation, the heat death, the reboot and on by
+  powers of ten) follows stars ever earned over every listing, with a
+  public-company rank (listed, small cap... too big to fail) from shares
+  held, and shows on the stats page and the Wrapped card. A one-line wire
+  under the banner reports what the agents are up to, by name if you have
+  named them. Real work feeds the mine:
   every finished turn in any session pays its output tokens into the bank
   and every commit made from a session pays a bonus of a minute of mining.
   The mine keeps going for up to eight hours (a week with every longer
