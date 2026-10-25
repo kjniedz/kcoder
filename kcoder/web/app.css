@@ -663,11 +663,11 @@ table.grid tr[data-sha] { cursor: pointer; }
 /* agents | upgrades + sprints | releases + milestones, with the shop as a fourth column on a wide screen and a full-width row under them otherwise */
 .mine-grid { display: grid; grid-template-columns: 5fr 4fr 4fr; gap: 12px; align-items: start; }
 .mine-grid > * { min-width: 0; } .mine-grid .col { display: flex; flex-direction: column; gap: 12px; }
-.mine-grid > .mine-market { grid-column: 1 / -1; }
-.mine-market-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; align-items: start; }
-@media (min-width: 1600px) { .mine { max-width: 1960px; } .mine-grid { grid-template-columns: 5fr 4fr 4fr 5fr; } .mine-grid > .mine-market { grid-column: auto; } .mine-market-cols { display: block; } }
+.mine-grid > .mine-shop { grid-column: 1 / -1; }
+.mine-shop-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; align-items: start; }
+@media (min-width: 1600px) { .mine { max-width: 1960px; } .mine-grid { grid-template-columns: 5fr 4fr 4fr 5fr; } .mine-grid > .mine-shop { grid-column: auto; } .mine-shop-groups { display: block; } }
 @media (max-width: 1250px) { .mine-grid { grid-template-columns: 3fr 2fr; } .mine-grid > :nth-child(3) { grid-column: 1 / -1; } }
-@media (max-width: 900px) { .mine-grid { grid-template-columns: 1fr; } .mine-grid > :nth-child(3) { grid-column: auto; } .mine-market-cols { display: block; } }
+@media (max-width: 900px) { .mine-grid { grid-template-columns: 1fr; } .mine-grid > :nth-child(3) { grid-column: auto; } .mine-shop-groups { display: block; } }
 .mine-unit.owned .ds { display: none; }
 .mine-unit { display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; align-items: center; padding: 5px 0; border-top: 1px solid var(--line); }
 .mine-unit:first-child { border-top: none; padding-top: 2px; }

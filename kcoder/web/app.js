@@ -4271,18 +4271,18 @@ function renderFunView() {
       <div class="mine-grid">
         <div class="card"><h3>agents<span class="mine-qty" id="mine-qty" title="how many to hire per click">${[1, 10, 100, 'max'].map((q) => `<button data-qty="${q}" class="${q === 1 ? 'sel' : ''}">${q === 'max' ? 'max' : `×${q}`}</button>`).join('')}</span></h3><div class="mine-units" id="mine-units"></div></div>
         <div class="col"><div class="card"><h3>upgrades<button class="link" data-mine="ups-all" title="buy every upgrade on offer that the bank covers, cheapest first">buy all affordable</button></h3><div class="mine-ups" id="mine-ups"></div></div>
+        <div class="card"><h3>today's sprints <span class="dim" data-m="sprintn"></span></h3><div class="mine-sprints" id="mine-sprints"></div><div class="mine-sprints mine-week" id="mine-week"></div><div class="ds mine-sprints-note">three a day and a hard one, new at midnight, and one for the week; each pays a share of the stars earned on this listing, counting for the rank and the shop but not against the next release star</div></div>
           <div class="card"><h3>releases</h3><div class="row"><span>stars held</span><b data-m="stars"></b></div><div class="row"><span>stars earned</span><b data-m="starsever"></b></div><div class="row"><span>rank</span><b data-m="rank"></b></div><div class="row"><span>releases cut</span><b data-m="releases"></b></div><div class="row"><span>the mine runs at</span><b data-m="mult"></b></div><div class="row"><span>this run</span><b data-m="run"></b></div><div class="mine-rel" data-m="rel"></div>
           <div class="mine-runs" data-m="runs"></div>
           <h3>from real work</h3><div class="row"><span>turns paid in</span><b data-m="turns"></b></div><div class="row"><span>tokens from real turns</span><b data-m="rtokens"></b></div><div class="row"><span>commits</span><b data-m="commits"></b></div><div class="row"><span>commit bonuses</span><b data-m="bonus"></b></div>
           <h3>all time</h3><div class="row"><span>tokens mined</span><b data-m="total"></b></div><div class="row"><span>clicks</span><b data-m="clicks"></b></div><div class="row"><span>best combo</span><b data-m="bestcombo"></b></div><div class="row"><span>surprises caught</span><b data-m="caught"></b></div><div class="row"><span>mining since</span><b data-m="since"></b></div>
-          <div class="row"><span><button class="link" data-mine="reset">start over</button></span></div></div>
-          <div class="card mine-shop"><h3>the star shop <span class="dim" data-m="shopn"></span></h3><div class="ds">a star buys a permanent perk for the mine or a change to kcoder itself. the star goes for good, and its 10% with it; the rank keeps counting every star you ever earned.</div>
+          <div class="row"><span><button class="link" data-mine="reset">start over</button></span></div></div></div>
+        <div class="col"><div class="card mine-market"><h3>the exchange <span class="dim" data-m="mkt-h"></span></h3><div id="mine-market"></div></div>
+          <div class="card"><h3>milestones <span class="dim" data-m="achn"></span></h3><div class="mine-ach" id="mine-ach"></div><div class="mine-ach-info" id="mine-ach-info">click a milestone to see what it takes</div></div></div>
+        <div class="card mine-shop"><h3>the star shop <span class="dim" data-m="shopn"></span></h3><div class="ds">a star buys a permanent perk for the mine or a change to kcoder itself. the star goes for good, and its 10% with it; the rank keeps counting every star you ever earned.</div>
           <div class="mine-shop-groups"><div><h3>perks for the mine</h3><div class="mine-ups" id="mine-shop-perk"></div></div>
           <div><h3>customize kcoder</h3><div class="mine-ups" id="mine-shop-kcoder"></div><h3>priced in shares <span class="dim" data-m="sharesn"></span></h3><div class="mine-ups" id="mine-shop-shares"></div></div></div>
-          <div class="mine-setup" id="mine-setup"></div></div></div>
-        <div class="col"><div class="card"><h3>today's sprints <span class="dim" data-m="sprintn"></span></h3><div class="mine-sprints" id="mine-sprints"></div><div class="mine-sprints mine-week" id="mine-week"></div><div class="ds mine-sprints-note">three a day and a hard one, new at midnight, and one for the week; each pays a share of the stars earned on this listing, counting for the rank and the shop but not against the next release star</div></div>
-          <div class="card"><h3>milestones <span class="dim" data-m="achn"></span></h3><div class="mine-ach" id="mine-ach"></div><div class="mine-ach-info" id="mine-ach-info">click a milestone to see what it takes</div></div></div>
-        <div class="card mine-market"><h3>the exchange <span class="dim" data-m="mkt-h"></span></h3><div id="mine-market"></div></div>
+          <div class="mine-setup" id="mine-setup"></div></div>
       </div></div>`;
     box.dataset.built = '1';
     $('#mine-btn').addEventListener('click', mineClick);
