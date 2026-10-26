@@ -409,6 +409,18 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   shift) while the tab is away; progress lives in the browser and is
   mirrored through kcoderd so the app window and a browser tab share one
   mine.
+- **The arcade**: the fun tab is a hub with a sub-tab row, the mine first
+  and a game per tab after it, each game in its own file. **2048**: join the
+  tiles, reach 2048, keep going; arrows, WASD or HJKL to move, U for one of
+  three undos a game, N for a new game, a swipe on a phone; the board
+  survives a reload. The tiles climb the kcoder palette from the blue tints
+  through the accent, the working orange and the yellow to the green at
+  2048 and the logo gradient past it. The games pay into the mine: the first
+  1,024 in a game pays half a sprint unit of stars, a 2,048 one, a 4,096 two
+  and so on, a new best tile pays the same again, and the mine's milestones
+  count the first game, the best tile (2048 to 32768) and the best score
+  (five figures to a million). Games, wins, best score and best tile sit on
+  the stats page next to the mine and travel with the mine's save.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, the weekly plan
   limit (token limit, reset day and hour, quota shift), plus links to your

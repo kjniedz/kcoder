@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="vendor/github-light.min.css" id="hljs-light" disabled>
 <link rel="stylesheet" href="vendor/xterm.min.css">
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="game2048.css">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 </head>
@@ -24,7 +25,7 @@
     <button data-view="wall" title="Sessions: the grid, or 1 to 3 panes  (alt+1)">sessions</button>
     <button data-view="tasks" title="Task queue and schedules  (alt+2)">tasks <span id="tasks-count" class="count" hidden></span></button>
     <button data-view="stats" title="Stats  (alt+3)">stats</button>
-    <button data-view="fun" title="Just for fun: the token mine  (alt+4)">fun</button>
+    <button data-view="fun" title="Just for fun: the token mine and the arcade  (alt+4)">fun</button>
   </nav>
   <input id="omni" class="omni" type="search" placeholder="Search or run a command  ⌘K" autocomplete="off" title="Search sessions or run a command  (⌘K)">
   <div class="tools">
@@ -75,7 +76,9 @@
   </section>
 
   <section id="view-fun" class="view funview" hidden>
+    <div id="fun-tabs" class="fun-tabs" role="tablist"></div>
     <div id="fun-body" class="fun-body"></div>
+    <div id="fun-game" class="fun-body fun-game" hidden></div>
   </section>
 
 </main>
@@ -141,5 +144,6 @@
 <script src="vendor/addon-fit.min.js"></script>
 <script src="vendor/qrcode.js"></script>
 <script src="app.js"></script>
+<script src="game2048.js"></script>
 </body>
 </html>

@@ -2722,7 +2722,9 @@ const SHORTCUTS = [
   { id: 'v-sessions', group: 'navigation', combo: 'alt+1', label: 'sessions', scope: 'app', palette: 'sessions', run: () => openSessions() },
   { id: 'v-tasks', group: 'navigation', combo: 'alt+2', label: 'task queue + schedules', scope: 'app', palette: 'task queue + schedules', run: () => setView('tasks') },
   { id: 'v-stats', group: 'navigation', combo: 'alt+3', label: 'stats', scope: 'app', palette: 'stats', run: () => setView('stats') },
-  { id: 'v-fun', group: 'navigation', combo: 'alt+4', label: 'just for fun: the token mine', scope: 'app', palette: 'just for fun: the token mine', run: () => setView('fun') },
+  { id: 'v-fun', group: 'navigation', combo: 'alt+4', label: 'just for fun: the mine and the arcade', scope: 'app', palette: 'just for fun', run: () => setView('fun') },
+  { id: 'v-mine', group: 'navigation', label: 'just for fun: the token mine', scope: 'alias', palette: 'just for fun: the token mine', run: () => funSelect('mine') },
+  { id: 'v-2048', group: 'navigation', label: 'just for fun: 2048', scope: 'alias', palette: 'just for fun: 2048', run: () => funSelect('2048') },
   { id: 'l-grid', group: 'navigation', combo: 'alt+g', label: 'sessions: grid of every live session', scope: 'app', palette: 'sessions: grid', run: () => setLayout('grid') },
   { id: 'l-1', group: 'navigation', keys: '⌥⇧1 … 3', label: 'sessions: 1, 2 or 3 panes side by side', scope: 'app', test: (e) => e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && /^(Digit[123]|[123!@#])$/.test(e.code || e.key), palette: 'sessions: 1 pane', run: (e) => setLayout(e.code ? e.code.replace('Digit', '') : '1') },
   { id: 'l-2', group: 'navigation', label: 'sessions: 2 panes', scope: 'alias', palette: 'sessions: 2 panes', run: () => setLayout('2') },
@@ -3404,6 +3406,7 @@ async function renderStatsView(force) {
     ${rec(`${P} is`, S.fun ? esc(S.fun) : null)}
     ${rec('secret badges', secret.length ? secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ') : '<span class="dim">none found yet</span>')}
     ${rec('token mine', `${fmtFull(mineLoad().bank)} tokens banked · ${fmtMine(Math.round(mineRate(mineLoad()) * 10) / 10)}/s${mineLoad().starsEver ? ` · ${fmtInt(mineLoad().stars)} star${mineLoad().stars === 1 ? '' : 's'}${mineLoad().spent ? ` (${fmtInt(mineLoad().starsEver)} earned)` : ''}` : ''}${mineLoad().shares ? ` · ${fmtInt(mineLoad().shares)} share${mineLoad().shares === 1 ? '' : 's'} at ${fmtPx(mineLoad().px)}` : ''}${mineRankLine(mineLoad()) ? ` · rank: ${esc(mineRankLine(mineLoad()))}` : ''} <span class="dim">· <button class="link" data-go-fun>open the fun tab</button></span>`)}
+    ${(mineLoad().arcade.t2048 || {}).played ? rec('2048', `best ${fmtInt(mineLoad().arcade.t2048.best)} · best tile ${fmtInt(mineLoad().arcade.t2048.bestTile)} · ${fmtInt(mineLoad().arcade.t2048.played)} game${mineLoad().arcade.t2048.played === 1 ? '' : 's'} · ${fmtInt(mineLoad().arcade.t2048.wins)} win${mineLoad().arcade.t2048.wins === 1 ? '' : 's'}${mineLoad().arcade.t2048.stars ? ` · ${fmtInt(mineLoad().arcade.t2048.stars)} stars to the mine` : ''} <span class="dim">· <button class="link" data-go-game="2048">play</button></span>`) : ''}
     <div class="row"><span>${latestWrapped ? `<button class="link" data-wrapped="${esc(latestWrapped.key)}">latest Wrapped: ${esc(wrappedPeriodLabel(latestWrapped))}</button>` : '<span class="dim">no Wrapped card yet</span>'}</span></div></div>`;
   // achievements: next up (three closest locked badges) above the badge wall; hidden badges show only once earned
   const A = d.achievements || { badges: [], next_up: [], records: {} };
@@ -3473,7 +3476,8 @@ async function renderStatsView(force) {
     const mc = e.target.closest('.card.metric[data-metric]'); if (mc) { state.statsMetric = mc.dataset.metric; renderStatsView(false); return; }
     if (e.target.closest('[data-clear-day]')) { state.statsDate = null; state.statsRange = null; renderStatsView(true); return; }
     const wb = e.target.closest('[data-wrapped]'); if (wb) { wrappedDialog(wb.dataset.wrapped); return; }
-    if (e.target.closest('[data-go-fun]')) { setView('fun'); return; }
+    if (e.target.closest('[data-go-fun]')) { funSelect('mine'); return; }
+    const gg = e.target.closest('[data-go-game]'); if (gg) { funSelect(gg.dataset.goGame); return; }
     if (e.target.closest('[data-x="settings"]')) { settingsDialog(); return; }
     const dd = e.target.closest('[data-day]'); if (dd && !e.target.closest('th')) { state.statsDate = dd.dataset.day; state.statsRange = null; renderStatsView(true); return; }
     const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
@@ -3752,6 +3756,9 @@ const MINE_MILESTONES = [
   ...[[2, 'doubled since listing'], [10, 'a ten-bagger'], [100, 'a hundred-bagger'], [1000, 'a thousand-bagger'], [10000, 'the moon']].map(([n, name]) => ({ id: `px${n}`, fam: 'px', name, desc: `the share price at ${fmtInt(n)}× the first listing's`, test: (g) => g.pxIpo > 0 && g.px >= n * g.pxIpo })),
   ...[[1e5, 'six figures of cap'], [1e6, 'a unicorn'], [1e7, 'a decacorn'], [1e8, 'a hectocorn'], [1e9, 'a billion-star company'], [1e12, 'a trillion-star company']].map(([n, name]) => ({ id: `cap${n}`, fam: 'cap', name, desc: `a market cap of ${fmtMine(n)} stars (shares × price)`, test: (g) => mineCap(g) >= n })),
   ...[[2000, 'a metropolis'], [5000, 'a nation'], [10000, 'a planet'], [50000, 'a galaxy of agents']].map(([n, name]) => ({ id: `agents${n}`, fam: 'agents', name, desc: `${fmtInt(n)} agents at once`, test: (g) => mineAgents(g) >= n })),
+  { id: 'coin', name: 'insert coin', desc: 'a game played in the arcade', test: (g) => Object.values(g.arcade).some((c) => (c.played || 0) > 0) },
+  ...[[2048, '2048'], [4096, '4096'], [8192, '8192'], [16384, '16384'], [32768, '32768']].map(([n, name]) => ({ id: `tile${n}`, fam: 'tile', name, desc: `a ${fmtInt(n)} tile in 2048`, test: (g) => ((g.arcade.t2048 || {}).bestTile || 0) >= n })),
+  ...[[10000, 'five figures in 2048'], [100000, 'six figures in 2048'], [1000000, 'a million in 2048']].map(([n, name]) => ({ id: `score${n}`, fam: 'score', name, desc: `a score of ${fmtInt(n)} in 2048`, test: (g) => ((g.arcade.t2048 || {}).best || 0) >= n })),
 ];
 const mineMilestonesShown = (g) => { const seen = new Set(); return MINE_MILESTONES.filter((m) => { if (!m.fam) return true; if (g.ach.includes(m.id)) return true; if (seen.has(m.fam)) return false; seen.add(m.fam); return true; }); };
 // the wire: one line of news under the banner, picked from what fits the mine right now (state lines count three times)
@@ -3929,9 +3936,9 @@ const mineSeen = [];   // live events already paid, so a reconnect replay never 
 function mineNormalize(g) {
   const n = { v: 5, bank: 0, total: 0, clicks: 0, units: {}, ups: [], ach: [], real: { turns: 0, tokens: 0, commits: 0, bonus: 0 }, caught: 0, bestCombo: 0, night: false, capped: false, releases: 0, stars: 0, starsEver: 0, starsBonus: 0, spent: 0, shop: {}, names: {}, cos: {}, keepUp: '', hired: 0, upsBought: 0, big: 0, sprint: null, sprintsDone: 0, sprintDays: 0, streak: 0, boost: null, clickBoost: null,
     shares: 0, ipo: 0, ipoStars: 0, ipoReleases: 0, totalIpo: 0, mined: null, rounds: 0, relAt: 0, bestRel: 0, runs: [], fastRel: 0, tiersBought: 0, frenzies: 0, bigHires: 0, week: null, weeksDone: 0, hardDone: 0, perfectDays: 0,
-    px: 0, pxIpo: 0, fair: 0, fairAt: 0, shock: 0, noise: 0, pxDay: '', pxOpen: 0, pxHigh: 0, hist: [], event: null, basis: 0, trades: 0, invested: 0, cashed: 0, bought: 0, dipBuys: 0, gains: 0, last: Date.now(), started: Date.now(), ...(g && typeof g === 'object' ? g : {}) };
+    px: 0, pxIpo: 0, fair: 0, fairAt: 0, shock: 0, noise: 0, pxDay: '', pxOpen: 0, pxHigh: 0, hist: [], event: null, basis: 0, trades: 0, invested: 0, cashed: 0, bought: 0, dipBuys: 0, gains: 0, arcade: {}, last: Date.now(), started: Date.now(), ...(g && typeof g === 'object' ? g : {}) };
   n.real = { turns: 0, tokens: 0, commits: 0, bonus: 0, ...(n.real || {}) }; n.units = n.units || {}; n.ups = Array.isArray(n.ups) ? n.ups : []; n.ach = Array.isArray(n.ach) ? n.ach : [];
-  const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}); n.shop = obj(n.shop); n.names = obj(n.names); n.cos = { skin: '', verbs: '', pet: '', confetti: true, ...obj(n.cos) }; n.keepUp = typeof n.keepUp === 'string' ? n.keepUp : '';
+  const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}); n.shop = obj(n.shop); n.names = obj(n.names); n.arcade = obj(n.arcade); n.cos = { skin: '', verbs: '', pet: '', confetti: true, ...obj(n.cos) }; n.keepUp = typeof n.keepUp === 'string' ? n.keepUp : '';
   for (const k of ['bank', 'total', 'clicks', 'last', 'started', 'caught', 'bestCombo', 'releases', 'stars', 'starsEver', 'starsBonus', 'spent', 'hired', 'upsBought', 'big', 'sprintsDone', 'sprintDays', 'streak', 'shares', 'ipo', 'ipoStars', 'ipoReleases', 'totalIpo', 'rounds', 'relAt', 'bestRel', 'fastRel', 'tiersBought', 'frenzies', 'bigHires', 'weeksDone', 'hardDone', 'perfectDays', 'px', 'pxIpo', 'fair', 'fairAt', 'shock', 'noise', 'pxOpen', 'pxHigh', 'basis', 'trades', 'invested', 'cashed', 'bought', 'dipBuys', 'gains']) n[k] = Number(n[k]) || 0;
   n.hist = Array.isArray(n.hist) ? n.hist.filter((h) => Array.isArray(h) && h.length === 2).slice(-120) : []; n.event = n.event && typeof n.event === 'object' && typeof n.event.name === 'string' ? n.event : null; n.pxDay = typeof n.pxDay === 'string' ? n.pxDay : '';
   if (n.ipo && !(n.px > 0)) {   // a listing from before the market had a price: the shares are priced from the stars that became them, with the pop
@@ -4240,6 +4247,10 @@ function mineSprintPayOut(g, goal, how) {   // a goal done: its stars into the b
   toast(`${goal.week ? 'weekly sprint' : goal.hard ? 'hard sprint' : 'sprint'} ${how || 'done'}: ${s.text(goal.n)} (+${fmtInt(stars)} star${stars === 1 ? '' : 's'})`, 'ok');
   return stars;
 }
+function mineAward(stars, why) {   // stars earned outside the mine (the arcade): into the bank of stars as bonus, so the next release star stays where it was; the toast says why
+  const g = mineAccrue(); stars = Math.max(1, Math.round(stars)); g.stars += stars; g.starsEver += stars; g.starsBonus += stars;
+  mineSave(); mineCheck(g); if (state.view === 'fun') mineRefresh(); toast(`${why}: +${fmtInt(stars)} star${stars === 1 ? '' : 's'} to the mine`, 'ok'); return stars;
+}
 function mineSprintCheck(g) {   // a goal reached pays its stars; all three regular ones in a day extend the streak, the hard one on top makes a perfect day
   const sp = mineSprintToday(g); let paid = 0;
   for (const goal of sp.goals) { const s = MINE_SPRINTS.find((x) => x.id === goal.id); if (!s || goal.done || (s.one ? mineCounter(g, s.k) - goal.base < 1 : mineCounter(g, s.k) - goal.base < goal.n)) continue; paid += mineSprintPayOut(g, goal); }
@@ -4260,9 +4271,29 @@ function mineNews(g) {
   mineNewsLast = pool[Math.floor(Math.random() * pool.length)] || ''; const el = $('#mine-news'); if (el) el.textContent = mineNewsLast;
   const el2 = $('#mine-news2'); if (el2) { const rest = pool.filter((t) => t !== mineNewsLast); el2.textContent = rest[Math.floor(Math.random() * rest.length)] || ''; }   // the second wire never repeats the first
 }
+// ---- the fun hub: the mine and the arcade share the fun tab, one sub-tab each. A game lives in its own file and
+// registers itself with funRegister({ id, name, hint, render(pane) }); its career goes in the mine's save under
+// arcade.<id> so it is mirrored to the daemon, counted by the milestones and shown on the stats page ----
+const FUN_GAMES = [];
+function funRegister(game) { FUN_GAMES.push(game); }
+function funTab() { const t = localStorage.getItem('kcoder.funTab') || 'mine'; return t === 'mine' || FUN_GAMES.some((x) => x.id === t) ? t : 'mine'; }
+function funSelect(id) { localStorage.setItem('kcoder.funTab', id); if (state.view !== 'fun') setView('fun'); else renderFunView(); }
+function renderFunTabs() {
+  const el = $('#fun-tabs'); if (!el) return; const tab = funTab(); const game = FUN_GAMES.find((x) => x.id === tab);
+  const key = `${tab}|${FUN_GAMES.map((x) => x.id).join(',')}`;
+  if (el.dataset.key !== key) {
+    el.dataset.key = key;
+    el.innerHTML = `<div class="layout-picker" role="tablist">${[{ id: 'mine', name: 'the mine' }, ...FUN_GAMES].map((x) => `<button data-fun="${x.id}" class="${x.id === tab ? 'active' : ''}" role="tab">${esc(x.name)}</button>`).join('')}</div><span class="dim fun-hint">${esc(game ? game.hint || '' : 'click the banner; real turns and commits pay in too')}</span>`;
+    if (!el.dataset.wired) { el.dataset.wired = '1'; el.addEventListener('click', (e) => { const b = e.target.closest('[data-fun]'); if (b) funSelect(b.dataset.fun); }); }
+  }
+}
 function renderFunView() {
   if (state.view !== 'fun') return;
-  const box = $('#fun-body'); const g = mineAccrue();
+  renderFunTabs();
+  const tab = funTab(); const body = $('#fun-body'); const pane = $('#fun-game');
+  body.hidden = tab !== 'mine'; pane.hidden = tab === 'mine';
+  if (tab !== 'mine') { const game = FUN_GAMES.find((x) => x.id === tab); if (pane.dataset.game !== tab) { pane.innerHTML = ''; pane.dataset.game = tab; } game.render(pane); return; }
+  const box = body; const g = mineAccrue();
   if (!box.dataset.built) {
     box.innerHTML = `<div class="mine">
       <div class="mine-head"><button class="mine-btn" id="mine-btn" title="click for tokens; fast clicks in a row build a combo"><pre class="banner big" aria-label="KCODER">${esc(BANNER)}</pre></button>
@@ -4307,7 +4338,7 @@ function renderFunView() {
   }
   mineRefresh();
   if (!mineTimer) mineTimer = setInterval(() => {
-    if (state.view !== 'fun' || document.hidden || !$('#fun-body').dataset.built) { clearInterval(mineTimer); mineTimer = null; mineSave(); return; }
+    if (state.view !== 'fun' || document.hidden || !$('#fun-body').dataset.built || funTab() !== 'mine') { clearInterval(mineTimer); mineTimer = null; mineSave(); return; }
     const g = mineAccrue(); if (mineHas(g, 'auto')) { const v = mineClickValue(g) * (1 + mineComboCap(g) * 0.05); mineAdd(g, v); }   // the cron clicker: one click a second at full combo, only while watching
     if (mineHas(g, 'procurement')) { const [b, sp] = mineBuyAllUps(g); if (b) { mineNote(`procurement bought ${b} upgrade${b === 1 ? '' : 's'} for ${fmtFull(sp)} tokens`); mineCheck(g); } }
     if (mineTicks % 5 === 0) mineCheck(g);   // the mine goal of a sprint and the total milestones land without a click

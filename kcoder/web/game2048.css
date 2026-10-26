@@ -1,0 +1,39 @@
+/* 2048 on the fun tab. Tiles climb the brand palette: blue tints, the accent, the gradient's mid blue, then the
+   working orange, the yellow, the green at 2048 and the logo gradient past it. Text on a solid tile is --on-accent. */
+.g2048 { max-width: 520px; margin: 0 auto; --gap: 8px; --cell: 96px; }
+.g2048-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 12px; }
+.g2048-title { font-size: 34px; font-weight: 800; line-height: 1; color: var(--accent-text); letter-spacing: -.02em; }
+.g2048-scores { display: flex; gap: 6px; }
+.g2048 .sc { position: relative; background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; min-width: 74px; text-align: center; }
+.g2048 .sc span { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-mute); }
+.g2048 .sc b { font-size: 16px; font-variant-numeric: tabular-nums; color: var(--fg); }
+.g2048 .plus { position: absolute; left: 0; right: 0; top: 12px; color: var(--green); font-style: normal; font-weight: 700; opacity: 0; pointer-events: none; }
+.g2048 .plus.go { animation: g2048-plus .7s ease-out; }
+@keyframes g2048-plus { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-26px); } }
+.g2048-board { position: relative; width: calc(4 * var(--cell) + 5 * var(--gap)); height: calc(4 * var(--cell) + 5 * var(--gap)); margin: 0 auto; padding: var(--gap); box-sizing: border-box; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 8px; touch-action: none; user-select: none; -webkit-user-select: none; }
+.g2048 .cells { display: grid; grid-template-columns: repeat(4, var(--cell)); grid-auto-rows: var(--cell); gap: var(--gap); }
+.g2048 .cells i { display: block; background: var(--bg-2); border-radius: 5px; }
+.g2048 .tile { position: absolute; left: var(--gap); top: var(--gap); width: var(--cell); height: var(--cell); transform: translate(calc(var(--c) * (var(--cell) + var(--gap))), calc(var(--r) * (var(--cell) + var(--gap)))); transition: transform 90ms ease-in-out; display: flex; align-items: center; justify-content: center; border-radius: 5px; box-sizing: border-box; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--fg); font-weight: 800; font-size: 32px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.g2048 .tile.d3 { font-size: 28px; } .g2048 .tile.d4 { font-size: 24px; } .g2048 .tile.d5 { font-size: 19px; }
+.g2048 .tile > span { display: block; }
+.g2048 .tile.pop > span { animation: g2048-pop 180ms ease-out; } .g2048 .tile.new > span { animation: g2048-new 160ms ease-out; }
+@keyframes g2048-pop { 0% { transform: scale(1); } 50% { transform: scale(1.22); } 100% { transform: scale(1); } }
+@keyframes g2048-new { 0% { transform: scale(0); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+.g2048 .tile[data-v="2"] { color: var(--fg-dim); }
+.g2048 .tile[data-v="4"] { background: var(--accent-soft); }
+.g2048 .tile[data-v="8"] { background: color-mix(in srgb, var(--accent) 35%, var(--bg-2)); border-color: transparent; }
+.g2048 .tile[data-v="16"] { background: color-mix(in srgb, var(--accent) 55%, var(--bg-2)); border-color: transparent; }
+.g2048 .tile[data-v="32"] { background: color-mix(in srgb, var(--accent) 78%, var(--bg-2)); border-color: transparent; color: var(--on-accent); }
+.g2048 .tile[data-v="64"] { background: var(--accent); border-color: transparent; color: var(--on-accent); }
+.g2048 .tile[data-v="128"] { background: #5FA9E6; border-color: transparent; color: var(--on-accent); }
+.g2048 .tile[data-v="256"] { background: var(--chart-in); border-color: transparent; color: var(--fg); }
+.g2048 .tile[data-v="512"] { background: var(--running); border-color: transparent; color: var(--on-accent); }
+.g2048 .tile[data-v="1024"] { background: var(--yellow); border-color: transparent; color: var(--on-accent); box-shadow: 0 0 14px color-mix(in srgb, var(--yellow) 45%, transparent); }
+.g2048 .tile[data-v="2048"] { background: var(--green); border-color: transparent; color: var(--on-accent); box-shadow: 0 0 18px color-mix(in srgb, var(--green) 55%, transparent); }
+.g2048 .tile.big { background: var(--gradient); border-color: transparent; color: var(--on-accent); box-shadow: 0 0 22px var(--accent-soft); }
+.g2048-over { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; background: color-mix(in srgb, var(--bg) 80%, transparent); }
+.g2048-over .t { font-size: 30px; font-weight: 800; color: var(--accent-text); } .g2048-over .b { display: flex; gap: 6px; margin-top: 6px; }
+.g2048-foot { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 11.5px; } .g2048-foot button { white-space: nowrap; } .g2048-foot .dim { margin-left: auto; text-align: right; }
+.g2048-foot button:disabled { opacity: .45; cursor: default; }
+.g2048-stats { margin-top: 8px; font-size: 11.5px; } .g2048 .ds { color: var(--fg-mute); font-size: 11px; margin-top: 10px; }
+@media (max-width: 560px) { .g2048 { --cell: calc((100vw - 36px - 5 * var(--gap)) / 4); } .g2048-head { flex-direction: column; align-items: flex-start; } .g2048-foot { flex-wrap: wrap; } .g2048-foot .dim { margin-left: 0; text-align: left; width: 100%; } }
