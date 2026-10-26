@@ -89,7 +89,14 @@ opened before the installer added it to your PATH. Downloading the repo by
 itself installs nothing: run the installer, then open a **new** terminal
 window. The full path works from anywhere:
 `%LOCALAPPDATA%\Programs\kcoder\venv\Scripts\kcoder.exe app` on Windows,
-`python3 -m kcoder app` on a Mac.
+`python3 -P -m kcoder app` on a Mac.
+
+**"cannot import name '__version__' from 'kcoder' (unknown location)"** means
+Python was started as `python3 -m kcoder…` without `-P` from a folder that
+holds a bare `kcoder` folder, usually the home folder with the checkout in
+`~/kcoder`: Python takes that folder for the package. The installer passes
+`-P` since October 2026; with an older copy, run `git -C ~/kcoder pull` and
+then `bash ~/kcoder/install.sh` again, or start it as `python3 -P -m kcoder app`.
 
 ## First run
 

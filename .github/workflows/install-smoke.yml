@@ -41,6 +41,17 @@ jobs:
         run: |
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\kcoder.lnk")) { Write-Error 'no Start Menu shortcut'; exit 1 }
           if (-not (Test-Path "$HOME\Desktop\kcoder.lnk")) { Write-Error 'no Desktop shortcut'; exit 1 }
+      - name: The shortcut starts kcoder with a bare kcoder folder next to it (-P, the usual checkout location)
+        shell: powershell
+        run: |
+          $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$HOME\Desktop\kcoder.lnk")
+          Write-Host "shortcut: $($lnk.TargetPath) $($lnk.Arguments) in $($lnk.WorkingDirectory)"
+          if ($lnk.Arguments -notlike '-P -m kcoder.cli app*') { Write-Error "the shortcut does not run Python with -P: $($lnk.Arguments)"; exit 1 }
+          New-Item -ItemType Directory -Force "$HOME\kcoder" | Out-Null
+          Set-Location $HOME
+          & "$env:LOCALAPPDATA\Programs\kcoder\venv\Scripts\python.exe" -P -m kcoder.cli --version
+          if ($LASTEXITCODE -ne 0) { Write-Error 'python -P -m kcoder.cli fails from the home folder'; exit 1 }
+          Remove-Item "$HOME\kcoder"
       - name: Smoke test
         shell: powershell
         run: |
@@ -63,5 +74,11 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           kcoder --version
+      - name: python -P -m kcoder works from the home folder with a bare kcoder folder in it (the usual checkout location)
+        run: |
+          mkdir -p "$HOME/kcoder" && cd "$HOME"
+          if ~/.local/share/kcoder-venv/bin/python -m kcoder.cli --version 2>/dev/null; then echo "note: no shadowing without -P on this runner"; fi
+          ~/.local/share/kcoder-venv/bin/python -P -m kcoder.cli --version
+          rmdir "$HOME/kcoder"
       - name: Smoke test
         run: ~/.local/share/kcoder-venv/bin/python scripts/smoke_test.py

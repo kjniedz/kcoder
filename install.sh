@@ -104,17 +104,17 @@ main() {
   BIN="$(dirname "$PY")"
   if [ "$OS" = "Darwin" ]; then
     say "Setting up the kcoder app in ~/Applications"
-    run "$PY" -m kcoder.cli app --install
+    run "$PY" -P -m kcoder.cli app --install
     say "Done. Pin it: right-click its Dock icon, Options, Keep in Dock."
   else
     say "Done."
   fi
   if ! command -v kcoder >/dev/null 2>&1; then
     echo "To use kcoder from a terminal, add this folder to your PATH: $BIN"
-    echo "(or run it as: $PY -m kcoder)"
+    echo "(or run it as: $PY -P -m kcoder)"
   fi
   if [ -z "${KCODER_NO_LAUNCH:-}" ]; then
-    run "$PY" -m kcoder.cli app
+    run "$PY" -P -m kcoder.cli app
   fi
 }
 

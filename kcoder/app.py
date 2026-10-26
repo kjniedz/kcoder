@@ -733,7 +733,7 @@ def install_windows_app() -> str:
     for lnk in windows_shortcuts():
         os.makedirs(os.path.dirname(lnk), exist_ok=True)
         ps = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:KC_LNK); "
-              "$s.TargetPath = $env:KC_TARGET; $s.Arguments = '-m kcoder.cli app'; "
+              "$s.TargetPath = $env:KC_TARGET; $s.Arguments = '-P -m kcoder.cli app'; "
               "$s.WorkingDirectory = $env:USERPROFILE; $s.IconLocation = $env:KC_ICON; "
               "$s.Description = 'kcoder'; $s.Save()")
         env = dict(os.environ, KC_LNK=lnk, KC_TARGET=_gui_python(), KC_ICON=icon)
