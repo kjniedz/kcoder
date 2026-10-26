@@ -474,7 +474,7 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'notice': out.push(`<div class="note warn">${esc(e.text)}</div>`); break;
       case 'retry': out.push(`<div class="note warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</div>`); break;
       case 'info': out.push(`<div class="note${e.kind === 'quota_shift' ? ' shift' : ''}">${e.kind === 'quota_shift' ? '⇣ ' : ''}${esc(e.text)}</div>`); break;
-      case 'system': out.push(`<div class="note">${esc(e.text)}${e.kind === 'interrupted' ? ' <button data-act="resume">resume</button>' : ''}</div>`); break;
+      case 'system': out.push(`<div class="note">${esc(e.text)}</div>`); break;
       case 'compaction': out.push(`<div class="note marker">✂ context compacted here (${e.messages_before} messages → summary)</div>`); break;
       case 'compaction_start': out.push(`<div class="note">✂ compacting context (${fmtInt(e.tokens)} tokens)…</div>`); break;
       case 'handoff_start': out.push(`<div class="note">⇢ context at ${fmtInt(e.tokens)} tokens - writing the handoff summary for a fresh session…</div>`); break;
@@ -565,7 +565,10 @@ function trailerHtml(store, sid) {
   const sess = state.sessions.get(sid);
   if (store.streaming || store.live) return `<div class="msg msg-assistant streaming"><div class="who">kcoder&gt;</div><div class="md">${store.live ? renderMarkdown(store.live) : ''}</div></div>` + (sess && sess.status === 'working' ? `<div class="note working">${statusLineHtml(sid)}</div>` : '');
   if (sess && sess.status === 'working') return `<div class="note working">${statusLineHtml(sid)}</div>`;
-  if (sess && sess.status === 'paused') return `<div class="note paused"><b>paused</b> - kcoderd restarted during this turn; nothing was re-run. <button class="primary" data-act="resume">resume</button> <button data-act="dismiss">dismiss</button></div>`;
+  if (sess && sess.status === 'paused') {   // the one place with the controls: the status line, the pane bar and the log line only say "paused"
+    const rt = (sess.resume_text || '').trim();
+    return `<div class="note paused"><b>paused</b> - ${rt ? `the interrupted turn: <code title="${esc(rt)}">${esc(rt.length > 90 ? rt.slice(0, 88) + '…' : rt)}</code>` : 'the interrupted turn is waiting'} <button class="primary" data-act="resume" title="send the interrupted turn again">resume</button> <button data-act="dismiss" title="drop the interrupted turn">dismiss</button></div>`;
+  }
   return '';
 }
 
@@ -797,7 +800,7 @@ function renderPaneChrome(pane, s, num) {
     (s.queue && s.queue.length ? `<span title="queued tasks">▶ ${s.queue.length} queued</span>` : '') +
     (git ? `<span class="git-line" title="git">${esc(git.branch || '')}${git.dirty ? ` <span class="dirty">±${git.dirty}</span>` : ''}${git.ahead ? ` ↑${git.ahead}` : ''}</span>` : '') +
     `<span class="spacer"></span>` +
-    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span class="waiting">PAUSED</span><button data-act="resume" class="primary">resume</button><button data-act="dismiss">dismiss</button>` : st === 'capped' ? `<span>paused (cap)</span>` : st === 'error' ? `<span class="waiting errlabel">ERROR</span><button data-err="${esc(s.id)}" title="what happened, send again, copy a report">details</button>` : '') +
+    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span class="waiting">PAUSED</span>` : st === 'capped' ? `<span>paused (cap)</span>` : st === 'error' ? `<span class="waiting errlabel">ERROR</span><button data-err="${esc(s.id)}" title="what happened, send again, copy a report">details</button>` : '') +
     `<span>${age(s.last_activity)} ago</span>`;
   // approval bar
   const bar = $('.approval-bar', pane);
@@ -806,9 +809,6 @@ function renderPaneChrome(pane, s, num) {
     const req = store && store.list.slice().reverse().find((e) => e.t === 'approval_request' && e.id === s.pending_approval);
     bar.hidden = false;
     bar.innerHTML = `<span>allow</span><code title="${esc(req ? req.description : '')}">${esc(req ? req.description : 'pending tool call')}</code><button class="primary" data-act="approve" data-rid="${esc(s.pending_approval)}">yes</button><button class="danger" data-act="decline" data-rid="${esc(s.pending_approval)}">no</button><span class="keys" title="keyboard: y approves, shift+N declines, then the next waiting item comes up; w jumps to the next one">y · ⇧N · w</span>`;
-  } else if (s.status === 'paused') {
-    bar.hidden = false;
-    bar.innerHTML = `<span>paused</span><code title="${esc(s.resume_text || '')}">${esc(s.resume_text ? 'interrupted by a restart: ' + s.resume_text : 'the last turn was interrupted by a restart')}</code><button class="primary" data-act="resume">resume</button><button data-act="dismiss">dismiss</button>`;
   } else bar.hidden = true;
   // actions (focused only)
   const acts = $('.pane-actions', pane);
@@ -825,8 +825,7 @@ function renderPaneChrome(pane, s, num) {
       (s.worktree ? `<button data-act="changes" title="review this session's changes hunk by hunk">${s.needs_review ? '⚑ ' : ''}changes</button>` : '') +
       `<button data-act="preview" title="live preview: the dev server for this worktree, in this pane">▶ preview</button>` +
       `<button data-act="instructions" title="the repo's instruction file (KCODER.md / AGENTS.md / CLAUDE.md)">instructions</button>` +
-      `<button data-act="open-chat">open in chat</button><button data-act="export">export</button><button data-act="archive">archive</button>` +
-      (s.resume_text ? `<button data-act="resume" class="primary">resume interrupted turn</button>` : '');
+      `<button data-act="open-chat">open in chat</button><button data-act="export">export</button><button data-act="archive">archive</button>`;
     $('select[data-act="trust"]', acts).value = s.trust || 'read';
     fillModelSelect($('select[data-act="model"]', acts), s);
   }
@@ -888,7 +887,7 @@ function renderLogInto(holder, log, sid, store, opts, scroller) {
     changed = false;
     if (store.list.length > r.count) {
       changed = true;
-      for (const el of $$(':scope > .msg.streaming, :scope > .note.working', log)) el.remove();
+      for (const el of $$(':scope > .msg.streaming, :scope > .note.working, :scope > .note.paused', log)) el.remove();
       log.insertAdjacentHTML('beforeend', buildChatHtml(store, sid, { from: r.count }));
       for (const e of store.list.slice(r.count)) {
         if (e.t === 'tool_result' || e.t === 'approval_result') {
@@ -901,12 +900,12 @@ function renderLogInto(holder, log, sid, store, opts, scroller) {
       changed = true;
       let live = $(':scope > .msg.streaming', log);
       if (streaming) {
-        if (!live) { const w = $(':scope > .note.working', log); if (w) w.remove(); log.insertAdjacentHTML('beforeend', trailerHtml(store, sid)); }
+        if (!live) { const w = $(':scope > .note.working, :scope > .note.paused', log); if (w) w.remove(); log.insertAdjacentHTML('beforeend', trailerHtml(store, sid)); }
         else if (r.live !== store.live) $('.md', live).innerHTML = renderMarkdown(store.live);
       } else {
         if (live) live.remove();
-        const w = $(':scope > .note.working', log); const want = trailerHtml(store, sid);
-        if (w && !want) w.remove(); else if (!w && want) log.insertAdjacentHTML('beforeend', want);
+        const w = $(':scope > .note.working, :scope > .note.paused', log); const want = trailerHtml(store, sid);   // the paused note is a trailer too: swap it, never stack a second one
+        if (w && !want) w.remove(); else if (!w && want) log.insertAdjacentHTML('beforeend', want); else if (w && want && r.status !== status) w.outerHTML = want;
       }
     }
     if (r.toolSig !== toolSig) {
@@ -920,7 +919,7 @@ function renderLogInto(holder, log, sid, store, opts, scroller) {
       for (const a of $$('.approval', log)) if (!sess || sess.pending_approval !== a.dataset.rid) a.remove();
       if (sess && sess.pending_approval && !log.querySelector(`.approval[data-rid="${CSS.escape(sess.pending_approval)}"]`)) {
         const k = store.list.findIndex((x) => x.t === 'approval_request' && x.id === sess.pending_approval);
-        if (k >= 0) { const w = $(':scope > .msg.streaming, :scope > .note.working', log); const html = buildChatHtml(store, sid, { from: k, to: k + 1, noTail: true }); if (w) w.insertAdjacentHTML('beforebegin', html); else log.insertAdjacentHTML('beforeend', html); }
+        if (k >= 0) { const w = $(':scope > .msg.streaming, :scope > .note.working, :scope > .note.paused', log); const html = buildChatHtml(store, sid, { from: k, to: k + 1, noTail: true }); if (w) w.insertAdjacentHTML('beforebegin', html); else log.insertAdjacentHTML('beforeend', html); }
       }
     }
   }
