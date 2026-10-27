@@ -47,7 +47,7 @@ import anthropic
 import openai
 
 from . import projects, routing, rules as repo_rules
-from .providers import NotOnPlan, PlanLimitReached, ProviderOutage
+from .providers import ModelUnavailable, NotOnPlan, PlanLimitReached, ProviderOutage
 from .tools import DANGEROUS_TOOLS, DRY_RUN_NOTE, READ_ONLY_TOOLS, describe_tool_call, dry_run_allowed, execute_tool
 
 # after a fallback, keep using the fallback provider this long before trying the primary again
@@ -497,6 +497,10 @@ class Engine:
             self.emit("error", text=f"{exc} kcoder only runs Claude on your Claude plan, so nothing ran and nothing was billed. "
                                     "Reconnect your Claude account (`kcoder login`, or the Claude button in the app) and send again.",
                       fix="claude-login")
+        except ModelUnavailable as exc:
+            result = "error"
+            del self.messages[min(turn_start, len(self.messages)):]
+            self.emit("error", text=str(exc))
         except (anthropic.RateLimitError, openai.RateLimitError, ProviderOutage) as exc:
             result = "error"
             del self.messages[min(turn_start, len(self.messages)):]

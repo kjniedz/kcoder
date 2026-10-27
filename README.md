@@ -714,6 +714,14 @@ the turn did, a **send again** button, and **copy report** for a bug report.
 Logs: `~/.local/share/kcoder/daemon.log` and
 `~/.local/share/kcoder/sessions/<id>/events.jsonl`.
 
+**"Claude Code's sign-in was refused (401 …)"** or any `authentication_error`
+from a turn: Claude Code's login to your Claude account is no longer accepted
+(it expired, was revoked, or an API key got into Claude Code's own settings).
+Click **Reconnect Claude** on the red note (or run `kcoder login`), sign in
+with the Claude account that holds the plan, and send again. Nothing was
+billed. If the session is on **fable**, the error says so instead: Fable is not
+on every plan, switch to opus or sonnet with `/model opus` or the model menu.
+
 **"Claude Code was stopped from outside this turn (SIGTERM)"** means something
 ended the `claude` process while it worked: a kill command, the system, or
 another kcoderd instance. Nothing was re-run; send the message again.

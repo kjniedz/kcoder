@@ -64,8 +64,32 @@ class NotOnPlan(Exception):
     reconnect the Claude account; kcoder never runs Claude Code that way."""
 
 
+class ModelUnavailable(Exception):
+    """The plan's login was refused for the model the session is on (Fable is
+    not on every plan and has its own allowance). The fix is another model."""
+
+
 _OUTAGE_TEXT = ("rate limit", "rate_limit", "usage limit", "session limit", "weekly limit", "credit balance", "overloaded",
                 "capacity", "too many requests", "quota")
+# an API error from Claude Code that means its sign-in was refused, not that the model or the request was
+_AUTH_TEXT = ("401", "authentication_error", "invalid x-api-key", "invalid api key", "unauthorized")
+_LOGIN_TEXT = ("token expired", "has expired", "oauth", "please run /login", "not logged in", "login required")   # unmistakably the login
+_MODEL_TEXT = ("403", "permission_error", "404", "not_found_error", "does not have access", "not available",
+               "no access", "not supported", "not permitted")
+
+
+def _claude_api_failure(text: str, model: str | None) -> Exception | None:
+    """What a failed Claude Code result means, when it is about the login or the model."""
+    low = text.lower()
+    if any(k in low for k in _LOGIN_TEXT):
+        return NotOnPlan(f"Claude Code's sign-in was refused ({text.strip()[:200]}).")
+    if model_family(model) == "fable" and any(k in low for k in _AUTH_TEXT + _MODEL_TEXT):
+        return ModelUnavailable(f"Claude Code could not run {model} on your Claude plan ({text.strip()[:200]}). "
+                                "Fable is not part of every plan and has its own weekly allowance: switch this session to "
+                                "opus or sonnet (/model opus, or the model menu on the session) and send again.")
+    if any(k in low for k in _AUTH_TEXT):
+        return NotOnPlan(f"Claude Code's sign-in was refused ({text.strip()[:200]}).")
+    return None
 
 
 @dataclass
@@ -918,6 +942,12 @@ class ClaudeCodeBackend:
                         if any(k in text_.lower() for k in _OUTAGE_TEXT):
                             _kill(proc)
                             raise ProviderOutage(f"Claude Code: {text_.strip()[:200]}")
+                        failure = _claude_api_failure(text_, model)
+                        if failure is not None:     # a refused sign-in (401) or a model the plan cannot use: say so, with the way out
+                            _kill(proc)
+                            if isinstance(failure, NotOnPlan):
+                                forget_claude_auth()
+                            raise failure
                         hooks.notice(f"Claude Code: {d.get('subtype')}: {str(d.get('result') or '')[:500]}")
         except Interrupted:
             _kill(proc)
@@ -932,6 +962,11 @@ class ClaudeCodeBackend:
             if "not logged in" in err.lower() or "login" in err.lower():
                 forget_claude_auth()
                 raise NotOnPlan("Claude Code is not signed in to your Claude account.")
+            failure = _claude_api_failure(err, model)
+            if failure is not None:
+                if isinstance(failure, NotOnPlan):
+                    forget_claude_auth()
+                raise failure
             if code in (143, -15, 137, -9):
                 raise RuntimeError(f"Claude Code was stopped from outside this turn ({'SIGKILL' if code in (137, -9) else 'SIGTERM'}, exit {code}): "
                                    "another kcoderd instance, a kill command, or the system ended it. Nothing was re-run; send the message again.")
