@@ -627,6 +627,7 @@ function buildTermHtml(store, sid, opts = {}) {
 // header
 // ----------------------------------------------------------------------
 const TAGLINES = ['ten agents, one keyboard.', 'ship it before the coffee cools.', 'parallel by default.', 'less typing, more shipping.', 'every session earns its keep.', 'small commits, big days.'];
+const ABOUT_LINES = ['keep ripping lines.', 'rip lines, ship lines.', 'first chair, last commit.', 'fresh tracks, clean diffs.', 'send it.', 'no friends on a powder day, plenty of agents.'];   // the about dialog's italic line
 const tabOf = (v) => (v === 'chat' ? 'wall' : v);   // the sessions tab covers the grid and the 1-3 pane layouts
 
 function renderHeader() {
@@ -2149,8 +2150,8 @@ document.addEventListener('click', (e) => { const b = e.target.closest('[data-jo
 function aboutDialog() {
   const v = state.version || {};
   const d = openDialog(`<div class="body"><img class="logo" src="icon-192.png" alt=""><pre class="banner" aria-label="KCODER">${esc(BANNER)}</pre>
-    <div class="tagline">${esc(TAGLINES[Math.floor(Math.random() * TAGLINES.length)])}</div>
-    <div class="credits">developed by Kyle Niedzwiecki<br>© 2026 Kyer's Reserve LLC<br><span class="ver">kcoder ${esc(v.running || '')}</span></div>
+    <div class="tagline">${esc(ABOUT_LINES[Math.floor(Math.random() * ABOUT_LINES.length)])}</div>
+    <div class="credits">© Kyle Niedzwiecki<br><span class="ver">kcoder ${esc(v.running || '')}</span></div>
     <div class="row"><button data-x="settings">Settings</button><button data-x="keys">Keyboard shortcuts</button><button class="primary" data-x="close">Close</button></div></div>`, 'about');
   d.classList.add('about');
   d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; closeDialog(); if (b.dataset.x === 'settings') settingsDialog(); else if (b.dataset.x === 'keys') helpDialog(); });
@@ -2158,7 +2159,7 @@ function aboutDialog() {
 
 async function settingsDialog() {
   try { state.config = (await request('config')).config; } catch {}
-  const cfg = state.config || {}; const v = state.version || {};
+  const cfg = state.config || {};
   const chk = (id, on, label, help) => `<label class="setting"><span>${label}${help ? ` <span class="help">${help}</span>` : ''}</span><input type="checkbox" data-set="${id}"${on ? ' checked' : ''}></label>`;
   const sel = (id, val, label, opts) => `<label class="setting"><span>${label}</span><select data-set="${id}">${opts.map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
   const d = openDialog(`<h2>settings<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">
@@ -2187,7 +2188,7 @@ async function settingsDialog() {
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
     <div class="label-h">kcoder</div>
     <div class="links"><button data-x="update">Check for new commits</button><button data-x="restart">Restart kcoderd</button><button data-x="keys">Keyboard shortcuts</button><button data-x="about">About</button><button class="danger" data-x="uninstall">Uninstall…</button></div>
-  </div><div class="foot"><span class="help">kcoder ${esc(v.running || '')} · © 2026 Kyer's Reserve LLC · developed by Kyle Niedzwiecki</span><button class="primary" data-x="close">Done</button></div>`, 'settings');
+  </div><div class="foot"><button class="primary" data-x="close">Done</button></div>`, 'settings');
   d.classList.add('settings');
   d.addEventListener('change', async (e) => {
     const el = e.target.closest('[data-set]'); if (!el) return;
@@ -3712,7 +3713,7 @@ async function saveWrappedPng(card) {
   const days = card.daily || []; if (days.length) { const bx = 60, by = 920, bw = W - 120, bh = 260; const mx = Math.max(1, ...days.map((r) => r.tokens)); const slot = bw / days.length; x.fillStyle = T.dim; x.font = `13px ${mono}`; x.fillText('TOKENS PER DAY', bx, by - 24); days.forEach((r, i) => { const h = Math.round(r.tokens / mx * (bh - 30)); x.fillStyle = r.tokens ? T.accent : T.line; x.fillRect(bx + i * slot + 2, by + bh - 30 - h, Math.max(2, slot - 4), Math.max(2, h)); if (days.length <= 31 && (days.length <= 7 || i % Math.ceil(days.length / 10) === 0)) { x.fillStyle = T.dim; x.font = `11px ${mono}`; x.fillText(r.date.slice(5), bx + i * slot + 2, by + bh - 22); } }); }
   x.fillStyle = T.dim; x.font = `14px ${mono}`; x.fillText(`${card.commits} commits · ${hours(card.active_seconds)} of agent time · streak ${card.streak || 0} day${card.streak === 1 ? '' : 's'}`, 60, 1230);
   x.fillStyle = T.line; x.fillRect(60, 1400, W - 120, 1.5);
-  x.fillStyle = T.dim; x.font = `13px ${mono}`; x.fillText('kcoder · developed by Kyle Niedzwiecki · © 2026 Kyer\'s Reserve LLC', 60, 1420);
+  x.fillStyle = T.dim; x.font = `13px ${mono}`; x.fillText('kcoder · © Kyle Niedzwiecki', 60, 1420);
   x.fillStyle = T.accent; x.font = `bold 13px ${mono}`; x.textAlign = 'right'; x.fillText('ten agents, one keyboard.', W - 60, 1420); x.textAlign = 'left';
   const dataUrl = c.toDataURL('image/png');
   await saveFile(`kcoder-wrapped-${card.key}.png`, dataUrl.split(',')[1], 'image/png', { binary: true });

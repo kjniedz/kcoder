@@ -184,7 +184,7 @@ def print_banner(console: Console, *, compact: bool = False, animate: bool | Non
     if compact or console.width < COMPACT_WIDTH:
         line = wordmark(console)
         if credit:
-            line.append("  developed by Kyle Niedzwiecki · © 2026 Kyer's Reserve LLC", style="dim italic")
+            line.append("  © Kyle Niedzwiecki", style="dim italic")
         console.print(line, highlight=False)
         console.print()
         return
@@ -207,8 +207,7 @@ def print_banner(console: Console, *, compact: bool = False, animate: bool | Non
         console.print(render_letters(lines, console), highlight=False)
     console.print()
     if credit:
-        console.print("developed by Kyle Niedzwiecki", style="italic dim", highlight=False)
-        console.print("© 2026 Kyer's Reserve LLC", style="dim", highlight=False)
+        console.print("© Kyle Niedzwiecki", style="dim", highlight=False)
         tl = tagline(cfg)
         if tl:
             console.print(tl, style=f"italic {ACCENT}", highlight=False)

@@ -370,7 +370,6 @@ a { color: var(--accent-text); }
 .settings .setting .help { flex: 1; }
 .settings .setting select, .settings .setting input[type="number"], .settings .setting input[type="text"] { width: 170px; }
 .settings .sample { font-size: var(--font-size, 12.5px); color: var(--fg-dim); padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; white-space: pre; overflow: hidden; }
-.settings .foot .help { flex: 1; align-self: center; }
 .settings .links { display: flex; gap: 6px; flex-wrap: wrap; }
 .palette input { width: 100%; border: none; border-bottom: 1px solid var(--line); background: transparent; padding: 10px 14px; font-size: 14px; }
 .palette input:focus { outline: none; }
