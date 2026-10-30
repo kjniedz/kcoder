@@ -66,6 +66,8 @@ const state = {
   statsDays: Number(localStorage.getItem('kcoder.statsDays') || 30),   // 1 = today, 0 = all time
   statsDate: null,            // a single day picked in the stats view (YYYY-MM-DD)
   statsMetric: null,
+  statsTab: localStorage.getItem('kcoder.statsTab') || 'overview',   // overview | badges | fun | history
+  statsWall: false,   // badges: the full wall is open
   statsSort: { key: 'date', dir: -1 },
   recapShown: new Map(),   // sid -> when the "where we left off" card was last shown in this app run
   recaps: new Map(),       // sid -> the recap on screen
@@ -223,7 +225,7 @@ async function onConnected() {
   }
   applyUrlParams();
   setTimeout(maybeMorningBrief, 1500);
-  setTimeout(maybeWrapped, 4000);
+  setTimeout(maybeWrapped, 4000); setTimeout(progressCheck, 6000);
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
   for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1);
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
@@ -316,7 +318,7 @@ function onEvent(sid, ev) {
   if (ev.t === 'history_reset') { loadEventsFresh(sid); return; }
   if (ev.t === 'git') { state.gitInfo.set(sid, ev); }
   if (ev.t === 'turn_end') { const s = state.sessions.get(sid); if (s && s.project && s.project.git) gitStatus(sid, false).catch(() => {}); }
-  if (ev.t === 'usage' || (ev.t === 'git' && ev.commit)) mineOnEvent(sid, ev);
+  if (ev.t === 'usage' || (ev.t === 'git' && ev.commit)) { mineOnEvent(sid, ev); progressSoon(); }
   store.list.push(ev);
   if (store.list.length > 3000) store.list.splice(0, store.list.length - 3000);
   if (ev.t === 'approval_request' && state.dialog === 'inbox') renderInbox();
@@ -669,6 +671,7 @@ function renderStatusBar() {
     `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'} today</button>`,
     `<button class="status-item spark" data-go="stats:tokens" title="tokens, last 7 days · open stats">${spark}</button>`,
   ];
+  const lv = st.level; if (lv && lv.level) items.push(`<button class="status-item level" data-go="stats:badges" title="level ${lv.level} · ${fmtInt(lv.into)} of ${fmtInt(lv.need)} XP to level ${lv.level + 1} · open the badges"><b>Lv ${lv.level}</b><span class="lvbar"><i style="width:${Math.round(lv.pct * 100)}%"></i></span></button>`);
   const qm = quotaItemHtml(st.quota); if (qm) items.push(qm);
   const up = st.update || {};
   if (st.restarting) items.push(`<span class="status-item warn">restarting kcoderd…</span>`);
@@ -2691,12 +2694,29 @@ function tokenGate(msg) {
 // ----------------------------------------------------------------------
 // notifications, sound, toasts
 // ----------------------------------------------------------------------
+// toasts never stack: one shows at a time and the rest wait their turn (a repeat of the one showing or waiting is dropped);
+// unlocks (a level, a badge tier, a secret, a quest, a record, a streak) share one toast that grows while it waits or shows
+const toastQueue = []; let toastShowing = null;
 function toast(text, kind = '', action = null) {
-  const el = document.createElement('div'); el.className = 'toast ' + kind; el.textContent = text;
   const blocked = /GitHub is (not )?connected|Connect GitHub/i.test(text) && /block/i.test(text);
-  if (blocked) { el.classList.add('warn'); action = { label: 'Connect GitHub', run: () => setupDialog() }; }
-  if (action) { const b = document.createElement('button'); b.textContent = action.label; b.className = 'primary'; b.style.marginLeft = '8px'; b.onclick = (e) => { e.stopPropagation(); el.remove(); action.run(); }; el.appendChild(b); }
-  $('#toasts').appendChild(el); el.onclick = () => el.remove(); setTimeout(() => el.remove(), action ? 12000 : 5000);
+  if (blocked) { kind = 'warn'; action = { label: 'Connect GitHub', run: () => setupDialog() }; }
+  if (!action && ((toastShowing && toastShowing.text === text) || toastQueue.some((t) => t.text === text))) return;
+  toastQueue.push({ text, kind, action }); toastPump();
+}
+function toastPump() {
+  if (toastShowing || !toastQueue.length) return;
+  const t = toastQueue.shift(); const el = document.createElement('div'); el.className = 'toast ' + t.kind; el.appendChild(document.createTextNode(t.text));
+  const done = () => { if (toastShowing && toastShowing.el === el) toastShowing = null; el.remove(); toastPump(); };
+  if (t.action) { const b = document.createElement('button'); b.textContent = t.action.label; b.className = 'primary'; b.style.marginLeft = '8px'; b.onclick = (e) => { e.stopPropagation(); done(); t.action.run(); }; el.appendChild(b); }
+  $('#toasts').appendChild(el); toastShowing = { ...t, el }; el.onclick = done; setTimeout(done, t.action ? 12000 : t.kind === 'unlock' ? 9000 : 5000);
+}
+const unlockText = (parts) => (parts.length === 1 ? parts[0] : `${parts.length} at once: ${parts.join(' · ')}`);
+function unlockToast(parts) {
+  if (!parts.length) return;
+  const grow = (t) => { t.parts.push(...parts); t.text = unlockText(t.parts); if (t.el) t.el.firstChild.textContent = t.text; };
+  const waiting = toastQueue.find((t) => t.kind === 'unlock'); if (waiting) { grow(waiting); return; }
+  if (toastShowing && toastShowing.kind === 'unlock') { grow(toastShowing); return; }
+  toastQueue.push({ text: unlockText(parts), kind: 'unlock', parts: parts.slice(), action: { label: 'badges', run: () => openStats(null, 'badges') } }); toastPump();
 }
 let audioCtx = null;
 function ping(kind) {
@@ -2760,6 +2780,7 @@ const SHORTCUTS = [
   { id: 'v-fun', group: 'navigation', combo: 'alt+4', label: 'just for fun: the mine and the arcade', scope: 'app', palette: 'just for fun', run: () => setView('fun') },
   { id: 'v-mine', group: 'navigation', label: 'just for fun: the token mine', scope: 'alias', palette: 'just for fun: the token mine', run: () => funSelect('mine') },
   { id: 'v-2048', group: 'navigation', label: 'just for fun: 2048', scope: 'alias', palette: 'just for fun: 2048', run: () => funSelect('2048') },
+  { id: 'v-mahjong', group: 'navigation', label: 'just for fun: mahjong solitaire', scope: 'alias', palette: 'just for fun: mahjong', run: () => funSelect('mahjong') },
   { id: 'l-grid', group: 'navigation', combo: 'alt+g', label: 'sessions: grid of every live session', scope: 'app', palette: 'sessions: grid', run: () => setLayout('grid') },
   { id: 'l-1', group: 'navigation', keys: '⌥⇧1 … 3', label: 'sessions: 1, 2 or 3 panes side by side', scope: 'app', test: (e) => e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && /^(Digit[123]|[123!@#])$/.test(e.code || e.key), palette: 'sessions: 1 pane', run: (e) => setLayout(e.code ? e.code.replace('Digit', '') : '1') },
   { id: 'l-2', group: 'navigation', label: 'sessions: 2 panes', scope: 'alias', palette: 'sessions: 2 panes', run: () => setLayout('2') },
@@ -2881,7 +2902,7 @@ $('#statusbar').addEventListener('click', (e) => {
   if (e.target.closest('[data-upd]')) { updateNow(); return; }
   const b = e.target.closest('[data-go]'); if (!b) return;
   const [where, metric] = b.dataset.go.split(':');
-  if (where === 'sessions') setLayout('grid'); else if (where === 'stats') openStats(metric);
+  if (where === 'sessions') setLayout('grid'); else if (where === 'stats') { if (['badges', 'fun', 'history', 'overview'].includes(metric)) openStats(null, metric); else openStats(metric, 'overview'); }
 });
 $('#btn-version').addEventListener('click', () => settingsDialog());
 $('#btn-claude').addEventListener('click', () => claudeDialog());
@@ -3308,7 +3329,33 @@ function paintFind(pane) {
 // stats view
 // ----------------------------------------------------------------------
 let statsData = null;
-function openStats(metric) { state.statsMetric = metric || null; statsData = null; setView('stats'); }
+function openStats(metric, tab) { state.statsMetric = metric || null; if (tab) { state.statsTab = tab; localStorage.setItem('kcoder.statsTab', tab); } statsData = null; setView('stats'); }
+// ---- progression: what the app remembers of the last look at it, so the next look can say what is new (the first look
+// only remembers: a backfill is not news). Polled after turns and commits, every ten minutes, and on the stats page ----
+let progressTimer = null, progressBusy = false;
+const RECORD_LABELS = { tokens_day: 'most tokens in a day', commits_day: 'most commits in a day', lines_day: 'most lines in a day', longest_session: 'longest session', most_at_once: 'most sessions at once' };
+const fmtRecord = (k, v) => (k === 'tokens_day' ? fmtTokens(v) : k === 'longest_session' ? fmtDur(v) : fmtInt(Math.round(v)));
+function progressNote(P) {
+  if (!P || !P.level) return;
+  let seen = null; try { seen = JSON.parse(localStorage.getItem('kcoder.progressSeen') || 'null'); } catch {}
+  const now = { level: P.level.level, tiers: Object.fromEntries(P.tiers.map((b) => [b.id, b.tier])), secrets: P.secrets.filter((x) => x.earned).map((x) => x.id),
+    quests: [...P.quests.daily, P.quests.weekly].filter((q) => q.done).map((q) => `${q.done}:${q.id}`), records: Object.fromEntries(Object.entries(P.records).map(([k, r]) => [k, r ? r.value : 0])),
+    streak: P.streak.current, season: `${P.season.key}:${P.season.rank || ''}` };
+  localStorage.setItem('kcoder.progressSeen', JSON.stringify(now));
+  if (!seen || !seen.tiers) return;
+  const parts = [];
+  if (now.level > seen.level) parts.push(`level ${now.level}`);
+  for (const b of P.tiers) if ((seen.tiers[b.id] || 0) < b.tier) parts.push(`${b.name} ${b.tier_name}`);
+  for (const x of P.secrets) if (x.earned && !seen.secrets.includes(x.id)) parts.push(`secret badge: ${x.name}`);
+  for (const q of [...P.quests.daily, P.quests.weekly]) if (q.done && !seen.quests.includes(`${q.done}:${q.id}`)) parts.push(`quest done: ${q.text} (+${q.xp} XP)`);
+  for (const [k, r] of Object.entries(P.records)) if (r && (seen.records[k] || 0) > 0 && r.value > seen.records[k]) parts.push(`new record: ${RECORD_LABELS[k]} (${fmtRecord(k, r.value)})`);
+  if (P.season.rank && seen.season.startsWith(P.season.key + ':') && now.season !== seen.season) parts.push(`season rank: ${P.season.rank}`);
+  if (now.streak > seen.streak && [3, 7, 14, 30, 50, 100, 200, 365].includes(now.streak)) parts.push(`shipping streak: ${now.streak} days`);
+  unlockToast(parts);
+}
+async function progressCheck() { if (progressBusy || !state.connected) return; progressBusy = true; try { progressNote((await request('progress')).progression); } catch {} progressBusy = false; }
+function progressSoon() { clearTimeout(progressTimer); progressTimer = setTimeout(progressCheck, 15000); }
+setInterval(() => { if (state.connected && !document.hidden) progressCheck(); }, 10 * 60 * 1000);
 const fmtDur = (sec) => { sec = Math.round(sec || 0); if (sec < 60) return sec + 's'; const m = Math.round(sec / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60); return `${h}h ${m % 60}m`; };
 const fmtDate = (d) => { if (!d) return ''; const t = new Date(d + 'T00:00:00'); return isNaN(t) ? d : t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + (t.getFullYear() !== new Date().getFullYear() ? ' ' + t.getFullYear() : ''); };
 const fmtPct = (x) => `${Math.round((x || 0) * 100)}%`;
@@ -3330,7 +3377,13 @@ function sortableTable(id, cols, rows, opts = {}) {
   return `<div class="grid-wrap${opts.tall ? ' tall' : ''}${opts.fixed ? ' fixed' : ''}" data-table="${id}"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}${total}</tbody></table></div>`;
 }
 function sumRows(rows) { const t = {}; for (const r of rows) for (const k of Object.keys(r)) if (typeof r[k] === 'number') t[k] = (t[k] || 0) + r[k]; return t; }
-const verbCountsThisMonth = () => { try { return (JSON.parse(localStorage.getItem('kcoder.verbCounts') || '{}')[new Date().toISOString().slice(0, 7)] || {}); } catch { return {}; } };
+const verbCountsBest = () => {   // this month's counts; a fresh month falls back to the last one that has any, and failing that to the verbs on screen right now
+  let all = {}; try { all = JSON.parse(localStorage.getItem('kcoder.verbCounts') || '{}'); } catch {}
+  const months = Object.keys(all).filter((k) => all[k] && Object.keys(all[k]).length).sort();
+  const mo = new Date().toISOString().slice(0, 7); if (all[mo] && Object.keys(all[mo]).length) return all[mo];
+  if (months.length) return all[months[months.length - 1]];
+  const live = {}; for (const v of state.verbs.values()) if (v && v.verb) live[v.verb] = (live[v.verb] || 0) + 1; return live;
+};
 
 async function renderStatsView(force) {
   if (state.view !== 'stats') return;
@@ -3432,32 +3485,65 @@ async function renderStatsView(force) {
     rec('longest turn', R.longest_turn && `${fmtDur(R.longest_turn.seconds)} <span class="dim">· <a href="#" data-open-session="${esc(R.longest_turn.sid)}">${esc(R.longest_turn.name || R.longest_turn.sid)}</a> · ${fmtDate(R.longest_turn.date)}</span>`) +
     rec('most tokens in a day', R.most_tokens_day && `${fmtTokens(R.most_tokens_day.tokens)} <span class="dim">· ${fmtDate(R.most_tokens_day.date)}</span>`) +
     rec('most lines in a day', R.most_lines_day && `${fmtInt(R.most_lines_day.lines)} <span class="dim">· ${fmtDate(R.most_lines_day.date)}</span>`) + '</div>';
-  // just for fun: the verbs this browser showed while sessions worked, the Wrapped-style equivalent for the period and the secret badges
-  const vc = Object.entries(verbCountsThisMonth()).sort((a, b) => b[1] - a[1]);
-  const lh = vc.filter(([v]) => LONG_HAUL_VERBS.includes(v)), topV = vc.filter(([v]) => !LONG_HAUL_VERBS.includes(v)).slice(0, 5);
-  const secret = ((d.achievements || {}).badges || []).filter((b) => b.hidden && b.earned);
+  // just for fun: the verbs this browser showed while sessions worked (this month, else the last month that has any, else
+  // the ones on screen right now), the Wrapped-style equivalent for the period, the secret badges and the arcade
+  const vc = Object.entries(verbCountsBest()).sort((a, b) => b[1] - a[1]);
+  const lh = vc.filter(([v]) => LONG_HAUL_VERBS.includes(v)), topV = vc.filter(([v]) => !LONG_HAUL_VERBS.includes(v)).slice(0, 6);
+  const PR = d.progression || { level: {}, tiers: [], secrets: [], streak: {}, records: {}, quests: { daily: [], weekly: null }, season: { badges: [] }, seasons: [], next_up: [] };
+  const secret = PR.secrets.filter((b) => b.earned);
   const latestWrapped = ((d.wrapped || {}).cards || [])[0];
+  const chips = (list, cls = '') => `<div class="verbs">${list.map(([v, n]) => `<span class="${cls}">${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</div>`;
+  const mg = mineLoad(); const arc = mg.arcade || {};
+  const gameRow = (id, label, text) => rec(label, `${text} <span class="dim">· <button class="link" data-go-game="${id}">play</button></span>`);
   const fun = `<div class="card fun"><h3>just for fun</h3>
-    <div class="row stack"><span>most-shown verbs this month <span class="dim">· counted in this browser</span></span><b>${topV.length ? `<span class="verbs">${topV.map(([v, n]) => `<span>${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</span>` : '<span class="dim">none yet: they show while a session works</span>'}</b></div>
-    ${lh.length ? `<div class="row stack"><span>long hauls <span class="dim">· verbs past ten minutes</span></span><b><span class="verbs">${lh.map(([v, n]) => `<span class="lh">${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</span></b></div>` : ''}
+    <div class="fun-verbs"><div class="lbl">most-shown verbs this month <span class="dim">· counted in this browser</span></div>${topV.length ? chips(topV) : '<div class="dim">none counted yet: they show in the status line while a session works</div>'}</div>
+    ${lh.length ? `<div class="fun-verbs"><div class="lbl">long hauls <span class="dim">· verbs past ten minutes</span></div>${chips(lh, 'lh')}</div>` : ''}
     ${rec(`${P} is`, S.fun ? esc(S.fun) : null)}
-    ${rec('secret badges', secret.length ? secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ') : '<span class="dim">none found yet</span>')}
-    ${rec('token mine', `${fmtFull(mineLoad().bank)} tokens banked · ${fmtMine(Math.round(mineRate(mineLoad()) * 10) / 10)}/s${mineLoad().starsEver ? ` · ${fmtInt(mineLoad().stars)} star${mineLoad().stars === 1 ? '' : 's'}${mineLoad().spent ? ` (${fmtInt(mineLoad().starsEver)} earned)` : ''}` : ''}${mineLoad().shares ? ` · ${fmtInt(mineLoad().shares)} share${mineLoad().shares === 1 ? '' : 's'} at ${fmtPx(mineLoad().px)}` : ''}${mineRankLine(mineLoad()) ? ` · rank: ${esc(mineRankLine(mineLoad()))}` : ''} <span class="dim">· <button class="link" data-go-fun>open the fun tab</button></span>`)}
-    ${(mineLoad().arcade.t2048 || {}).played ? rec('2048', `best ${fmtInt(mineLoad().arcade.t2048.best)} · best tile ${fmtInt(mineLoad().arcade.t2048.bestTile)} · ${fmtInt(mineLoad().arcade.t2048.played)} game${mineLoad().arcade.t2048.played === 1 ? '' : 's'} · ${fmtInt(mineLoad().arcade.t2048.wins)} win${mineLoad().arcade.t2048.wins === 1 ? '' : 's'}${mineLoad().arcade.t2048.stars ? ` · ${fmtInt(mineLoad().arcade.t2048.stars)} stars to the mine` : ''} <span class="dim">· <button class="link" data-go-game="2048">play</button></span>`) : ''}
+    ${rec('secret badges', secret.length ? `${secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ')} <span class="dim">· ${PR.secrets_total - secret.length} still hidden</span>` : `<span class="dim">none found yet · ${PR.secrets_total || 10} hidden</span>`)}
+    ${rec('token mine', `${fmtFull(mg.bank)} tokens banked · ${fmtMine(Math.round(mineRate(mg) * 10) / 10)}/s${mg.starsEver ? ` · ${fmtInt(mg.stars)} star${mg.stars === 1 ? '' : 's'}${mg.spent ? ` (${fmtInt(mg.starsEver)} earned)` : ''}` : ''}${mg.shares ? ` · ${fmtInt(mg.shares)} share${mg.shares === 1 ? '' : 's'} at ${fmtPx(mg.px)}` : ''}${mineRankLine(mg) ? ` · rank: ${esc(mineRankLine(mg))}` : ''} <span class="dim">· <button class="link" data-go-fun>open the fun tab</button></span>`)}
+    ${(arc.t2048 || {}).played ? gameRow('2048', '2048', `best ${fmtInt(arc.t2048.best)} · best tile ${fmtInt(arc.t2048.bestTile)} · ${fmtInt(arc.t2048.played)} game${arc.t2048.played === 1 ? '' : 's'} · ${fmtInt(arc.t2048.wins)} win${arc.t2048.wins === 1 ? '' : 's'}${arc.t2048.stars ? ` · ${fmtInt(arc.t2048.stars)} stars to the mine` : ''}`) : ''}
+    ${(arc.mahjong || {}).played ? gameRow('mahjong', 'mahjong', `${fmtInt(arc.mahjong.played)} deal${arc.mahjong.played === 1 ? '' : 's'} · ${fmtInt(arc.mahjong.wins)} win${arc.mahjong.wins === 1 ? '' : 's'}${Object.keys(arc.mahjong.bestTime || {}).length ? ` · best ${fmtDur(Math.min(...Object.values(arc.mahjong.bestTime)))}` : ''}${arc.mahjong.stars ? ` · ${fmtInt(arc.mahjong.stars)} stars to the mine` : ''}`) : ''}
     <div class="row"><span>${latestWrapped ? `<button class="link" data-wrapped="${esc(latestWrapped.key)}">latest Wrapped: ${esc(wrappedPeriodLabel(latestWrapped))}</button>` : '<span class="dim">no Wrapped card yet</span>'}</span></div></div>`;
-  // achievements: next up (three closest locked badges) above the badge wall; hidden badges show only once earned
-  const A = d.achievements || { badges: [], next_up: [], records: {} };
-  const fmtBadge = (b, v) => ({ tokens: fmtTokens, int: fmtCompact, usd: fmtUsd, dur: fmtDur, days: (x) => `${Math.round(x)} day${Math.round(x) === 1 ? '' : 's'}`, pct: fmtPct, ratio: (x) => `${Math.round(x * 100)}%`, flag: (x) => (x ? 'done' : 'not yet') }[b.fmt] || fmtCompact)(v);
-  const byId = Object.fromEntries(A.badges.map((b) => [b.id, b]));
-  const bar = (b) => `<div class="abar"><i style="width:${Math.round(b.progress * 100)}%"></i></div>`;
-  const nextUp = A.next_up.map((id) => byId[id]).filter(Boolean).map((b) => `<div class="next"><div class="nh"><b>${esc(b.name)}</b><span class="dim" title="${esc(b.desc)}">${esc(b.desc)}</span></div>${bar(b)}<div class="nv"><span>${fmtBadge(b, b.value)} of ${fmtBadge(b, b.threshold)}</span><span class="dim">${Math.round(b.progress * 100)}%</span></div></div>`).join('');
-  const GROUPS = [['tokens', 'tokens'], ['commits', 'commits'], ['lines', 'lines'], ['api', 'API equivalent'], ['time', 'agent time'], ['sessions', 'sessions'], ['streaks', 'streaks'], ['habits', 'habits'], ['hidden', 'secret']];
-  const badge = (b) => `<div class="badge-t ${b.earned ? 'on' : 'off'}" title="${esc(b.desc)}${b.earned ? ' · earned ' + esc(fmtDate(b.earned)) : ' · ' + fmtBadge(b, b.value) + ' of ' + fmtBadge(b, b.threshold)}"><span class="ic">${b.earned ? '★' : '☆'}</span><span class="nm">${esc(b.name)}</span>${b.earned ? `<span class="dt">${esc(fmtDate(b.earned))}</span>` : `<span class="dt">${Math.round(b.progress * 100)}%</span>`}</div>`;
-  const wall = GROUPS.map(([g, label]) => { const bs = A.badges.filter((b) => b.group === g && (!b.hidden || b.earned)); return bs.length ? `<div class="agroup"><div class="gl">${label}${g === 'hidden' ? ' <span class="dim">(these only show once earned)</span>' : ''}</div><div class="badges">${bs.map(badge).join('')}</div></div>` : ''; }).join('');
-  const pr = (A.records || {}).powder_day;
-  const recordLine = pr ? `<div class="row"><span>Powder Day record <span class="dim">(re-earned every time it is beaten)</span></span><b>${fmtTokens(pr.tokens)} on ${fmtDate(pr.date)}${pr.times_beaten ? ` · beaten ${pr.times_beaten}×` : ''}</b></div>` : `<div class="row"><span class="dim">Powder Day record: the first 100M-token day starts it; every bigger day earns it again</span></div>`;
-  const achievementsCard = `<div class="card achievements"><h3>achievements <span class="dim">· ${A.earned} of ${A.total} earned</span><span class="spacer"></span><span class="dim" title="the 'paid for itself' badges compare API-equivalent usage with the plan price (Settings)">plan ${fmtUsd(A.plan_price || 0)}/month</span></h3>
-    ${nextUp ? `<div class="label-h">next up</div><div class="nextup">${nextUp}</div>` : ''}${recordLine}${wall}</div>`;
+  // progression: levels, the tiered badges, the season, quests, the shipping streak, records and the secrets
+  const fmtTier = (fmt, v) => ({ tokens: fmtTokens, int: fmtCompact, usd: fmtUsd, dur: fmtDur, days: (x) => `${Math.round(x)} day${Math.round(x) === 1 ? '' : 's'}`, pct: fmtPct, x: (x) => `${Math.round(x * 10) / 10}×` }[fmt] || fmtCompact)(v);
+  const bar = (p, cls = '') => `<div class="abar ${cls}"><i style="width:${Math.round(Math.min(1, p) * 100)}%"></i></div>`;
+  const L = PR.level || {};
+  const levelCard = (full) => `<div class="card level"><h3>level</h3><div class="big">Lv ${fmtInt(L.level || 1)}</div>${bar(L.pct || 0, 'lv')}
+    <div class="row"><span>${fmtInt(L.into || 0)} of ${fmtInt(L.need || 0)} XP to Lv ${fmtInt((L.level || 1) + 1)}</span><b>+${fmtInt(L.today_xp || 0)} today</b></div>
+    ${full ? `<div class="row"><span>XP all time</span><b>${fmtInt(L.xp || 0)}</b></div>${Object.entries(L.sources || {}).map(([k, v]) => `<div class="row"><span>from ${({ tokens: 'tokens (1 per 100k)', commits: 'commits (30 each)', lines: 'lines (1 per 20)', merges: 'merged PRs (250 each)', quests: 'quests', seasons: 'season badges (200 each)' })[k] || k}</span><b>${fmtInt(v)}</b></div>`).join('')}` : ''}</div>`;
+  const ST = PR.streak || {};
+  const streakCard = (full) => `<div class="card streak"><h3>shipping streak</h3><div class="big">${fmtInt(ST.current || 0)} day${ST.current === 1 ? '' : 's'}${ST.today_done ? ' <span class="ok" title="a commit today">✓</span>' : ' <span class="dim" title="no commit yet today">· today open</span>'}</div>
+    <div class="row"><span>one freeze a week</span><b>${ST.freeze_left ? '<span class="ok">ready</span>' : '<span class="warn">used</span>'}</b></div>
+    <div class="row"><span>longest</span><b>${fmtInt(ST.longest || 0)} days</b></div>${full ? `<div class="row"><span>days with a commit</span><b>${fmtInt(ST.commit_days || 0)}</b></div><div class="row"><span>frozen days</span><b>${(ST.frozen || []).length ? ST.frozen.map(fmtDate).join(', ') : '<span class="dim">none yet</span>'}</b></div>` : ''}</div>`;
+  const SE = PR.season || { badges: [] };
+  const seasonCard = (full) => `<div class="card season"><h3>season <span class="dim">· ${esc(SE.name || '')}</span></h3><div class="big">${SE.rank ? `<span class="tier ${SE.rank}">★</span> ${esc(SE.rank)}` : '<span class="dim">unranked</span>'}</div>
+    ${bar(SE.next_rank ? SE.xp / SE.next_rank.xp : 1, SE.rank || '')}<div class="row"><span>${fmtInt(SE.xp || 0)} XP${SE.next_rank ? ` · ${esc(SE.next_rank.name)} at ${fmtInt(SE.next_rank.xp)}` : ' · top rank'}</span><b>${SE.days_left}d left</b></div>
+    <div class="row"><span>season badges</span><b>${SE.earned || 0} of ${SE.total || 0}</b></div>
+    ${full ? `<div class="sbadges">${(SE.badges || []).map((b) => `<div class="sb${b.earned ? ' on' : ''}" title="${esc(b.text)} · ${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.n)}"><span>${b.earned ? '★' : '☆'} ${esc(b.text)}</span>${bar(b.progress)}</div>`).join('')}</div>` : ''}</div>`;
+  const Q = PR.quests || { daily: [], weekly: null };
+  const questRow = (q, tag) => q ? `<div class="quest${q.done ? ' on' : ''}"><div class="qh"><span>${tag ? `<span class="tag">${tag}</span>` : ''}${esc(q.text)}</span><b>${q.done ? `✓ +${q.xp} XP` : `${fmtTier(q.fmt || 'int', q.value || 0)} of ${fmtTier(q.fmt || 'int', q.n)} · ${q.xp} XP`}</b></div>${q.done ? '' : bar(q.progress || 0)}</div>` : '';
+  const questsCard = (full) => `<div class="card quests"><h3>quests <span class="dim">· new ones at midnight</span></h3>${Q.daily.map((q) => questRow(q)).join('')}${questRow(Q.weekly, 'week')}
+    ${full && Q.yesterday ? `<div class="label-h">yesterday</div>${Q.yesterday.map((q) => `<div class="row"><span>${esc(q.text)}</span><b>${q.done ? `<span class="ok">done · +${q.xp} XP</span>` : '<span class="dim">missed</span>'}</b></div>`).join('')}` : ''}</div>`;
+  const nextKind = { badge: 'badge', quest: 'quest', record: 'record' };
+  const nextUp = (PR.next_up || []).map((c) => `<div class="next"><div class="nh"><b><span class="tag ${c.kind}">${nextKind[c.kind]}</span>${esc(c.name)}</b><span class="dim" title="${esc(c.desc)}">${esc(c.desc)}</span></div>${bar(c.progress)}<div class="nv"><span>${fmtTier(c.fmt, c.value)} of ${fmtTier(c.fmt, c.target)}</span><span class="dim">${Math.round(c.progress * 100)}%</span></div></div>`).join('');
+  const nextStrip = nextUp ? `<div class="card nextup-card"><h3>next up <span class="dim">· the three closest unlocks, quests and records</span></h3><div class="nextup">${nextUp}</div></div>` : '';
+  // the tiered wall: a dense row of chips (one per badge, coloured by its tier), the full wall with every tier on demand
+  const TN = PR.tier_names || ['bronze', 'silver', 'gold', 'platinum', 'diamond'];
+  const chip = (b) => `<span class="tchip t${b.tier}" title="${esc(b.name)}: ${b.tier ? `${b.tier_name} (${esc(b.tier_descs[b.tier - 1])}, ${fmtDate(b.earned_at)})` : 'not yet'}${b.next != null ? ` · next: ${esc(b.desc_next)} · ${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.next)}` : ' · every tier earned'}"><i>${b.tier ? '★' : '☆'}</i>${esc(b.name)}</span>`;
+  const earnedChips = PR.tiers.filter((b) => b.tier).sort((a, b) => b.tier - a.tier || a.name.localeCompare(b.name)).map(chip).join('');
+  const lockedChips = PR.tiers.filter((b) => !b.tier).map(chip).join('');
+  const GROUPS = [['tokens', 'tokens'], ['commits', 'commits'], ['lines', 'lines'], ['api', 'API equivalent'], ['time', 'agent time'], ['sessions', 'sessions'], ['streaks', 'streaks'], ['habits', 'habits']];
+  const wallRow = (b) => `<div class="wrow"><div class="wn"><b>${esc(b.name)}</b><span class="dim">${esc(b.desc_next)}</span></div><div class="pips">${b.tiers.map((t, i) => `<span class="pip t${i + 1}${b.earned[i] ? ' on' : ''}" title="${esc(TN[i])}: ${esc(b.tier_descs[i])}${b.earned[i] ? ' · ' + fmtDate(b.earned[i]) : ''}">${b.earned[i] ? '★' : '☆'}</span>`).join('')}</div><div class="wp">${bar(b.progress, b.tier_name || '')}<span class="dim">${b.next != null ? `${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.next)}` : 'maxed'}</span></div></div>`;
+  const wall = GROUPS.map(([g, label]) => { const bs = PR.tiers.filter((b) => b.group === g); return bs.length ? `<div class="agroup"><div class="gl">${label}</div>${bs.map(wallRow).join('')}</div>` : ''; }).join('');
+  const tierCounts = TN.map((n, i) => [n, PR.tiers.filter((b) => b.tier === i + 1).length]).filter(([, c]) => c);
+  const badgesCard = `<div class="card achievements"><h3>badges <span class="dim">· ${fmtInt(PR.earned_tiers || 0)} of ${fmtInt(PR.total_tiers || 0)} tiers</span>${tierCounts.map(([n, c]) => `<span class="tier ${n}" title="${c} ${n}">★ ${c}</span>`).join('')}<span class="spacer"></span><button class="link" data-wall="${state.statsWall ? 'off' : 'on'}">${state.statsWall ? 'hide the full wall' : 'show the full wall'}</button></h3>
+    <div class="tier-row">${earnedChips}${lockedChips ? `<span class="sep">·</span>${lockedChips}` : ''}</div>
+    ${state.statsWall ? `<div class="wall">${wall}</div>` : ''}</div>`;
+  const RC = PR.records || {};
+  const recordsCard = `<div class="card records"><h3>personal records <span class="dim">· a toast when one falls</span></h3>${Object.entries(RECORD_LABELS).map(([k, label]) => { const r = RC[k]; return `<div class="row"><span>${label}</span><b>${r ? `${fmtRecord(k, r.value)} <span class="dim">· ${r.name ? esc(r.name) + ' · ' : ''}${fmtDate(r.date)}</span>` : '<span class="dim">-</span>'}</b></div>`; }).join('')}</div>`;
+  const secretsCard = `<div class="card secrets"><h3>secret badges <span class="dim">· ${PR.secrets_earned || 0} of ${PR.secrets_total || 0} found</span></h3><div class="tier-row">${PR.secrets.map((x) => x.earned ? `<span class="tchip t5" title="${esc(x.desc)} · ${fmtDate(x.earned)}"><i>★</i>${esc(x.name)}</span>` : `<span class="tchip t0 secret" title="unusual behaviour unlocks it">???</span>`).join('')}</div></div>`;
+  const seasonRow = (sn) => `<div class="srow" data-season="${esc(sn.key)}"><div class="row"><span><button class="link">${esc(sn.name)}</button> <span class="dim">· ${sn.earned} of ${sn.total} badges · ${fmtInt(sn.xp)} XP</span></span><b>${sn.rank ? `<span class="tier ${sn.rank}">★</span> ${esc(sn.rank)}` : '<span class="dim">unranked</span>'}</b></div>${state.statsSeason === sn.key ? `<div class="sbadges">${sn.badges.map((b) => `<div class="sb${b.earned ? ' on' : ''}" title="${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.n)}"><span>${b.earned ? '★' : '☆'} ${esc(b.text)}</span>${bar(b.progress)}</div>`).join('')}</div>` : ''}</div>`;
+  const seasonsCard = `<div class="card seasons"><h3>past seasons <span class="dim">· a month each, its own badge set and rank</span></h3>${PR.seasons.length ? PR.seasons.map(seasonRow).join('') : '<div class="row"><span class="dim">the first season is still on</span></div>'}</div>`;
   // tools
   const toolRows = Object.values(d.tools.reduce((acc, r) => { const n = TOOL_NAMES[r.name] || r.name; const a = acc[n] || (acc[n] = { name: n, category: toolCategory(r.name), count: 0, errors: 0 }); a.count += r.count; a.errors += r.errors; return acc; }, {})).map((r) => ({ ...r, error_rate: r.count ? r.errors / r.count : 0 }));
   const toolsT = sortableTable('tools', [{ k: 'name', label: 'tool', f: (r) => esc(r.name), cls: 'l' }, { k: 'category', label: 'kind', f: (r) => esc(r.category), cls: 'l' }, { k: 'count', label: 'calls', f: (r) => fmtInt(r.count) }, { k: 'errors', label: 'failed', f: (r) => (r.errors ? `<span class="warn">${fmtInt(r.errors)}</span>` : '0') }, { k: 'error_rate', label: 'failure rate', f: (r) => fmtPct(r.error_rate) }], toolRows, { sort: { key: 'count', dir: -1 }, empty: 'no tool calls in this range', total: toolRows.length ? { label: 'total', row: { ...sumRows(toolRows), error_rate: sumRows(toolRows).count ? sumRows(toolRows).errors / sumRows(toolRows).count : 0 } } : null });
@@ -3473,18 +3559,28 @@ async function renderStatsView(force) {
     { k: 'pushed', label: 'state', f: (c) => `<span class="badge ${c.pushed ? 'pushed' : 'local'}">${c.pushed ? 'pushed' : 'local only'}</span>`, cls: 'l', sort: (c) => (c.pushed ? 1 : 0) },
   ], d.commits, { sort: { key: 'ts', dir: -1 }, tall: true, fixed: true, row: (c) => ` data-sha="${esc(c.sha)}"`, empty: 'no commits from sessions in this range' });
   const quotaCard = quotaCardHtml(d.quota, m === 'quota');
-  box.innerHTML = `
-    <div class="stats-head"><h2>stats</h2>
-      <div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && !RG && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
+  const TAB = ['overview', 'badges', 'fun', 'history'].includes(state.statsTab) ? state.statsTab : 'overview';
+  const ranged = TAB === 'overview' || TAB === 'history';
+  const head = `<div class="stats-head"><h2>stats</h2>
+      <div class="seg" id="stats-tabs">${[['overview', 'overview'], ['badges', `badges · Lv ${fmtInt(L.level || 1)}`], ['fun', 'fun'], ['history', 'history']].map(([t, l]) => `<button data-tab="${t}" class="${TAB === t ? 'active' : ''}">${l}</button>`).join('')}</div>
+      ${ranged ? `<div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && !RG && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
       <label class="help day-pick" title="Show one day: pick it here, or click a day in the daily table or the calendar">or a day <input type="date" id="stats-day" max="${d.today}" value="${esc(state.statsDate || '')}"></label>
       <label class="help day-pick" title="Any range, for example a Wrapped week or month">or from <input type="date" id="stats-from" max="${d.today}" value="${esc(RG ? RG.start : '')}"> to <input type="date" id="stats-to" max="${d.today}" value="${esc(RG ? RG.end : '')}"></label>
       ${state.statsDate ? `<span class="chip day-chip">${fmtDate(state.statsDate)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
-      ${RG ? `<span class="chip day-chip">${fmtDate(RG.start)} – ${fmtDate(RG.end)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
-      <span class="help">today is ${fmtDate(d.today)} · days roll over at local midnight</span>
+      ${RG ? `<span class="chip day-chip">${fmtDate(RG.start)} – ${fmtDate(RG.end)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}` : `<span class="help">${TAB === 'badges' ? 'all time · backfilled from your history' : TAB === 'fun' ? 'the mine, the arcade, the verbs and Wrapped' : ''}</span>`}
       <span class="spacer"></span>
-      <button id="stats-csv" title="save the daily table for this range as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
-    </div>
-    ${quotaCard}
+      ${TAB === 'history' ? `<button id="stats-csv" title="save the daily table for this range as CSV">⤓ export CSV</button>` : ''}<button id="stats-refresh" title="refresh">↻</button>
+    </div>`;
+  const body = TAB === 'overview' ? `${nextStrip}
+    <div class="summary prog">${levelCard(false)}${streakCard(false)}${seasonCard(false)}${questsCard(false)}</div>
+    <div class="summary six compact">${summary}</div>
+    ${(d.window || {}).n === 1 ? '' : `<div class="card hl chart-card"><h3>${CHARTS[charted][0]} · ${P} <span class="badge">charted</span><span class="spacer"></span><span class="dim">today is ${fmtDate(d.today)} · the rest is under history</span></h3>${CHARTS[charted][1]}</div>`}`
+  : TAB === 'badges' ? `<div class="summary prog">${levelCard(true)}${streakCard(true)}${seasonCard(true)}${questsCard(true)}</div>
+    ${badgesCard}
+    <div class="two">${recordsCard}${secretsCard}</div>
+    ${seasonsCard}`
+  : TAB === 'fun' ? `<div class="two">${fun}${wrappedCardHtml(d.wrapped)}</div>`
+  : `${quotaCard}
     <div class="summary six">${summary}</div>
     ${(d.window || {}).n === 1 ? '' : `<div class="two"><div class="card hl"><h3>${CHARTS[charted][0]} · ${P} <span class="badge">charted</span></h3>${CHARTS[charted][1]}</div><div class="card"><h3>${CHARTS[other][0]} · ${P}</h3>${CHARTS[other][1]}</div></div>`}
     <div class="card"><h3>daily</h3><div id="stats-daily"></div></div>
@@ -3494,17 +3590,21 @@ async function renderStatsView(force) {
     <div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens · ${P}</h3>${top}</div>
     ${calendar}
     ${hours}
-    <div class="summary four">${parallel}${waiting}${health}${fun}</div>
-    ${achievementsCard}
-    ${wrappedCardHtml(d.wrapped)}
-    <div class="two"><div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>${records}</div>
+    <div class="summary four">${parallel}${waiting}${health}${records}</div>
+    <div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>
     <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${P} · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
-  renderDailyTable();
+  box.innerHTML = head + body;
+  box.dataset.tab = TAB;
+  progressNote(d.progression);
+  if (TAB === 'history') renderDailyTable();
+  $('#stats-tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (!b) return; state.statsTab = b.dataset.tab; localStorage.setItem('kcoder.statsTab', state.statsTab); renderStatsView(false); });
+  if (ranged) {
   $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); state.statsDate = null; state.statsRange = null; localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
   $('#stats-day').addEventListener('change', (e) => { state.statsDate = e.target.value || null; state.statsRange = null; renderStatsView(true); });
   const rangeChange = () => { const a = $('#stats-from').value, b = $('#stats-to').value; if (a && b) { state.statsRange = { start: a <= b ? a : b, end: a <= b ? b : a }; state.statsDate = null; renderStatsView(true); } };
   $('#stats-from').addEventListener('change', rangeChange); $('#stats-to').addEventListener('change', rangeChange);
-  $('#stats-csv').addEventListener('click', exportStatsCsv);
+  }
+  if ($('#stats-csv')) $('#stats-csv').addEventListener('click', exportStatsCsv);
   $('#stats-refresh').addEventListener('click', () => renderStatsView(true));
   box.onclick = (e) => {
     const th = e.target.closest('th[data-sort]'); const tb = th && th.closest('[data-table]');
@@ -3513,6 +3613,8 @@ async function renderStatsView(force) {
     const mc = e.target.closest('.card.metric[data-metric]'); if (mc) { state.statsMetric = mc.dataset.metric; renderStatsView(false); return; }
     if (e.target.closest('[data-clear-day]')) { state.statsDate = null; state.statsRange = null; renderStatsView(true); return; }
     const wb = e.target.closest('[data-wrapped]'); if (wb) { wrappedDialog(wb.dataset.wrapped); return; }
+    const wl = e.target.closest('[data-wall]'); if (wl) { state.statsWall = wl.dataset.wall === 'on'; renderStatsView(false); return; }
+    const sr = e.target.closest('.srow[data-season]'); if (sr && e.target.closest('button.link')) { state.statsSeason = state.statsSeason === sr.dataset.season ? null : sr.dataset.season; renderStatsView(false); return; }
     if (e.target.closest('[data-go-fun]')) { funSelect('mine'); return; }
     const gg = e.target.closest('[data-go-game]'); if (gg) { funSelect(gg.dataset.goGame); return; }
     if (e.target.closest('[data-x="settings"]')) { settingsDialog(); return; }
@@ -3536,8 +3638,8 @@ function verbForPeriod(start) { try { const all = JSON.parse(localStorage.getIte
 async function wrappedDialog(key, opts = {}) {
   if (!key) return;
   let card; try { card = (await request('wrapped', { action: 'get', key, verb: verbForPeriod(key.includes('W') ? null : key + '-01') || verbForPeriod(null), fresh: !!opts.fresh })).card; } catch (e) { toast(e.message, 'err'); return; }
-  if (!card.verb) { const v = verbForPeriod(card.start); if (v) card.verb = v; }
-  const hours = (sec) => { const h = Math.floor((sec || 0) / 3600); return h ? `${h}h ${Math.round(((sec || 0) % 3600) / 60)}m` : fmtDur(sec); };
+  if (!card.verb) { const v = verbForPeriod(card.start) || (() => { const t = Object.entries(verbCountsBest()).sort((a, b) => b[1] - a[1])[0]; return t ? { name: t[0], count: t[1] } : null; })(); if (v) card.verb = v; }
+  const hours = (sec) => { const m = Math.round((sec || 0) / 60); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : fmtDur(sec); };
   const tile = (label, value, sub) => `<div class="wtile"><div class="wl">${label}</div><div class="wv">${value}</div>${sub ? `<div class="ws">${sub}</div>` : ''}</div>`;
   const paid = card.paid_multiple != null ? `${card.paid_multiple}× the plan's share (${fmtUsd(card.plan_share)})` : '';
   const html = `<div class="wrapped-card" id="wrapped-card">
@@ -3582,7 +3684,7 @@ async function saveWrappedPng(card) {
   BANNER.split('\n').forEach((l, i) => x.fillText(l, 60, 50 + i * 17));
   x.fillStyle = T.fg; x.font = `bold 34px ${mono}`; x.fillText('kcoder wrapped', 60, 175);
   x.fillStyle = T.dim; x.font = `18px ${mono}`; x.fillText(wrappedPeriodLabel(card) + (card.complete ? '' : ' · so far'), 60, 222);
-  const hours = (sec) => { const h = Math.floor((sec || 0) / 3600); return h ? `${h}h ${Math.round(((sec || 0) % 3600) / 60)}m` : fmtDur(sec); };
+  const hours = (sec) => { const m = Math.round((sec || 0) / 60); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : fmtDur(sec); };
   const tiles = [
     ['tokens', fmtTokens(card.tokens), `${fmtTokens(card.input)} in · ${fmtTokens(card.output)} out`],
     ['lines', `+${fmtCompact(card.lines_added)}  −${fmtCompact(card.lines_removed)}`, `net ${fmtSigned(card.net)} · ${fmtInt(card.files)} files`, 'lines'],
@@ -3692,6 +3794,43 @@ const MINE_UNITS = [
   { id: 'agi', glyph: '∞', name: 'the AGI', desc: 'mines tokens about itself', cost: 5e18, rate: 4e13, tiers: ['a benchmark', 'self-improvement', 'the alignment team', 'the takeoff'], need: 'agi' },
   { id: 'fork', glyph: 'Ψ', name: 'the open-source fork', desc: 'everyone works for free, somehow it ships', cost: 1e20, rate: 1.5e15, tiers: ['a star on GitHub', 'a maintainer', 'the foundation', 'upstream'], need: 'fork' },
 ];   // `need` names the star shop perk that makes the agent hireable
+// past the open-source fork the agents never run out: each one costs 25 times and mines 12 times the one before, and the
+// next shows up once the last is hired (the names cycle with a numeral), so there is always something to save for
+const MINE_X_UNITS = [['the second universe', '✧'], ['the time loop', '⟲'], ['the Dyson sphere', '◉'], ['the Boltzmann brain', '☁'], ['the omega point', 'Ω'], ['the tenth dimension', '⬡'], ['the simulation', '▦'], ['the reboot', '⟳']];
+const mineRoman = (n) => { const R = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']]; let out = ''; for (const [v, r] of R) while (n >= v) { out += r; n -= v; } return out; };
+function mineExtraUnits(g) {
+  const out = []; let prev = MINE_UNITS[MINE_UNITS.length - 1];
+  for (let i = 0; i < 400; i++) {
+    const [nm, glyph] = MINE_X_UNITS[i % MINE_X_UNITS.length]; const round = Math.floor(i / MINE_X_UNITS.length);
+    const u = { id: `x${i}`, glyph, name: round ? `${nm} ${mineRoman(round + 1)}` : nm, desc: 'past the fork: it mines in ways nobody has named yet', cost: prev.cost * 25, rate: prev.rate * 12, tiers: ['a theory', 'a proof', 'a paper', 'a prize'], gen: true };
+    if (!Number.isFinite(u.cost)) break;
+    out.push(u); if (!((g.units[u.id] || 0) > 0)) break; prev = u;
+  }
+  return out;
+}
+const mineUnitsAll = (g) => ((g.units.fork || 0) >= 1 ? MINE_UNITS.concat(mineExtraUnits(g)) : MINE_UNITS);
+const MINE_X_TIERS = ['beyond the singularity', 'the second singularity', 'the third singularity', 'the recursion', 'the recursion again', 'the stack overflow', 'the heat death', 'the big bounce'];
+function mineExtraTiers(u, owned) {   // past a thousand owned: a ×10 tier every hundred more, priced like ten more of the agent at that count, the next one showing once the last is in reach
+  const out = []; const upto = Math.max(1100, Math.floor(owned / 100) * 100 + 100);
+  for (let k = 1100, i = 0; k <= upto && i < 400; k += 100, i++) { const round = Math.floor(i / MINE_X_TIERS.length); const cost = u.cost * 10 * Math.pow(1.15, k); if (!Number.isFinite(cost)) break; out.push({ id: `${u.id}_t${k}`, name: `${MINE_X_TIERS[i % MINE_X_TIERS.length]}${round ? ' ' + mineRoman(round + 1) : ''} (${u.name})`, desc: `${u.name} mines 10 times as fast`, cost, unit: u.id, mult: 10, owned: k, gen: true }); }
+  return out;
+}
+function mineExtraClicks(g) {   // past a thousand hands: the next thousand-fold, ten thousand times the price, once the last is bought
+  const out = []; let cost = 1e24, need = 'hands';
+  for (let i = 2; i < 400; i++) { cost *= 1e4; if (!Number.isFinite(cost)) break; const id = `hands${i}`; out.push({ id, name: `a thousand hands ${mineRoman(i)}`, desc: 'clicks are worth a thousand times as much', cost, click: 1000, need, gen: true }); if (!g.ups.includes(id)) break; need = id; }
+  return g.ups.includes('hands') ? out : [];
+}
+let mineUpsCache = { key: '', list: [], byId: new Map() };
+function mineUpgradesAll(g) {   // every upgrade that exists for this mine: the static ones for the agents that are open, the generated tiers and clicks
+  const open = mineUnitsOpen(g); const key = `${open.map((u) => `${u.id}:${g.units[u.id] || 0}`).join(',')}|${g.ups.length}`;
+  if (mineUpsCache.key === key) return mineUpsCache.list;
+  const openIds = new Set(open.map((u) => u.id));
+  const list = MINE_UPGRADES.filter((up) => !up.unit || openIds.has(up.unit)).concat(mineExtraClicks(g));
+  for (const u of open) { if (u.gen) for (const [owned, x, mult, tname] of MINE_TIERS) list.push({ id: `${u.id}_${owned}`, name: tname ? `${tname} (${u.name})` : u.tiers[Math.min(3, MINE_TIERS.findIndex((t) => t[0] === owned))], desc: `${u.name} mines ${mult === 2 ? 'twice' : `${fmtInt(mult)} times`} as fast`, cost: u.cost * x, unit: u.id, mult, owned }); if ((g.units[u.id] || 0) >= 1000) list.push(...mineExtraTiers(u, g.units[u.id] || 0)); }
+  mineUpsCache = { key, list, byId: new Map(list.map((up) => [up.id, up])) }; return list;
+}
+const mineUpById = (g, id) => { mineUpgradesAll(g); return mineUpsCache.byId.get(id) || MINE_UPGRADES.find((x) => x.id === id) || null; };
+function mineUnitMults(g) { const m = {}; for (const id of g.ups) { const up = mineUpById(g, id); if (up && up.unit) m[up.unit] = (m[up.unit] || 1) * up.mult; } return m; }
 const MINE_TIERS = [[10, 10, 2], [25, 100, 2], [50, 1000, 2], [100, 10000, 4],   // [agents owned to unlock, cost as a multiple of the agent's base price, multiplier, shared name]; the fourth tier is the scale-up
   ...[[200, 10, 'overtime'], [300, 10, 'the night shift'], [400, 10, 'a second office'], [500, 1000, 'the thousand-fold'], [600, 10, 'offshore'], [700, 10, 'a merger'], [800, 10, 'an acquisition'], [900, 10, 'the IPO'], [1000, 1000, 'the singularity']]
     .map(([owned, mult, name]) => [owned, (mult >= 1000 ? 100 : 10) * Math.pow(1.15, owned), mult, name])];   // the late tiers: a hundred agents apart, priced like ten more of the agent (a hundred more for a thousand-fold)
@@ -3715,7 +3854,7 @@ const MINE_SURPRISES = [
   { id: 'limit', name: 'rate limit lifted', weight: 15, kind: 'frenzy', mult: 3, sec: 180 },
   { id: 'stash', name: 'the intern found a stash', weight: 10, kind: 'clicks', mult: 50, sec: 13 },
 ];
-const mineAgents = (g) => MINE_UNITS.reduce((s, u) => s + (g.units[u.id] || 0), 0);
+const mineAgents = (g) => Object.values(g.units).reduce((s, n) => s + (Number(n) || 0), 0);
 const MINE_MILESTONES = [
   { id: 'click1', name: 'first click', desc: 'click the banner once', test: (g) => g.clicks >= 1 },
   { id: 'click100', name: 'warm keyboard', desc: '100 clicks', test: (g) => g.clicks >= 100 },
@@ -3729,7 +3868,7 @@ const MINE_MILESTONES = [
   { id: 'agents500', name: 'a campus', desc: 'five hundred agents at once', test: (g) => mineAgents(g) >= 500 },
   { id: 'oneofeach', name: 'the full stack', desc: 'one of every agent', test: (g) => mineUnitsOpen(g).every((u) => g.units[u.id]) },
   { id: 'fleet', name: 'admiral', desc: 'buy the fleet', test: (g) => (g.units.fleet || 0) >= 1 },
-  { id: 'allups', name: 'maxed out', desc: 'every upgrade bought', test: (g) => g.ups.length >= mineUpgradesAll(g).length },
+  { id: 'allups', name: 'maxed out', desc: 'every upgrade on offer bought, with at least fifty owned', test: (g) => g.ups.length >= 50 && !mineUpgradesOpen(g).length },
   { id: 'total1k', name: 'a thousand', desc: '1,000 tokens mined all time', test: (g) => g.total >= 1e3 },
   { id: 'total1m', name: 'a million', desc: '1,000,000 tokens mined all time', test: (g) => g.total >= 1e6 },
   { id: 'total1b', name: 'a billion', desc: '1,000,000,000 tokens mined all time', test: (g) => g.total >= 1e9 },
@@ -3755,8 +3894,8 @@ const MINE_MILESTONES = [
   { id: 'total1qi', name: 'a quintillion', desc: '1,000,000,000,000,000,000 tokens mined all time', test: (g) => g.total >= 1e18 },
   { id: 'stars100', name: 'a hundred stars', desc: 'a hundred stars earned', test: (g) => g.starsEver >= 100 },
   { id: 'stars1k', name: 'a thousand stars', desc: 'a thousand stars earned', test: (g) => g.starsEver >= 1000 },
-  { id: 'tier200', name: 'overtime', desc: 'buy an agent\'s tier at 200 owned', test: (g) => g.ups.some((id) => (MINE_UPGRADES.find((x) => x.id === id) || {}).owned >= 200) },
-  { id: 'tier1k', name: 'thousand-fold', desc: 'buy a ×1,000 tier', test: (g) => g.ups.some((id) => (MINE_UPGRADES.find((x) => x.id === id) || {}).mult >= 1000) },
+  { id: 'tier200', name: 'overtime', desc: 'buy an agent\'s tier at 200 owned', test: (g) => g.ups.some((id) => (mineUpById(g, id) || {}).owned >= 200) },
+  { id: 'tier1k', name: 'thousand-fold', desc: 'buy a ×1,000 tier', test: (g) => g.ups.some((id) => (mineUpById(g, id) || {}).mult >= 1000) },
   { id: 'factory1', name: 'lights out', desc: 'hire the software factory', test: (g) => (g.units.factory || 0) >= 1 },
   { id: 'founder1', name: 'founder mode', desc: 'hire the founder', test: (g) => (g.units.founder || 0) >= 1 },
   { id: 'sprint1', name: 'sprinter', desc: 'finish a sprint', test: (g) => g.sprintsDone >= 1 },
@@ -3777,12 +3916,13 @@ const MINE_MILESTONES = [
   { id: 'dip', name: 'bought the dip', desc: 'buy shares while the price sits 5% or more under fair value', test: (g) => g.dipBuys >= 1 },
   { id: 'cashout', name: 'took profits', desc: 'sell shares for more stars than they cost', test: (g) => g.gains >= 1 },
   // families: one chip at a time shows until it is earned, then the next, so there is always a next one
-  ...MINE_WORDS.slice(5).map((w, i) => ({ id: `total_${w}`, fam: 'total', name: `a ${w}`, desc: `${fmtMine(1e21 * Math.pow(1000, i))} tokens mined all time`, test: (g) => g.total >= 1e21 * Math.pow(1000, i) })),
+  ...MINE_WORDS.slice(5).map((w, i) => ({ id: `total_${w}`, fam: 'total', name: `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w}`, desc: `${fmtMine(1e21 * Math.pow(1000, i))} tokens mined all time`, test: (g) => g.total >= 1e21 * Math.pow(1000, i) })),
+  ...Array.from({ length: 80 }, (_, i) => 66 + 3 * i).map((e) => ({ id: `total_e${e}`, fam: 'total', name: e === 99 ? 'a googol, nearly' : `ten to the ${e}th`, desc: `10^${e} tokens mined all time (${e >= 300 ? 'the edge of what a number can hold' : 'past the words'})`, test: (g) => g.total >= Math.pow(10, e) })),
   ...[[10, 'double digits'], [15, 'v15'], [20, 'a score of releases'], [30, 'thirty releases'], [50, 'fifty releases'], [75, 'seventy-five'], [100, 'a hundred releases'], [250, 'release 250'], [500, 'release 500'], [1000, 'release 1,000']].map(([n, name]) => ({ id: `rel${n}`, fam: 'rel', name, desc: `cut ${fmtInt(n)} releases, over every listing`, test: (g) => g.releases + g.ipoReleases >= n })),
   ...[100, 250, 500, 1000, 2500, 5000, 10000, 25000].map((n) => ({ id: `commit${n}`, fam: 'commit', name: `${fmtInt(n)} commits`, desc: `${fmtInt(n)} real commits paid in`, test: (g) => g.real.commits >= n })),
   ...[1000, 2500, 5000, 10000, 25000, 50000, 100000].map((n) => ({ id: `real${n}`, fam: 'real', name: `${fmtInt(n)} turns`, desc: `${fmtInt(n)} real turns paid in`, test: (g) => g.real.turns >= n })),
-  ...[25000, 50000, 100000, 250000, 1000000, 10000000].map((n) => ({ id: `click${n}`, fam: 'click', name: `${fmtMine(n)} clicks`, desc: `${fmtInt(n)} clicks`, test: (g) => g.clicks >= n })),
-  ...[10000, 100000, 1e6, 1e7, 1e8, 1e9].map((n) => ({ id: `stars${n}`, fam: 'stars', name: `${fmtMine(n)} stars`, desc: `${fmtInt(n)} stars earned over every listing`, test: (g) => mineStarsLife(g) >= n })),
+  ...[25000, 50000, 100000, 250000, 1000000, 10000000, 1e8, 1e9, 1e10].map((n) => ({ id: `click${n}`, fam: 'click', name: `${fmtMine(n)} clicks`, desc: `${fmtInt(n)} clicks`, test: (g) => g.clicks >= n })),
+  ...[10000, 100000, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e15, 1e18].map((n) => ({ id: `stars${n}`, fam: 'stars', name: `${fmtMine(n)} stars`, desc: `${fmtInt(n)} stars earned over every listing`, test: (g) => mineStarsLife(g) >= n })),
   ...[25, 100, 500, 1000, 5000].map((n) => ({ id: `sprints${n}`, fam: 'sprint', name: `${fmtInt(n)} sprints`, desc: `${fmtInt(n)} sprints finished`, test: (g) => g.sprintsDone >= n })),
   ...[30, 100, 365].map((n) => ({ id: `streak${n}`, fam: 'streak', name: n === 30 ? 'a month of sprints' : n === 100 ? 'a hundred clean days' : 'a year of sprints', desc: `all three sprints done ${n} days in a row`, test: (g) => g.streak >= n })),
   ...[1, 7, 30, 100].map((n) => ({ id: `perfect${n}`, fam: 'perfect', name: n === 1 ? 'a perfect day' : `${n} perfect days`, desc: `the hard sprint and all three regular ones done in a day${n > 1 ? `, ${n} times` : ''}`, test: (g) => g.perfectDays >= n })),
@@ -3792,10 +3932,13 @@ const MINE_MILESTONES = [
   ...[[1, 'first trade'], [10, 'ten trades'], [100, 'day trader'], [1000, 'high frequency']].map(([n, name]) => ({ id: `trades${n}`, fam: 'trade', name, desc: `${fmtInt(n)} trade${n === 1 ? '' : 's'} on the exchange`, test: (g) => g.trades >= n })),
   ...[[2, 'doubled since listing'], [10, 'a ten-bagger'], [100, 'a hundred-bagger'], [1000, 'a thousand-bagger'], [10000, 'the moon']].map(([n, name]) => ({ id: `px${n}`, fam: 'px', name, desc: `the share price at ${fmtInt(n)}× the first listing's`, test: (g) => g.pxIpo > 0 && g.px >= n * g.pxIpo })),
   ...[[1e5, 'six figures of cap'], [1e6, 'a unicorn'], [1e7, 'a decacorn'], [1e8, 'a hectocorn'], [1e9, 'a billion-star company'], [1e12, 'a trillion-star company']].map(([n, name]) => ({ id: `cap${n}`, fam: 'cap', name, desc: `a market cap of ${fmtMine(n)} stars (shares × price)`, test: (g) => mineCap(g) >= n })),
-  ...[[2000, 'a metropolis'], [5000, 'a nation'], [10000, 'a planet'], [50000, 'a galaxy of agents']].map(([n, name]) => ({ id: `agents${n}`, fam: 'agents', name, desc: `${fmtInt(n)} agents at once`, test: (g) => mineAgents(g) >= n })),
+  ...[[2000, 'a metropolis'], [5000, 'a nation'], [10000, 'a planet'], [50000, 'a galaxy of agents'], [1e5, 'a hundred thousand agents'], [1e6, 'a million agents'], [1e7, 'ten million agents'], [1e8, 'a hundred million agents'], [1e9, 'a billion agents'], [1e12, 'a trillion agents']].map(([n, name]) => ({ id: `agents${n}`, fam: 'agents', name, desc: `${fmtInt(n)} agents at once`, test: (g) => mineAgents(g) >= n })),
+  ...[1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987].map((n) => ({ id: `beyond${n}`, fam: 'beyond', name: n === 1 ? 'past the fork' : `${fmtInt(n)} past the fork`, desc: `hire ${n === 1 ? 'the agent after the open-source fork' : `${fmtInt(n)} agents from past the fork`}`, test: (g) => Object.keys(g.units).filter((id) => id.startsWith('x') && g.units[id] > 0).length >= n })),
   { id: 'coin', name: 'insert coin', desc: 'a game played in the arcade', test: (g) => Object.values(g.arcade).some((c) => (c.played || 0) > 0) },
   ...[[2048, '2048'], [4096, '4096'], [8192, '8192'], [16384, '16384'], [32768, '32768']].map(([n, name]) => ({ id: `tile${n}`, fam: 'tile', name, desc: `a ${fmtInt(n)} tile in 2048`, test: (g) => ((g.arcade.t2048 || {}).bestTile || 0) >= n })),
   ...[[10000, 'five figures in 2048'], [100000, 'six figures in 2048'], [1000000, 'a million in 2048']].map(([n, name]) => ({ id: `score${n}`, fam: 'score', name, desc: `a score of ${fmtInt(n)} in 2048`, test: (g) => ((g.arcade.t2048 || {}).best || 0) >= n })),
+  ...[[1, 'a clear board'], [10, 'ten boards'], [50, 'fifty boards'], [250, 'mahjong master']].map(([n, name]) => ({ id: `mj${n}`, fam: 'mj', name, desc: `${n === 1 ? 'clear a mahjong board' : `clear ${fmtInt(n)} mahjong boards`}`, test: (g) => ((g.arcade.mahjong || {}).wins || 0) >= n })),
+  ...[[1, 'the daily deal'], [7, 'a week of daily deals'], [30, 'a month of daily deals']].map(([n, name]) => ({ id: `mjd${n}`, fam: 'mjd', name, desc: `clear ${n === 1 ? 'the daily mahjong deal' : `${n} daily mahjong deals`}`, test: (g) => (((g.arcade.mahjong || {}).dailies || []).length || 0) >= n })),
 ];
 const mineMilestonesShown = (g) => { const seen = new Set(); return MINE_MILESTONES.filter((m) => { if (!m.fam) return true; if (g.ach.includes(m.id)) return true; if (seen.has(m.fam)) return false; seen.add(m.fam); return true; }); };
 // the wire: one line of news under the banner, picked from what fits the mine right now (state lines count three times)
@@ -3954,8 +4097,7 @@ const minePublicRank = (g) => { let r = ''; if (!g.ipo) return r; const c = mine
 const mineRankLine = (g) => [minePublicRank(g), mineRank(g)].filter(Boolean).join(' · ');
 const mineHas = (g, id) => (g.shop[id] || 0) > 0;
 const mineLevel = (g, id) => g.shop[id] || 0;
-const mineUnitsOpen = (g) => MINE_UNITS.filter((u) => !u.need || mineHas(g, u.need));
-const mineUpgradesAll = (g) => MINE_UPGRADES.filter((up) => !up.unit || mineUnitsOpen(g).some((u) => u.id === up.unit));
+const mineUnitsOpen = (g) => mineUnitsAll(g).filter((u) => !u.need || mineHas(g, u.need));
 const mineAwayCap = (g) => [8, 16, 24, 48, 168][Math.min(4, mineLevel(g, 'shift'))] * 3600;
 const mineShopCost = (it, lvl, g) => (typeof it.cost === 'function' ? it.cost(lvl, g || mine || mineLoad()) : Array.isArray(it.cost) ? it.cost[Math.min(lvl, it.cost.length - 1)] : it.cost);   // a perk with levels can price each one; a function prices from the mine (null: nothing to buy right now)
 const mineRepeatCost = (g, base, lvl) => Math.max(Math.ceil(base * Math.pow(2, lvl)), Math.ceil(g.starsEver * 0.02));   // repeatables: doubling, never under 2% of the stars earned on this listing
@@ -4053,10 +4195,10 @@ async function mineTrade(side, qty) {   // shares for stars at the ask, stars fo
   mineSave(true); mineCheck(g); mineRefresh();
 }
 const mineAgentMult = (g) => (1 + 0.25 * mineLevel(g, 'vp')) * Math.pow(2, g.rounds);   // the agents only: VPs of engineering and this run's funding rounds
-function mineBaseRate(g) { let r = 0; for (const u of MINE_UNITS) { let m = 1; for (const up of MINE_UPGRADES) if (up.unit === u.id && g.ups.includes(up.id)) m *= up.mult; r += (g.units[u.id] || 0) * u.rate * m; } return r * mineMult(g) * mineAgentMult(g); }
+function mineBaseRate(g) { let r = 0; const mults = mineUnitMults(g); for (const u of mineUnitsAll(g)) r += (g.units[u.id] || 0) * u.rate * (mults[u.id] || 1); return r * mineMult(g) * mineAgentMult(g); }
 const mineBoostOn = (b, now = Date.now()) => !!(b && b.until > now && b.mult > 1);
 function mineRate(g) { return mineBaseRate(g) * (mineBoostOn(g.boost) ? g.boost.mult : 1); }
-function mineClickValue(g) { let v = 1, sec = 0; for (const up of MINE_UPGRADES) if (g.ups.includes(up.id)) { if (up.click) v *= up.click; if (up.clickSec) sec += up.clickSec; } return v * mineMult(g) * (1 + 0.25 * mineLevel(g, 'ergo')) * (mineBoostOn(g.clickBoost) ? g.clickBoost.mult : 1) + mineRate(g) * sec; }
+function mineClickValue(g) { let v = 1, sec = 0; for (const id of g.ups) { const up = mineUpById(g, id); if (!up) continue; if (up.click) v *= up.click; if (up.clickSec) sec += up.clickSec; } return v * mineMult(g) * (1 + 0.25 * mineLevel(g, 'ergo')) * (mineBoostOn(g.clickBoost) ? g.clickBoost.mult : 1) + mineRate(g) * sec; }
 const mineComboMult = (n, g) => 1 + Math.min(Math.max(0, n - 1), g ? mineComboCap(g) : 80) * 0.05;   // ×1 on the first click, ×3 after forty fast ones, ×5 after eighty (×6 after a hundred with the combo coach)
 const mineUnitCost = (u, n) => Math.ceil(u.cost * Math.pow(mineRatio(), n));
 const mineUnitCostN = (u, owned, n) => { const r = mineRatio(); return Math.ceil(u.cost * Math.pow(r, owned) * (Math.pow(r, n) - 1) / (r - 1)); };   // n agents in a row from `owned`
@@ -4100,9 +4242,9 @@ function mineOnEvent(sid, ev) {
 }
 function mineBuy(kind, id) {
   const g = mineAccrue();
-  if (kind === 'unit') { const u = MINE_UNITS.find((x) => x.id === id); const owned = g.units[u.id] || 0; const n = mineBuyCount(u, g); const cost = n ? mineUnitCostN(u, owned, n) : Infinity; if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = owned + n; g.hired += n; if (n >= 100) g.bigHires += 1; if (n > 1) mineNote(`hired ${fmtInt(n)} × ${u.name} for ${fmtFull(cost)} tokens`); }
+  if (kind === 'unit') { const u = mineUnitsAll(g).find((x) => x.id === id); if (!u) return; const owned = g.units[u.id] || 0; const n = mineBuyCount(u, g); const cost = n ? mineUnitCostN(u, owned, n) : Infinity; if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = owned + n; g.hired += n; if (n >= 100) g.bigHires += 1; if (n > 1) mineNote(`hired ${fmtInt(n)} × ${u.name} for ${fmtFull(cost)} tokens`); }
   else if (kind === 'ups-all') { const [bought, spent] = mineBuyAllUps(g); if (!bought) return; mineNote(`bought ${bought} upgrade${bought === 1 ? '' : 's'} for ${fmtFull(spent)} tokens`); }
-  else { const up = MINE_UPGRADES.find((x) => x.id === id); const c = up ? mineUpCost(g, up) : Infinity; if (!up || g.ups.includes(up.id) || g.bank < c) return; g.bank -= c; g.ups.push(up.id); g.upsBought += 1; if (up.unit) g.tiersBought += 1; }
+  else { const up = mineUpById(g, id); const c = up ? mineUpCost(g, up) : Infinity; if (!up || g.ups.includes(up.id) || g.bank < c) return; g.bank -= c; g.ups.push(up.id); g.upsBought += 1; if (up.unit) g.tiersBought += 1; }
   mineSave(); mineCheck(g); mineRefresh();
 }
 function mineBuyAllUps(g) {   // the cheapest open upgrade the bank covers, over and over: [how many, for how much]
@@ -4110,7 +4252,7 @@ function mineBuyAllUps(g) {   // the cheapest open upgrade the bank covers, over
   for (;;) { const next = mineUpgradesOpen(g).map((up) => [up, mineUpCost(g, up)]).filter(([, c]) => c <= g.bank).sort((a, b) => a[1] - b[1])[0]; if (!next) break; g.bank -= next[1]; g.ups.push(next[0].id); bought += 1; spent += next[1]; if (next[0].unit) g.tiersBought += 1; }
   g.upsBought += bought; return [bought, spent];
 }
-function mineUpgradesOpen(g) { return MINE_UPGRADES.filter((up) => !g.ups.includes(up.id) && (!up.need || g.ups.includes(up.need)) && (!up.unit || (g.units[up.unit] || 0) >= up.owned)); }
+function mineUpgradesOpen(g) { return mineUpgradesAll(g).filter((up) => !g.ups.includes(up.id) && (!up.need || g.ups.includes(up.need)) && (!up.unit || (g.units[up.unit] || 0) >= up.owned)); }
 function mineClick(e) {
   const g = mineAccrue(); const now = Date.now();
   mineCombo.n = now - mineCombo.at < mineComboWindow(g) ? mineCombo.n + 1 : 1; mineCombo.at = now; const cm = mineComboMult(mineCombo.n, g); if (cm > g.bestCombo) g.bestCombo = cm;
@@ -4136,7 +4278,7 @@ function mineCatch() {
   mineSave(); mineCheck(g); mineRefresh();
 }
 function mineRunReset(g) {   // what a release and going public share: the run goes, head start and keep one come back, the clock restarts
-  const keep = mineHas(g, 'keep') && MINE_UPGRADES.find((x) => x.id === g.keepUp && g.ups.includes(x.id));
+  const keep = mineHas(g, 'keep') && g.ups.includes(g.keepUp) && mineUpById(g, g.keepUp);
   g.bank = 0; g.units = {}; g.ups = []; g.boost = null; g.clickBoost = null; g.rounds = 0;
   if (mineHas(g, 'head')) { g.units.intern = 10 + 10 * mineLevel(g, 'onboard'); g.ups.push('kbd'); }
   if (keep && !g.ups.includes(keep.id)) g.ups.push(keep.id);
@@ -4150,7 +4292,7 @@ function mineRunLog(g, kind, got) {   // the last six runs, and the best time
 }
 async function mineRelease() {
   let g = mineAccrue(); const can = mineStarsDue(g); if (can < 1) return;
-  const keep = mineHas(g, 'keep') && MINE_UPGRADES.find((x) => x.id === g.keepUp && g.ups.includes(x.id));
+  const keep = mineHas(g, 'keep') && g.ups.includes(g.keepUp) && mineUpById(g, g.keepUp);
   const ok = await confirmDialog(`Cut release v${g.releases + 1}?`, `Every agent, upgrade and banked token goes. You keep ${fmtInt(can)} new star${can === 1 ? '' : 's'} (the mine goes from ×${fmtMine(Math.round(mineMult(g) * 100) / 100)} to ×${fmtMine(Math.round(mineMultWith(g, g.stars + can) * 100) / 100)}, or spend them in the star shop), the milestones, the clicks and the real-work counters. This run took ${fmtDurLong(mineRunSecs(g))}${g.bestRel ? ` (best: ${fmtDurLong(g.bestRel)})` : ''}.${mineHas(g, 'head') ? ` Head start: ${10 + 10 * mineLevel(g, 'onboard')} interns and the keyboard come straight back.` : ''}${keep ? ` Keep one: ${keep.name} survives.` : ''}`);
   if (!ok) return; g = mineAccrue(); const got = mineStarsDue(g); if (got < 1) return; g.stars += got; g.starsEver += got; g.releases += 1; mineFairBump(g, 0.03);
   mineRunLog(g, 'release', got); mineRunReset(g);
@@ -4196,13 +4338,13 @@ async function mineShopBuy(id) {   // a star (or a share) for a perk or a cosmet
   if (id === 'keep') mineKeepPick(); else if (id === 'names') toast('click an agent\'s name on the agents card to rename it', 'ok'); else if (id === 'confetti') confettiBurst();
 }
 async function mineKeepPick() {
-  const g = mineLoad(); const owned = MINE_UPGRADES.filter((up) => g.ups.includes(up.id));
+  const g = mineLoad(); const owned = g.ups.map((id) => mineUpById(g, id)).filter(Boolean);
   if (!owned.length) { toast('keep one: pick an upgrade once you own one (under "your setup" in the shop)'); return; }
   const v = await chooseDialog('Keep one: which upgrade survives every release?', owned.map((up) => [up.id, up.name, up.unit ? up.unit : 'clicks']));
-  if (!v) return; g.keepUp = v; mineSave(); mineNote(`keep one: ${MINE_UPGRADES.find((x) => x.id === v).name} survives every release`); mineRefresh();
+  if (!v) return; g.keepUp = v; mineSave(); mineNote(`keep one: ${(mineUpById(g, v) || {}).name} survives every release`); mineRefresh();
 }
 async function mineRename(id) {
-  const g = mineLoad(); const u = MINE_UNITS.find((x) => x.id === id); if (!u || !mineHas(g, 'names')) return;
+  const g = mineLoad(); const u = mineUnitsAll(g).find((x) => x.id === id); if (!u || !mineHas(g, 'names')) return;
   const v = await promptDialog(`Name your ${u.name}`, 'Shown on the agents card and in the wire. Leave it empty to put the old name back.', g.names[id] || '');
   if (v == null) return; const name = v.slice(0, 24); if (name) g.names[id] = name; else delete g.names[id]; mineSave(); mineRefresh();
 }
@@ -4329,7 +4471,7 @@ function renderFunView() {
   renderFunTabs();
   const tab = funTab(); const body = $('#fun-body'); const pane = $('#fun-game');
   body.hidden = tab !== 'mine'; pane.hidden = tab === 'mine';
-  if (tab !== 'mine') { const game = FUN_GAMES.find((x) => x.id === tab); if (pane.dataset.game !== tab) { pane.innerHTML = ''; pane.dataset.game = tab; } game.render(pane); return; }
+  if (tab !== 'mine') { const game = FUN_GAMES.find((x) => x.id === tab); if (pane.dataset.game !== tab) { pane.innerHTML = '';   /* a game's built/wired flags go with its DOM, so the next visit rebuilds */ for (const k of Object.keys(pane.dataset)) delete pane.dataset[k]; pane.dataset.game = tab; } game.render(pane); return; }
   const box = body; const g = mineAccrue();
   if (!box.dataset.built) {
     box.innerHTML = `<div class="mine">
@@ -4429,12 +4571,13 @@ function mineRefresh() {
   if (runsEl.dataset.key !== runsKey) { runsEl.dataset.key = runsKey; runsEl.innerHTML = g.runs.length ? `<span class="dim">runs</span>${g.runs.slice().reverse().map((r) => `<span title="${esc(new Date(r.at).toLocaleString())}">${r.kind === 'ipo' ? 'went public' : `v${r.v}`} · ${fmtDurLong(r.secs)} · +${fmtInt(r.got)} ${r.kind === 'ipo' ? 'share' : 'star'}${r.got === 1 ? '' : 's'}</span>`).join('')}` : ''; }
   const unitsEl = $('#mine-units'); const ukey = `${mineUnitsOpen(g).map((u) => u.id).join(',')}|${JSON.stringify(g.names)}|${mineHas(g, 'names') ? 1 : 0}`;
   if (unitsEl.dataset.key !== ukey) { unitsEl.dataset.key = ukey; unitsEl.innerHTML = mineUnitsOpen(g).map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${mineHas(g, 'names') ? `<span class="rn" data-rename="${u.id}" title="rename">${esc(mineUnitName(g, u))}</span>` : esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="nx" data-m="next"></div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join(''); }
+  const mults = mineUnitMults(g); const allUps = mineUpgradesAll(g);
   for (const u of mineUnitsOpen(g)) {
     const row = box.querySelector(`[data-unit="${u.id}"]`); const n = g.units[u.id] || 0; const cost = mineUnitCost(u, n);
-    let m = 1; for (const up of MINE_UPGRADES) if (up.unit === u.id && g.ups.includes(up.id)) m *= up.mult;
+    const m = mults[u.id] || 1;
     row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.classList.toggle('owned', n > 0);   // once hired, the blurb makes way for the next-tier line row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * m * mineMult(g) * mineAgentMult(g) * 10) / 10)}/s` : '';
     const fl = row.querySelector('[data-m="floor"]'); const floor = n ? u.glyph.repeat(Math.min(n, 60)) + (n > 60 ? ` +${fmtInt(n - 60)}` : '') : ''; if (fl.textContent !== floor) fl.textContent = floor;
-    const pend = MINE_UPGRADES.find((up) => up.unit === u.id && !g.ups.includes(up.id));   // the next tier: how many more agents it takes and how long that is at this rate
+    const pend = allUps.find((up) => up.unit === u.id && !g.ups.includes(up.id));   // the next tier: how many more agents it takes and how long that is at this rate
     const nx = row.querySelector('[data-m="next"]'); const nxText = !pend ? 'every tier bought' : n >= pend.owned ? `${pend.name} is on offer under upgrades` : `${fmtInt(pend.owned - n)} more to ${pend.name} (×${fmtInt(pend.mult)}) · ${mineEta(g, mineUnitCostN(u, n, pend.owned - n))}`; if (nx.textContent !== nxText) nx.textContent = nxText;
     const k = mineBuyCount(u, g); const costK = k ? mineUnitCostN(u, n, k) : cost;
     row.querySelector('[data-m="cost"]').textContent = k > 1 ? `×${fmtInt(k)} · ${fmtMine(costK)} tokens` : `${fmtMine(costK)} tokens`; row.querySelector('button').disabled = !k || g.bank < costK;
@@ -4474,7 +4617,7 @@ function mineRefresh() {
     const vsets = Object.keys(MINE_VERB_SETS).filter((id) => mineHas(g, `verbs-${id}`)); if (vsets.length) lines.push(`<div class="row"><span>working verbs</span>${pick('verbs', mineHas(g, `verbs-${g.cos.verbs}`) ? g.cos.verbs : '', [['', 'the usual'], ...vsets.map((id) => [id, id])])}</div>`);
     if (mineHas(g, 'pet')) lines.push(`<div class="row"><span>status bar pet</span>${pick('pet', g.cos.pet === 'blob' || mineHas(g, `pet-${g.cos.pet}`) ? g.cos.pet : '', [['', 'off'], ...Object.entries(MINE_PETS).filter(([id]) => id === 'blob' || mineHas(g, `pet-${id}`)).map(([id, p]) => [id, p.name])])}</div>`);
     if (mineHas(g, 'confetti')) lines.push(`<div class="row"><span>confetti on commit</span>${pick('confetti', g.cos.confetti ? 'on' : 'off', [['on', 'on'], ['off', 'off']])}</div>`);
-    if (mineHas(g, 'keep')) { const up = MINE_UPGRADES.find((x) => x.id === g.keepUp); lines.push(`<div class="row"><span>keep one</span><b>${up ? esc(up.name) + (g.ups.includes(up.id) ? '' : ' <span class="dim">(not owned right now)</span>') : '<span class="dim">not picked yet</span>'} <button class="link" data-mine="keep-pick">${up ? 'change' : 'pick'}</button></b></div>`); }
+    if (mineHas(g, 'keep')) { const up = mineUpById(g, g.keepUp); lines.push(`<div class="row"><span>keep one</span><b>${up ? esc(up.name) + (g.ups.includes(up.id) ? '' : ' <span class="dim">(not owned right now)</span>') : '<span class="dim">not picked yet</span>'} <button class="link" data-mine="keep-pick">${up ? 'change' : 'pick'}</button></b></div>`); }
     if (mineHas(g, 'names')) lines.push(`<div class="row"><span>names</span><b class="dim">click an agent's name on the agents card to rename it</b></div>`);
     $('#mine-setup').innerHTML = lines.length ? `<h3>your setup</h3>${lines.join('')}` : '';
   }

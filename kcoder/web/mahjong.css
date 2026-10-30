@@ -1,0 +1,30 @@
+/* Mahjong solitaire on the fun tab. The board is a fixed-size field scaled to the pane; tiles are ivory with a dark
+   side to the lower right, higher layers lifted a few px up and left so a stack reads. Free tiles are bright, blocked
+   ones sit back; the selected tile gets the accent, a hinted pair the yellow. Suit marks keep the classic colours. */
+.mj { max-width: 760px; margin: 0 auto; }
+.mj-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 10px; }
+.mj-title { font-size: 34px; font-weight: 800; line-height: 1; color: var(--accent-text); letter-spacing: -.02em; }
+.mj-scores { display: flex; gap: 6px; }
+.mj .sc { background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; min-width: 74px; text-align: center; }
+.mj .sc span { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-mute); white-space: nowrap; }
+.mj .sc b { font-size: 16px; font-variant-numeric: tabular-nums; color: var(--fg); }
+.mj-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 11.5px; }
+.mj-bar select { background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 2px 6px; }
+.mj-bar button { white-space: nowrap; } .mj-bar button:disabled { opacity: .45; cursor: default; }
+.mj-bar .mj-note { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mj-wrap { position: relative; margin: 0 auto; isolation: isolate; }   /* the tiles stack by z-index inside here only, so a dialog over the app still covers them */
+.mj-board { position: relative; isolation: isolate; transform-origin: 0 0; background: var(--bg-3); border: 1px solid var(--line-2); border-radius: 8px; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+.mj-tile { position: absolute; width: 36px; height: 48px; border-radius: 4px; background: #F5EFE0; border: 1px solid #B9AC94; box-shadow: 2px 3px 0 #A3957C, 3px 4px 5px rgba(0, 0, 0, .35); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer; color: #1B1F26; line-height: 1; font-family: var(--mono); }
+.mj-tile b { font-size: 17px; font-weight: 800; } .mj-tile i { font-style: normal; font-size: 11px; }
+.mj-tile:not(.free) { filter: brightness(.76) saturate(.7); cursor: default; }
+.mj-tile.free:hover { background: #FFFBEE; }
+.mj-tile.sel { background: #DCEEFF; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 2px 3px 0 #A3957C, 3px 4px 5px rgba(0, 0, 0, .35); }
+.mj-tile.hint { border-color: var(--yellow); box-shadow: 0 0 0 2px var(--yellow), 0 0 10px var(--yellow), 2px 3px 0 #A3957C; animation: mj-hint .45s ease-in-out 4 alternate; }
+@keyframes mj-hint { from { translate: 0 0; } to { translate: 0 -4px; } }
+.mj-tile.dot i { color: #1F5C9A; font-size: 10px; } .mj-tile.bam i { color: #2E7D32; } .mj-tile.chr i { color: #B3261E; } .mj-tile.wind i { color: #4B5A6B; }
+.mj-tile.drg b { font-size: 19px; } .mj-tile.drg.R b { color: #B3261E; } .mj-tile.drg.G b { color: #2E7D32; } .mj-tile.drg.W b { color: #1F5C9A; font-size: 22px; }
+.mj-tile.flo b { color: #C2185B; font-size: 19px; } .mj-tile.flo i { color: #C2185B; } .mj-tile.sea b { color: #B45309; font-size: 18px; } .mj-tile.sea i { color: #B45309; }
+.mj-over { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; padding: 12px; text-align: center; background: color-mix(in srgb, var(--bg) 80%, transparent); }
+.mj-over .t { font-size: 30px; font-weight: 800; color: var(--accent-text); } .mj-over .b { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 6px; }
+.mj-stats { margin-top: 10px; font-size: 11.5px; } .mj .ds { color: var(--fg-mute); font-size: 11px; margin-top: 10px; }
+@media (max-width: 560px) { .mj-head { flex-direction: column; align-items: flex-start; } .mj-bar .mj-note { margin-left: 0; width: 100%; white-space: normal; } }

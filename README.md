@@ -181,18 +181,40 @@ archive, export or delete it. Transcripts are real text: select across
 messages, ⌘C copies clean markdown, ⌘F finds in a session, ⌘⇧F searches all
 of them, and files dropped on a pane attach to the prompt.
 
-**Achievements.** The stats page keeps a badge wall: tokens (First Chair
-10M up to Space Station 50B, Powder Day and Avalanche for a single day),
-commits (Dropped In to Lifer, Double Digits and Ripper in a day), lines
-(Bulldozer to Megaproject, Big Air, Marie Kondo, Clear-Cut), API
-equivalent (Whale, Big Spender Day, Ten-K Club, Season Pass Paid Off, Fund
-Manager, "paid for itself" 10×/50×/100× against the plan price in Settings),
-agent time, sessions, streaks (Bluebird 7 days, Season Pass 30 days), habits
-(Dawn Patrol, Night Shift, Long Haul, Three-Man Rope Team, Hands Off, Clean
-Line, Diamond Hands, Gas Saver) and a few secret ones that appear once
-earned. Every badge is backfilled from history with the day it was earned;
-"next up" shows the three closest to unlocking with progress bars; the
-Powder Day record (biggest token day) is earned again each time it is beaten.
+**Progression.** A game that does not end, under the stats page's
+**badges** tab and in the status bar. **Levels**: XP from tokens (1 per
+100k), commits (30 each), lines changed (1 per 20) and merged PRs (250
+each), so shipping beats token burn; every level needs more XP than the
+last (60 × level^1.25) and there is no cap; the status bar shows the level
+with the bar to the next one. **Tiered badges**: 31 badges (Summit, Powder
+Day, Gas Saver, Shipping, Ripper, Merged, Upstream, Bulldozer, Clear-Cut,
+Big Day, Big Air, Marie Kondo, Fund Manager, Whale, Paid for itself,
+Hundred Hours, Full Shift, Long Haul, The Fleet, Ten Agents, Rope Team,
+Diamond Hands, Marathon, Toolsmith, Bluebird, Shipping Streak, Hands Off,
+Clean Line, Dawn Patrol, Night Shift, Weekend Warrior), each with bronze,
+silver, gold, platinum and diamond tiers about ten times apart, sized so
+diamond takes months at a heavy pace. Earned badges sit in one dense row of
+chips coloured by tier (hover for the tier, the day and the next target);
+**show the full wall** opens every badge with its five pips and progress
+bar. **Seasons**: a month each, with its own set of eight badges drawn
+from a pool (tokens, commits, lines, agent hours, sessions, active days,
+repos, a shipping streak, a big day, weekend commits, early and late
+commits, pushed commits, clean sessions) and scaled to your pace before the
+month, a season rank (bronze to diamond) from the XP earned in the month,
+and an archive of past seasons you can open. **Quests**: three a day and
+one a week, drawn at local midnight from your real repos and the last two
+weeks ("12 commits in skatedex-mobile-app", "a session of 10+ turns in
+kcoder", "commits in 3 repos today", "push a commit", "a commit before
+noon"...), each worth a little XP. **Shipping streak**: a commit a day, with
+one freeze a week that covers a missed day by itself. **Personal records**:
+best day for tokens, commits and lines, the longest session and the most
+sessions at once; a toast when one falls. **Secret badges**: ten that show
+as ??? until unusual behaviour unlocks them. Everything but the quests is
+backfilled from history, so a fresh install starts with its levels, tiers,
+records and streak already earned. Toasts never stack: one shows at a time,
+and several unlocks at once (a level, tiers, quests, records, secrets)
+share one toast with a button to the badges tab. The overview tab's **next
+up** strip shows the three closest unlocks, quests and records.
 
 **Share a session.** **export** on a pane (or `kcoder export <session>
 -o chat.html`) writes one self-contained HTML page: title, project, branch,
@@ -314,10 +336,15 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   trust level and it starts as soon as a slot is free, in its own worktree.
   Finished tasks land in **review**; nothing is pushed on its own. Schedules
   live here too (see [Automation](#automation)).
-- **Stats** (alt+3): pick the period at the top (today, 7, 30 or 90 days, all
-  time, or any single day from the date picker, the daily table or the
-  calendar) and every number on the page follows it, with today, 7-day,
-  30-day and all-time figures alongside: tokens, lines of code
+- **Stats** (alt+3): four tabs. **Overview** fits a laptop screen with no
+  scrolling: the next-up strip, the level, the shipping streak, the season,
+  today's quests, the six headline numbers and one chart. **Badges** is the
+  progression described above (levels, tiers, seasons, quests, streak,
+  records, secrets). **Fun** holds the just-for-fun card and kcoder
+  Wrapped. **History** is everything else: pick the period at the top
+  (today, 7, 30 or 90 days, all time, or any single day from the date
+  picker, the daily table or the calendar) and every number follows it,
+  with today, 7-day, 30-day and all-time figures alongside: tokens, lines of code
   (added, removed, net, files), commits, sessions, active agent time and an
   API-equivalent estimate of what plan usage would have cost; daily token and
   lines charts; breakdowns by model (aliases merged, with fresh input, cache
@@ -410,7 +437,15 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   Milestones come in families that always have a next chip (every
   thousandfold of tokens mined, releases, commits, turns, clicks, stars,
   sprints, streaks, perfect days, weeks, listings, shares, trades, the
-  share price since listing, the market cap and agents).
+  share price since listing, the market cap and agents). The mine cannot be
+  beaten: past the open-source fork a new agent appears every time the last
+  one is hired (the second universe, the time loop, the Dyson sphere... and
+  round again with numerals), each 25 times the price and 12 times the rate
+  of the one before; past a thousand of any agent a ×10 tier shows up every
+  hundred more (beyond the singularity, the recursion, the heat death...);
+  past a thousand hands the next thousand-fold click upgrade costs ten
+  thousand times the last; and the total family runs on past a vigintillion
+  by powers of ten to the edge of what a number can hold.
   The rank (token miner, foreman, pit boss, token baron... the multiverse,
   the omniverse, the simulation, the heat death, the reboot and on by
   powers of ten) follows stars ever earned over every listing, with a
@@ -436,6 +471,19 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   count the first game, the best tile (2048 to 32768) and the best score
   (five figures to a million). Games, wins, best score and best tile sit on
   the stats page next to the mine and travel with the mine's save.
+  **Mahjong solitaire**: clear the board two matching free tiles at a time
+  (a tile is free when nothing lies on it and its left or right side is
+  open; any season matches any season, any flower any flower). 144 tiles on
+  the classic turtle or the pyramid, fortress, bridge or arena; every deal
+  is built in reverse removal order so it can always be cleared; the
+  **daily deal** is the same all day. H hints a pair, U undoes (free, but
+  noted), S shuffles the rest for a 60-second penalty, N deals again; a
+  timer, tiles left and pairs free sit above the board, which scales to a
+  phone. A cleared board pays a sprint unit of stars into the mine, the
+  daily deal two, a new best time on a layout one more; the mine's
+  milestones count boards cleared (one to 250) and daily deals (one, a
+  week, a month). Deals, boards cleared, best time and daily deals show on
+  the stats page's fun tab.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, the weekly plan
   limit (token limit, reset day and hour, quota shift), plus links to your

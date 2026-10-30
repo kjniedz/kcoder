@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 
-from . import achievements, identity, paths, repos
+from . import achievements, identity, paths, progression, repos
 
 log = logging.getLogger("kcoder.stats")
 
@@ -128,7 +128,7 @@ def session_facts(sid: str) -> dict:
     filter by date window."""
     path = os.path.join(paths.SESSIONS_DIR, sid, "events.jsonl")
     sig = _sig(path)
-    empty = {"turns": [], "tools": [], "waits": [], "interrupts": [], "undos": [], "compactions": []}
+    empty = {"turns": [], "tools": [], "waits": [], "interrupts": [], "undos": [], "compactions": [], "merges": []}
     if sig is None:
         return empty
     with _lock:
@@ -166,6 +166,8 @@ def session_facts(sid: str) -> dict:
                 wait_since = None
         elif t == "history_reset":
             f["undos"].append(ts)
+        elif t == "git" and str(ev.get("text") or "").startswith("merged "):
+            f["merges"].append(ts)
         elif t == "compaction":
             f["compactions"].append(ts)
     for cid, (ts, name) in calls.items():      # calls that never got a result (crash, interrupt)
@@ -474,7 +476,31 @@ def header_stats() -> dict:
         "commits_today": sum(1 for r in my_commit_rows() if r.get("date") == t),
         "week_tokens": [tokens[d] for d in reversed(week)],
         "week_dates": list(reversed(week)),
+        "level": _level_lite(),
     }
+
+
+_level_thread: list = []
+
+
+def _level_lite() -> dict | None:
+    """The status bar's level: nothing until the full computation has run once
+    (in a thread, so the loop never waits on it and the bar never shows a
+    cheaper count's level), then the cheap delta on top of that."""
+    if not progression.has_full():
+        if not _level_thread:
+            def run():
+                try:
+                    progress()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("progression failed: %s", exc)
+                finally:
+                    _level_thread.clear()
+            t = threading.Thread(target=run, name="kcoder-progression", daemon=True)
+            _level_thread.append(t)
+            t.start()
+        return None
+    return progression.lite(usage_rows(), my_commit_rows())
 
 
 def _median(xs: list) -> float:
@@ -840,6 +866,8 @@ def full(days: int = 30, date: str | None = None, start: str | None = None, end:
         "most_lines_day": {"date": most_lines["date"], "lines": most_lines["lines"]} if most_lines and most_lines["lines"] else None,
     }
 
+    prog = progression.compute(all_days, facts, metas, commits, first_date, t, _cfg_plan_price())
+    progression.remember(usage, my_commit_rows(), prog["level"])
     return {
         "days": days,
         "date": date,
@@ -866,6 +894,7 @@ def full(days: int = 30, date: str | None = None, start: str | None = None, end:
         "health": health,
         "records": records,
         "achievements": achievements.compute(all_days, facts, metas, commits, first_date, t, _cfg_plan_price()),
+        "progression": prog,
         "generated": now,
     }
 
@@ -873,6 +902,12 @@ def full(days: int = 30, date: str | None = None, start: str | None = None, end:
 CSV_COLUMNS = ["date", "input", "fresh", "cache_read", "cache_write", "output", "total", "calls", "sessions", "commits",
                "insertions", "deletions", "net", "files", "active_seconds", "cost", "api_equivalent", "pushed", "unpushed"]
 _CSV_MONEY = {"cost", "api_equivalent"}
+
+
+def progress() -> dict:
+    """The progression alone (levels, tiers, quests, streak, records, season):
+    what the app polls for unlock toasts between visits to the stats page."""
+    return full(days=1)["progression"]
 
 
 def csv_export(days: int = 30, date: str | None = None, start: str | None = None, end: str | None = None) -> dict:
