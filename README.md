@@ -138,8 +138,8 @@ want built, and watch it work.
 field (the command palette, ⌘K), the **inbox** with a badge for everything
 waiting on you, and **+ new**. That is all the header ever holds. Everything
 informational sits in the one-line **status bar** at the bottom: daemon
-status, active sessions, tokens and commits today, the 7-day sparkline, your
-Claude plan status and the version. Each item clicks through to the right
+status, active sessions, tokens and commits today, your Claude plan status
+and the version. Each item clicks through to the right
 place.
 
 ### Sessions

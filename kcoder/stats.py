@@ -462,19 +462,9 @@ def _dates_back(n: int) -> list:
 
 
 def header_stats() -> dict:
-    """The cheap numbers for the header strip: commits today and 7-day tokens."""
-    week = _dates_back(7)
-    tokens = {d: 0 for d in week}
-    for r in usage_rows():
-        d = r.get("date")
-        if d in tokens:
-            tokens[d] += int(r.get("input") or 0) + int(r.get("output") or 0)
+    """The cheap numbers for the status bar: commits today."""
     t = today()
-    return {
-        "commits_today": sum(1 for r in my_commit_rows() if r.get("date") == t),
-        "week_tokens": [tokens[d] for d in reversed(week)],
-        "week_dates": list(reversed(week)),
-    }
+    return {"commits_today": sum(1 for r in my_commit_rows() if r.get("date") == t)}
 
 
 def _median(xs: list) -> float:

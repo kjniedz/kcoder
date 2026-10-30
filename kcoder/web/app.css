@@ -114,8 +114,6 @@ a { color: var(--accent-text); }
 .statusbar .status-item.warn, .statusbar .status-item.warn b { color: var(--yellow); }
 .statusbar .status-item.bad, .statusbar .status-item.bad b { color: var(--red); }
 .statusbar .status-item.dim { color: var(--fg-mute); }
-.statusbar .spark svg { display: block; }
-.statusbar .spark rect { fill: var(--accent); }
 .statusbar .sep { color: var(--line-2); padding: 0 2px; }
 
 /* ---- main ---- */
@@ -510,8 +508,6 @@ button.badge.error { border: none; cursor: pointer; font: inherit; font-size: 10
 /* ---- header stats ---- */
 .stats .stat { background: none; border: none; cursor: pointer; padding: 0 2px; font: inherit; }
 .stats .stat:hover b, .stats .stat:hover span { color: var(--accent-text); }
-.spark { display: block; }
-.spark rect { fill: var(--accent); opacity: .85; }
 
 /* ---- stats view ---- */
 .statsview { flex-direction: column; }
@@ -622,7 +618,7 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .stats { flex: 0 1 auto; overflow: hidden; }
 .tools { flex: 0 0 auto; }
 @media (max-width: 1100px) { .banner.compact { display: none; } .wordmark { display: inline; } }
-@media (max-width: 760px) { .omni { flex-basis: 150px; } .statusbar .spark, .statusbar .status-item.dim { display: none; } }
+@media (max-width: 760px) { .omni { flex-basis: 150px; } .statusbar .status-item.dim { display: none; } }
 
 /* ---- github step in the setup dialog ---- */
 .dialog .label-h { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; border-top: 1px solid var(--line); padding-top: 10px; }

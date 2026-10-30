@@ -664,13 +664,10 @@ function renderStatusBar() {
   const st = state.stats || {};
   const today = st.today || {};
   const tokens = (today.input || 0) + (today.output || 0);
-  const wk = st.week_tokens || []; const mx = Math.max(1, ...wk);
-  const spark = `<svg viewBox="0 0 ${Math.max(1, wk.length) * 6} 12" width="${Math.max(1, wk.length) * 6}" height="12" aria-label="tokens, last 7 days">${wk.map((v, i) => { const h = Math.max(1, Math.round(v / mx * 11)); return `<rect x="${i * 6}" y="${12 - h}" width="4" height="${h}" rx="1"><title>${esc((st.week_dates || [])[i] || '')}: ${fmtInt(v)} tokens</title></rect>`; }).join('')}</svg>`;
   const items = [
     `<button class="status-item${st.cap_reached ? ' bad' : ''}" data-go="sessions" title="live sessions · open the sessions grid"><b>${st.sessions || 0}</b> active${st.cap_reached ? ' · paused (daily cap)' : ''}</button>`,
     `<button class="status-item" data-go="stats:tokens" title="tokens today · open stats"><b>${fmtTokens(tokens)}</b> tokens today</button>`,
     `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'} today</button>`,
-    `<button class="status-item spark" data-go="stats:tokens" title="tokens, last 7 days · open stats">${spark}</button>`,
   ];
   const qm = quotaItemHtml(st.quota); if (qm) items.push(qm);
   const up = st.update || {};
