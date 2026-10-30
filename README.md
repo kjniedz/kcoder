@@ -452,14 +452,19 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   the stats page next to the mine and travel with the mine's save.
   **Mahjong solitaire**: clear the board two matching free tiles at a time
   (a tile is free when nothing lies on it and its left or right side is
-  open; any season matches any season, any flower any flower). 144 tiles on
-  the classic turtle or the pyramid, fortress, bridge or arena; every deal
-  is built in reverse removal order so it can always be cleared; the
-  **daily deal** is the same all day. H hints a pair, U undoes (free, but
+  open; any season matches any season, any flower any flower). Three
+  difficulties, each with its own layouts and tile set: **easy** is 72 tiles
+  of two suits on the garden, steps or cross, **medium** 108 of three suits
+  on the ridge, plaza or tower, **hard** the whole set of 144 on the classic
+  turtle or the pyramid, fortress, bridge or arena; a smaller board has
+  fewer kinds, each four deep, so matches come easier. Every deal is built
+  in reverse removal order so it can always be cleared; the **daily deal**
+  is the same all day. H hints a pair, U undoes (free, but
   noted), S shuffles the rest for a 60-second penalty, N deals again; a
   timer, tiles left and pairs free sit above the board, which scales to a
-  phone. A cleared board pays a sprint unit of stars into the mine, the
-  daily deal two, a new best time on a layout one more; the mine's
+  phone. A cleared board on medium pays a sprint unit of stars into the
+  mine, easy half that, hard double; the daily deal pays twice, a new best
+  time on a layout a unit more; the mine's
   milestones count boards cleared (one to 250) and daily deals (one, a
   week, a month). Deals, boards cleared, best time and daily deals show on
   the stats page next to the mine.
