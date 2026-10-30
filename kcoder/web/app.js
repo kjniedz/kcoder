@@ -66,8 +66,6 @@ const state = {
   statsDays: Number(localStorage.getItem('kcoder.statsDays') || 30),   // 1 = today, 0 = all time
   statsDate: null,            // a single day picked in the stats view (YYYY-MM-DD)
   statsMetric: null,
-  statsTab: localStorage.getItem('kcoder.statsTab') || 'overview',   // overview | badges | fun | history
-  statsWall: false,   // badges: the full wall is open
   statsSort: { key: 'date', dir: -1 },
   recapShown: new Map(),   // sid -> when the "where we left off" card was last shown in this app run
   recaps: new Map(),       // sid -> the recap on screen
@@ -227,7 +225,7 @@ async function onConnected() {
   }
   applyUrlParams();
   setTimeout(maybeMorningBrief, 1500);
-  setTimeout(maybeWrapped, 4000); setTimeout(progressCheck, 6000);
+  setTimeout(maybeWrapped, 4000);
   for (const sid of state.sessions.keys()) loadEvents(sid, 80);
   for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1);
   if (state.sid && !state.events.has(state.sid)) await loadEvents(state.sid, -1);
@@ -320,7 +318,7 @@ function onEvent(sid, ev) {
   if (ev.t === 'history_reset') { loadEventsFresh(sid); return; }
   if (ev.t === 'git') { state.gitInfo.set(sid, ev); }
   if (ev.t === 'turn_end') { const s = state.sessions.get(sid); if (s && s.project && s.project.git) gitStatus(sid, false).catch(() => {}); }
-  if (ev.t === 'usage' || (ev.t === 'git' && ev.commit)) { mineOnEvent(sid, ev); progressSoon(); }
+  if (ev.t === 'usage' || (ev.t === 'git' && ev.commit)) mineOnEvent(sid, ev);
   store.list.push(ev);
   if (store.list.length > 3000) store.list.splice(0, store.list.length - 3000);
   if (ev.t === 'approval_request' && state.dialog === 'inbox') renderInbox();
@@ -674,7 +672,6 @@ function renderStatusBar() {
     `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'} today</button>`,
     `<button class="status-item spark" data-go="stats:tokens" title="tokens, last 7 days · open stats">${spark}</button>`,
   ];
-  const lv = st.level; if (lv && lv.level) items.push(`<button class="status-item level" data-go="stats:badges" title="level ${lv.level} · ${fmtInt(lv.into)} of ${fmtInt(lv.need)} XP to level ${lv.level + 1} · open the badges"><b>Lv ${lv.level}</b><span class="lvbar"><i style="width:${Math.round(lv.pct * 100)}%"></i></span></button>`);
   const qm = quotaItemHtml(st.quota); if (qm) items.push(qm);
   const up = st.update || {};
   if (st.restarting) items.push(`<span class="status-item warn">restarting kcoderd…</span>`);
@@ -1692,7 +1689,6 @@ async function slashCommand(sid, line) {
 const COND_STALE = 12 * 3600;
 function onConditions(msg) {
   const prev = state.conditions; state.conditions = msg;
-  if (prev && JSON.stringify(prev.unlocks || {}) !== JSON.stringify(msg.unlocks || {})) progressSoon();   // a new secret badge
   renderConditions();
 }
 function condReduced() { return matchMedia('(prefers-reduced-motion: reduce)').matches; }
@@ -2765,8 +2761,7 @@ function tokenGate(msg) {
 // ----------------------------------------------------------------------
 // notifications, sound, toasts
 // ----------------------------------------------------------------------
-// toasts never stack: one shows at a time and the rest wait their turn (a repeat of the one showing or waiting is dropped);
-// unlocks (a level, a badge tier, a secret, a quest, a record, a streak) share one toast that grows while it waits or shows
+// toasts never stack: one shows at a time and the rest wait their turn (a repeat of the one showing or waiting is dropped)
 const toastQueue = []; let toastShowing = null;
 function toast(text, kind = '', action = null) {
   const blocked = /GitHub is (not )?connected|Connect GitHub/i.test(text) && /block/i.test(text);
@@ -2779,15 +2774,7 @@ function toastPump() {
   const t = toastQueue.shift(); const el = document.createElement('div'); el.className = 'toast ' + t.kind; el.appendChild(document.createTextNode(t.text));
   const done = () => { if (toastShowing && toastShowing.el === el) toastShowing = null; el.remove(); toastPump(); };
   if (t.action) { const b = document.createElement('button'); b.textContent = t.action.label; b.className = 'primary'; b.style.marginLeft = '8px'; b.onclick = (e) => { e.stopPropagation(); done(); t.action.run(); }; el.appendChild(b); }
-  $('#toasts').appendChild(el); toastShowing = { ...t, el }; el.onclick = done; setTimeout(done, t.action ? 12000 : t.kind === 'unlock' ? 9000 : 5000);
-}
-const unlockText = (parts) => (parts.length === 1 ? parts[0] : `${parts.length} at once: ${parts.join(' · ')}`);
-function unlockToast(parts) {
-  if (!parts.length) return;
-  const grow = (t) => { t.parts.push(...parts); t.text = unlockText(t.parts); if (t.el) t.el.firstChild.textContent = t.text; };
-  const waiting = toastQueue.find((t) => t.kind === 'unlock'); if (waiting) { grow(waiting); return; }
-  if (toastShowing && toastShowing.kind === 'unlock') { grow(toastShowing); return; }
-  toastQueue.push({ text: unlockText(parts), kind: 'unlock', parts: parts.slice(), action: { label: 'badges', run: () => openStats(null, 'badges') } }); toastPump();
+  $('#toasts').appendChild(el); toastShowing = { ...t, el }; el.onclick = done; setTimeout(done, t.action ? 12000 : 5000);
 }
 let audioCtx = null;
 function ping(kind) {
@@ -2974,7 +2961,7 @@ $('#statusbar').addEventListener('click', (e) => {
   if (e.target.closest('[data-upd]')) { updateNow(); return; }
   const b = e.target.closest('[data-go]'); if (!b) return;
   const [where, metric] = b.dataset.go.split(':');
-  if (where === 'sessions') setLayout('grid'); else if (where === 'stats') { if (['badges', 'fun', 'history', 'overview'].includes(metric)) openStats(null, metric); else openStats(metric, 'overview'); }
+  if (where === 'sessions') setLayout('grid'); else if (where === 'stats') openStats(metric);
 });
 $('#btn-version').addEventListener('click', () => settingsDialog());
 $('#btn-claude').addEventListener('click', () => claudeDialog());
@@ -3401,33 +3388,7 @@ function paintFind(pane) {
 // stats view
 // ----------------------------------------------------------------------
 let statsData = null;
-function openStats(metric, tab) { state.statsMetric = metric || null; if (tab) { state.statsTab = tab; localStorage.setItem('kcoder.statsTab', tab); } statsData = null; setView('stats'); }
-// ---- progression: what the app remembers of the last look at it, so the next look can say what is new (the first look
-// only remembers: a backfill is not news). Polled after turns and commits, every ten minutes, and on the stats page ----
-let progressTimer = null, progressBusy = false;
-const RECORD_LABELS = { tokens_day: 'most tokens in a day', commits_day: 'most commits in a day', lines_day: 'most lines in a day', longest_session: 'longest session', most_at_once: 'most sessions at once' };
-const fmtRecord = (k, v) => (k === 'tokens_day' ? fmtTokens(v) : k === 'longest_session' ? fmtDur(v) : fmtInt(Math.round(v)));
-function progressNote(P) {
-  if (!P || !P.level) return;
-  let seen = null; try { seen = JSON.parse(localStorage.getItem('kcoder.progressSeen') || 'null'); } catch {}
-  const now = { level: P.level.level, tiers: Object.fromEntries(P.tiers.map((b) => [b.id, b.tier])), secrets: P.secrets.filter((x) => x.earned).map((x) => x.id),
-    quests: [...P.quests.daily, P.quests.weekly].filter((q) => q.done).map((q) => `${q.done}:${q.id}`), records: Object.fromEntries(Object.entries(P.records).map(([k, r]) => [k, r ? r.value : 0])),
-    streak: P.streak.current, season: `${P.season.key}:${P.season.rank || ''}` };
-  localStorage.setItem('kcoder.progressSeen', JSON.stringify(now));
-  if (!seen || !seen.tiers) return;
-  const parts = [];
-  if (now.level > seen.level) parts.push(`level ${now.level}`);
-  for (const b of P.tiers) if ((seen.tiers[b.id] || 0) < b.tier) parts.push(`${b.name} ${b.tier_name}`);
-  for (const x of P.secrets) if (x.earned && !seen.secrets.includes(x.id)) parts.push(`secret badge: ${x.name}`);
-  for (const q of [...P.quests.daily, P.quests.weekly]) if (q.done && !seen.quests.includes(`${q.done}:${q.id}`)) parts.push(`quest done: ${q.text} (+${q.xp} XP)`);
-  for (const [k, r] of Object.entries(P.records)) if (r && (seen.records[k] || 0) > 0 && r.value > seen.records[k]) parts.push(`new record: ${RECORD_LABELS[k]} (${fmtRecord(k, r.value)})`);
-  if (P.season.rank && seen.season.startsWith(P.season.key + ':') && now.season !== seen.season) parts.push(`season rank: ${P.season.rank}`);
-  if (now.streak > seen.streak && [3, 7, 14, 30, 50, 100, 200, 365].includes(now.streak)) parts.push(`shipping streak: ${now.streak} days`);
-  unlockToast(parts);
-}
-async function progressCheck() { if (progressBusy || !state.connected) return; progressBusy = true; try { progressNote((await request('progress')).progression); } catch {} progressBusy = false; }
-function progressSoon() { clearTimeout(progressTimer); progressTimer = setTimeout(progressCheck, 15000); }
-setInterval(() => { if (state.connected && !document.hidden) progressCheck(); }, 10 * 60 * 1000);
+function openStats(metric) { state.statsMetric = metric || null; statsData = null; setView('stats'); }
 const fmtDur = (sec) => { sec = Math.round(sec || 0); if (sec < 60) return sec + 's'; const m = Math.round(sec / 60); if (m < 60) return m + 'm'; const h = Math.floor(m / 60); return `${h}h ${m % 60}m`; };
 const fmtDate = (d) => { if (!d) return ''; const t = new Date(d + 'T00:00:00'); return isNaN(t) ? d : t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + (t.getFullYear() !== new Date().getFullYear() ? ' ' + t.getFullYear() : ''); };
 const fmtPct = (x) => `${Math.round((x || 0) * 100)}%`;
@@ -3561,8 +3522,7 @@ async function renderStatsView(force) {
   // the ones on screen right now), the Wrapped-style equivalent for the period, the secret badges and the arcade
   const vc = Object.entries(verbCountsBest()).sort((a, b) => b[1] - a[1]);
   const lh = vc.filter(([v]) => LONG_HAUL_VERBS.includes(v)), topV = vc.filter(([v]) => !LONG_HAUL_VERBS.includes(v)).slice(0, 6);
-  const PR = d.progression || { level: {}, tiers: [], secrets: [], streak: {}, records: {}, quests: { daily: [], weekly: null }, season: { badges: [] }, seasons: [], next_up: [] };
-  const secret = PR.secrets.filter((b) => b.earned);
+  const secret = ((d.achievements || {}).badges || []).filter((b) => b.hidden && b.earned);
   const latestWrapped = ((d.wrapped || {}).cards || [])[0];
   const chips = (list, cls = '') => `<div class="verbs">${list.map(([v, n]) => `<span class="${cls}">${esc(v)}<b>${fmtInt(n)}</b></span>`).join('')}</div>`;
   const mg = mineLoad(); const arc = mg.arcade || {};
@@ -3571,51 +3531,24 @@ async function renderStatsView(force) {
     <div class="fun-verbs"><div class="lbl">most-shown verbs this month <span class="dim">· counted in this browser</span></div>${topV.length ? chips(topV) : '<div class="dim">none counted yet: they show in the status line while a session works</div>'}</div>
     ${lh.length ? `<div class="fun-verbs"><div class="lbl">long hauls <span class="dim">· verbs past ten minutes</span></div>${chips(lh, 'lh')}</div>` : ''}
     ${rec(`${P} is`, S.fun ? esc(S.fun) : null)}
-    ${rec('secret badges', secret.length ? `${secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ')} <span class="dim">· ${PR.secrets_total - secret.length} still hidden</span>` : `<span class="dim">none found yet · ${PR.secrets_total || 10} hidden</span>`)}
+    ${rec('secret badges', secret.length ? secret.map((b) => `<span title="${esc(b.desc)}">${esc(b.name)}</span>`).join(' · ') : '<span class="dim">none found yet</span>')}
     ${rec('token mine', `${fmtFull(mg.bank)} tokens banked · ${fmtMine(Math.round(mineRate(mg) * 10) / 10)}/s${mg.starsEver ? ` · ${fmtInt(mg.stars)} star${mg.stars === 1 ? '' : 's'}${mg.spent ? ` (${fmtInt(mg.starsEver)} earned)` : ''}` : ''}${mg.shares ? ` · ${fmtInt(mg.shares)} share${mg.shares === 1 ? '' : 's'} at ${fmtPx(mg.px)}` : ''}${mineRankLine(mg) ? ` · rank: ${esc(mineRankLine(mg))}` : ''} <span class="dim">· <button class="link" data-go-fun>open the fun tab</button></span>`)}
     ${(arc.t2048 || {}).played ? gameRow('2048', '2048', `best ${fmtInt(arc.t2048.best)} · best tile ${fmtInt(arc.t2048.bestTile)} · ${fmtInt(arc.t2048.played)} game${arc.t2048.played === 1 ? '' : 's'} · ${fmtInt(arc.t2048.wins)} win${arc.t2048.wins === 1 ? '' : 's'}${arc.t2048.stars ? ` · ${fmtInt(arc.t2048.stars)} stars to the mine` : ''}`) : ''}
     ${(arc.mahjong || {}).played ? gameRow('mahjong', 'mahjong', `${fmtInt(arc.mahjong.played)} deal${arc.mahjong.played === 1 ? '' : 's'} · ${fmtInt(arc.mahjong.wins)} win${arc.mahjong.wins === 1 ? '' : 's'}${Object.keys(arc.mahjong.bestTime || {}).length ? ` · best ${fmtDur(Math.min(...Object.values(arc.mahjong.bestTime)))}` : ''}${arc.mahjong.stars ? ` · ${fmtInt(arc.mahjong.stars)} stars to the mine` : ''}`) : ''}
     <div class="row"><span>${latestWrapped ? `<button class="link" data-wrapped="${esc(latestWrapped.key)}">latest Wrapped: ${esc(wrappedPeriodLabel(latestWrapped))}</button>` : '<span class="dim">no Wrapped card yet</span>'}</span></div></div>`;
-  // progression: levels, the tiered badges, the season, quests, the shipping streak, records and the secrets
-  const fmtTier = (fmt, v) => ({ tokens: fmtTokens, int: fmtCompact, usd: fmtUsd, dur: fmtDur, days: (x) => `${Math.round(x)} day${Math.round(x) === 1 ? '' : 's'}`, pct: fmtPct, x: (x) => `${Math.round(x * 10) / 10}×` }[fmt] || fmtCompact)(v);
-  const bar = (p, cls = '') => `<div class="abar ${cls}"><i style="width:${Math.round(Math.min(1, p) * 100)}%"></i></div>`;
-  const L = PR.level || {};
-  const levelCard = (full) => `<div class="card level"><h3>level</h3><div class="big">Lv ${fmtInt(L.level || 1)}</div>${bar(L.pct || 0, 'lv')}
-    <div class="row"><span>${fmtInt(L.into || 0)} of ${fmtInt(L.need || 0)} XP to Lv ${fmtInt((L.level || 1) + 1)}</span><b>+${fmtInt(L.today_xp || 0)} today</b></div>
-    ${full ? `<div class="row"><span>XP all time</span><b>${fmtInt(L.xp || 0)}</b></div>${Object.entries(L.sources || {}).map(([k, v]) => `<div class="row"><span>from ${({ tokens: 'tokens (1 per 100k)', commits: 'commits (30 each)', lines: 'lines (1 per 20)', merges: 'merged PRs (250 each)', quests: 'quests', seasons: 'season badges (200 each)' })[k] || k}</span><b>${fmtInt(v)}</b></div>`).join('')}` : ''}</div>`;
-  const ST = PR.streak || {};
-  const streakCard = (full) => `<div class="card streak"><h3>shipping streak</h3><div class="big">${fmtInt(ST.current || 0)} day${ST.current === 1 ? '' : 's'}${ST.today_done ? ' <span class="ok" title="a commit today">✓</span>' : ' <span class="dim" title="no commit yet today">· today open</span>'}</div>
-    <div class="row"><span>one freeze a week</span><b>${ST.freeze_left ? '<span class="ok">ready</span>' : '<span class="warn">used</span>'}</b></div>
-    <div class="row"><span>longest</span><b>${fmtInt(ST.longest || 0)} days</b></div>${full ? `<div class="row"><span>days with a commit</span><b>${fmtInt(ST.commit_days || 0)}</b></div><div class="row"><span>frozen days</span><b>${(ST.frozen || []).length ? ST.frozen.map(fmtDate).join(', ') : '<span class="dim">none yet</span>'}</b></div>` : ''}</div>`;
-  const SE = PR.season || { badges: [] };
-  const seasonCard = (full) => `<div class="card season"><h3>season <span class="dim">· ${esc(SE.name || '')}</span></h3><div class="big">${SE.rank ? `<span class="tier ${SE.rank}">★</span> ${esc(SE.rank)}` : '<span class="dim">unranked</span>'}</div>
-    ${bar(SE.next_rank ? SE.xp / SE.next_rank.xp : 1, SE.rank || '')}<div class="row"><span>${fmtInt(SE.xp || 0)} XP${SE.next_rank ? ` · ${esc(SE.next_rank.name)} at ${fmtInt(SE.next_rank.xp)}` : ' · top rank'}</span><b>${SE.days_left}d left</b></div>
-    <div class="row"><span>season badges</span><b>${SE.earned || 0} of ${SE.total || 0}</b></div>
-    ${full ? `<div class="sbadges">${(SE.badges || []).map((b) => `<div class="sb${b.earned ? ' on' : ''}" title="${esc(b.text)} · ${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.n)}"><span>${b.earned ? '★' : '☆'} ${esc(b.text)}</span>${bar(b.progress)}</div>`).join('')}</div>` : ''}</div>`;
-  const Q = PR.quests || { daily: [], weekly: null };
-  const questRow = (q, tag) => q ? `<div class="quest${q.done ? ' on' : ''}"><div class="qh"><span>${tag ? `<span class="tag">${tag}</span>` : ''}${esc(q.text)}</span><b>${q.done ? `✓ +${q.xp} XP` : `${fmtTier(q.fmt || 'int', q.value || 0)} of ${fmtTier(q.fmt || 'int', q.n)} · ${q.xp} XP`}</b></div>${q.done ? '' : bar(q.progress || 0)}</div>` : '';
-  const questsCard = (full) => `<div class="card quests"><h3>quests <span class="dim">· new ones at midnight</span></h3>${Q.daily.map((q) => questRow(q)).join('')}${questRow(Q.weekly, 'week')}
-    ${full && Q.yesterday ? `<div class="label-h">yesterday</div>${Q.yesterday.map((q) => `<div class="row"><span>${esc(q.text)}</span><b>${q.done ? `<span class="ok">done · +${q.xp} XP</span>` : '<span class="dim">missed</span>'}</b></div>`).join('')}` : ''}</div>`;
-  const nextKind = { badge: 'badge', quest: 'quest', record: 'record' };
-  const nextUp = (PR.next_up || []).map((c) => `<div class="next"><div class="nh"><b><span class="tag ${c.kind}">${nextKind[c.kind]}</span>${esc(c.name)}</b><span class="dim" title="${esc(c.desc)}">${esc(c.desc)}</span></div>${bar(c.progress)}<div class="nv"><span>${fmtTier(c.fmt, c.value)} of ${fmtTier(c.fmt, c.target)}</span><span class="dim">${Math.round(c.progress * 100)}%</span></div></div>`).join('');
-  const nextStrip = nextUp ? `<div class="card nextup-card"><h3>next up <span class="dim">· the three closest unlocks, quests and records</span></h3><div class="nextup">${nextUp}</div></div>` : '';
-  // the tiered wall: a dense row of chips (one per badge, coloured by its tier), the full wall with every tier on demand
-  const TN = PR.tier_names || ['bronze', 'silver', 'gold', 'platinum', 'diamond'];
-  const chip = (b) => `<span class="tchip t${b.tier}" title="${esc(b.name)}: ${b.tier ? `${b.tier_name} (${esc(b.tier_descs[b.tier - 1])}, ${fmtDate(b.earned_at)})` : 'not yet'}${b.next != null ? ` · next: ${esc(b.desc_next)} · ${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.next)}` : ' · every tier earned'}"><i>${b.tier ? '★' : '☆'}</i>${esc(b.name)}</span>`;
-  const earnedChips = PR.tiers.filter((b) => b.tier).sort((a, b) => b.tier - a.tier || a.name.localeCompare(b.name)).map(chip).join('');
-  const lockedChips = PR.tiers.filter((b) => !b.tier).map(chip).join('');
-  const GROUPS = [['tokens', 'tokens'], ['commits', 'commits'], ['lines', 'lines'], ['api', 'API equivalent'], ['time', 'agent time'], ['sessions', 'sessions'], ['streaks', 'streaks'], ['habits', 'habits']];
-  const wallRow = (b) => `<div class="wrow"><div class="wn"><b>${esc(b.name)}</b><span class="dim">${esc(b.desc_next)}</span></div><div class="pips">${b.tiers.map((t, i) => `<span class="pip t${i + 1}${b.earned[i] ? ' on' : ''}" title="${esc(TN[i])}: ${esc(b.tier_descs[i])}${b.earned[i] ? ' · ' + fmtDate(b.earned[i]) : ''}">${b.earned[i] ? '★' : '☆'}</span>`).join('')}</div><div class="wp">${bar(b.progress, b.tier_name || '')}<span class="dim">${b.next != null ? `${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.next)}` : 'maxed'}</span></div></div>`;
-  const wall = GROUPS.map(([g, label]) => { const bs = PR.tiers.filter((b) => b.group === g); return bs.length ? `<div class="agroup"><div class="gl">${label}</div>${bs.map(wallRow).join('')}</div>` : ''; }).join('');
-  const tierCounts = TN.map((n, i) => [n, PR.tiers.filter((b) => b.tier === i + 1).length]).filter(([, c]) => c);
-  const badgesCard = `<div class="card achievements"><h3>badges <span class="dim">· ${fmtInt(PR.earned_tiers || 0)} of ${fmtInt(PR.total_tiers || 0)} tiers</span>${tierCounts.map(([n, c]) => `<span class="tier ${n}" title="${c} ${n}">★ ${c}</span>`).join('')}<span class="spacer"></span><button class="link" data-wall="${state.statsWall ? 'off' : 'on'}">${state.statsWall ? 'hide the full wall' : 'show the full wall'}</button></h3>
-    <div class="tier-row">${earnedChips}${lockedChips ? `<span class="sep">·</span>${lockedChips}` : ''}</div>
-    ${state.statsWall ? `<div class="wall">${wall}</div>` : ''}</div>`;
-  const RC = PR.records || {};
-  const recordsCard = `<div class="card records"><h3>personal records <span class="dim">· a toast when one falls</span></h3>${Object.entries(RECORD_LABELS).map(([k, label]) => { const r = RC[k]; return `<div class="row"><span>${label}</span><b>${r ? `${fmtRecord(k, r.value)} <span class="dim">· ${r.name ? esc(r.name) + ' · ' : ''}${fmtDate(r.date)}</span>` : '<span class="dim">-</span>'}</b></div>`; }).join('')}</div>`;
-  const secretsCard = `<div class="card secrets"><h3>secret badges <span class="dim">· ${PR.secrets_earned || 0} of ${PR.secrets_total || 0} found</span></h3><div class="tier-row">${PR.secrets.map((x) => x.earned ? `<span class="tchip t5" title="${esc(x.desc)} · ${fmtDate(x.earned)}"><i>★</i>${esc(x.name)}</span>` : `<span class="tchip t0 secret" title="unusual behaviour unlocks it">???</span>`).join('')}</div></div>`;
-  const seasonRow = (sn) => `<div class="srow" data-season="${esc(sn.key)}"><div class="row"><span><button class="link">${esc(sn.name)}</button> <span class="dim">· ${sn.earned} of ${sn.total} badges · ${fmtInt(sn.xp)} XP</span></span><b>${sn.rank ? `<span class="tier ${sn.rank}">★</span> ${esc(sn.rank)}` : '<span class="dim">unranked</span>'}</b></div>${state.statsSeason === sn.key ? `<div class="sbadges">${sn.badges.map((b) => `<div class="sb${b.earned ? ' on' : ''}" title="${fmtTier(b.fmt, b.value)} of ${fmtTier(b.fmt, b.n)}"><span>${b.earned ? '★' : '☆'} ${esc(b.text)}</span>${bar(b.progress)}</div>`).join('')}</div>` : ''}</div>`;
-  const seasonsCard = `<div class="card seasons"><h3>past seasons <span class="dim">· a month each, its own badge set and rank</span></h3>${PR.seasons.length ? PR.seasons.map(seasonRow).join('') : '<div class="row"><span class="dim">the first season is still on</span></div>'}</div>`;
+  // achievements: next up (three closest locked badges) above the badge wall; hidden badges show only once earned
+  const A = d.achievements || { badges: [], next_up: [], records: {} };
+  const fmtBadge = (b, v) => ({ tokens: fmtTokens, int: fmtCompact, usd: fmtUsd, dur: fmtDur, days: (x) => `${Math.round(x)} day${Math.round(x) === 1 ? '' : 's'}`, pct: fmtPct, ratio: (x) => `${Math.round(x * 100)}%`, flag: (x) => (x ? 'done' : 'not yet') }[b.fmt] || fmtCompact)(v);
+  const byId = Object.fromEntries(A.badges.map((b) => [b.id, b]));
+  const bar = (b) => `<div class="abar"><i style="width:${Math.round(b.progress * 100)}%"></i></div>`;
+  const nextUp = A.next_up.map((id) => byId[id]).filter(Boolean).map((b) => `<div class="next"><div class="nh"><b>${esc(b.name)}</b><span class="dim" title="${esc(b.desc)}">${esc(b.desc)}</span></div>${bar(b)}<div class="nv"><span>${fmtBadge(b, b.value)} of ${fmtBadge(b, b.threshold)}</span><span class="dim">${Math.round(b.progress * 100)}%</span></div></div>`).join('');
+  const GROUPS = [['tokens', 'tokens'], ['commits', 'commits'], ['lines', 'lines'], ['api', 'API equivalent'], ['time', 'agent time'], ['sessions', 'sessions'], ['streaks', 'streaks'], ['habits', 'habits'], ['hidden', 'secret']];
+  const badge = (b) => `<div class="badge-t ${b.earned ? 'on' : 'off'}" title="${esc(b.desc)}${b.earned ? ' · earned ' + esc(fmtDate(b.earned)) : ' · ' + fmtBadge(b, b.value) + ' of ' + fmtBadge(b, b.threshold)}"><span class="ic">${b.earned ? '★' : '☆'}</span><span class="nm">${esc(b.name)}</span>${b.earned ? `<span class="dt">${esc(fmtDate(b.earned))}</span>` : `<span class="dt">${Math.round(b.progress * 100)}%</span>`}</div>`;
+  const wall = GROUPS.map(([g, label]) => { const bs = A.badges.filter((b) => b.group === g && (!b.hidden || b.earned)); return bs.length ? `<div class="agroup"><div class="gl">${label}${g === 'hidden' ? ' <span class="dim">(these only show once earned)</span>' : ''}</div><div class="badges">${bs.map(badge).join('')}</div></div>` : ''; }).join('');
+  const pr = (A.records || {}).powder_day;
+  const recordLine = pr ? `<div class="row"><span>Powder Day record <span class="dim">(re-earned every time it is beaten)</span></span><b>${fmtTokens(pr.tokens)} on ${fmtDate(pr.date)}${pr.times_beaten ? ` · beaten ${pr.times_beaten}×` : ''}</b></div>` : `<div class="row"><span class="dim">Powder Day record: the first 100M-token day starts it; every bigger day earns it again</span></div>`;
+  const achievementsCard = `<div class="card achievements"><h3>achievements <span class="dim">· ${A.earned} of ${A.total} earned</span><span class="spacer"></span><span class="dim" title="the 'paid for itself' badges compare API-equivalent usage with the plan price (Settings)">plan ${fmtUsd(A.plan_price || 0)}/month</span></h3>
+    ${nextUp ? `<div class="label-h">next up</div><div class="nextup">${nextUp}</div>` : ''}${recordLine}${wall}</div>`;
   // tools
   const toolRows = Object.values(d.tools.reduce((acc, r) => { const n = TOOL_NAMES[r.name] || r.name; const a = acc[n] || (acc[n] = { name: n, category: toolCategory(r.name), count: 0, errors: 0 }); a.count += r.count; a.errors += r.errors; return acc; }, {})).map((r) => ({ ...r, error_rate: r.count ? r.errors / r.count : 0 }));
   const toolsT = sortableTable('tools', [{ k: 'name', label: 'tool', f: (r) => esc(r.name), cls: 'l' }, { k: 'category', label: 'kind', f: (r) => esc(r.category), cls: 'l' }, { k: 'count', label: 'calls', f: (r) => fmtInt(r.count) }, { k: 'errors', label: 'failed', f: (r) => (r.errors ? `<span class="warn">${fmtInt(r.errors)}</span>` : '0') }, { k: 'error_rate', label: 'failure rate', f: (r) => fmtPct(r.error_rate) }], toolRows, { sort: { key: 'count', dir: -1 }, empty: 'no tool calls in this range', total: toolRows.length ? { label: 'total', row: { ...sumRows(toolRows), error_rate: sumRows(toolRows).count ? sumRows(toolRows).errors / sumRows(toolRows).count : 0 } } : null });
@@ -3631,28 +3564,18 @@ async function renderStatsView(force) {
     { k: 'pushed', label: 'state', f: (c) => `<span class="badge ${c.pushed ? 'pushed' : 'local'}">${c.pushed ? 'pushed' : 'local only'}</span>`, cls: 'l', sort: (c) => (c.pushed ? 1 : 0) },
   ], d.commits, { sort: { key: 'ts', dir: -1 }, tall: true, fixed: true, row: (c) => ` data-sha="${esc(c.sha)}"`, empty: 'no commits from sessions in this range' });
   const quotaCard = quotaCardHtml(d.quota, m === 'quota');
-  const TAB = ['overview', 'badges', 'fun', 'history'].includes(state.statsTab) ? state.statsTab : 'overview';
-  const ranged = TAB === 'overview' || TAB === 'history';
-  const head = `<div class="stats-head"><h2>stats</h2>
-      <div class="seg" id="stats-tabs">${[['overview', 'overview'], ['badges', `badges · Lv ${fmtInt(L.level || 1)}`], ['fun', 'fun'], ['history', 'history']].map(([t, l]) => `<button data-tab="${t}" class="${TAB === t ? 'active' : ''}">${l}</button>`).join('')}</div>
-      ${ranged ? `<div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && !RG && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
+  box.innerHTML = `
+    <div class="stats-head"><h2>stats</h2>
+      <div class="seg" id="stats-range">${[[1, 'today'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [0, 'all time']].map(([n, l]) => `<button data-days="${n}" class="${!state.statsDate && !RG && state.statsDays === n ? 'active' : ''}">${l}</button>`).join('')}</div>
       <label class="help day-pick" title="Show one day: pick it here, or click a day in the daily table or the calendar">or a day <input type="date" id="stats-day" max="${d.today}" value="${esc(state.statsDate || '')}"></label>
       <label class="help day-pick" title="Any range, for example a Wrapped week or month">or from <input type="date" id="stats-from" max="${d.today}" value="${esc(RG ? RG.start : '')}"> to <input type="date" id="stats-to" max="${d.today}" value="${esc(RG ? RG.end : '')}"></label>
       ${state.statsDate ? `<span class="chip day-chip">${fmtDate(state.statsDate)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
-      ${RG ? `<span class="chip day-chip">${fmtDate(RG.start)} – ${fmtDate(RG.end)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}` : `<span class="help">${TAB === 'badges' ? 'all time · backfilled from your history' : TAB === 'fun' ? 'the mine, the arcade, the verbs and Wrapped' : ''}</span>`}
+      ${RG ? `<span class="chip day-chip">${fmtDate(RG.start)} – ${fmtDate(RG.end)} <button data-clear-day="1" title="back to a period">✕</button></span>` : ''}
+      <span class="help">today is ${fmtDate(d.today)} · days roll over at local midnight</span>
       <span class="spacer"></span>
-      ${TAB === 'history' ? `<button id="stats-csv" title="save the daily table for this range as CSV">⤓ export CSV</button>` : ''}<button id="stats-refresh" title="refresh">↻</button>
-    </div>`;
-  const body = TAB === 'overview' ? `${nextStrip}
-    <div class="summary prog">${levelCard(false)}${streakCard(false)}${seasonCard(false)}${questsCard(false)}</div>
-    <div class="summary six compact">${summary}</div>
-    ${(d.window || {}).n === 1 ? '' : `<div class="card hl chart-card"><h3>${CHARTS[charted][0]} · ${P} <span class="badge">charted</span><span class="spacer"></span><span class="dim">today is ${fmtDate(d.today)} · the rest is under history</span></h3>${CHARTS[charted][1]}</div>`}`
-  : TAB === 'badges' ? `<div class="summary prog">${levelCard(true)}${streakCard(true)}${seasonCard(true)}${questsCard(true)}</div>
-    ${badgesCard}
-    <div class="two">${recordsCard}${secretsCard}</div>
-    ${seasonsCard}`
-  : TAB === 'fun' ? `<div class="two">${fun}${wrappedCardHtml(d.wrapped)}</div>`
-  : `${quotaCard}
+      <button id="stats-csv" title="save the daily table for this range as CSV">⤓ export CSV</button><button id="stats-refresh" title="refresh">↻</button>
+    </div>
+    ${quotaCard}
     <div class="summary six">${summary}</div>
     ${(d.window || {}).n === 1 ? '' : `<div class="two"><div class="card hl"><h3>${CHARTS[charted][0]} · ${P} <span class="badge">charted</span></h3>${CHARTS[charted][1]}</div><div class="card"><h3>${CHARTS[other][0]} · ${P}</h3>${CHARTS[other][1]}</div></div>`}
     <div class="card"><h3>daily</h3><div id="stats-daily"></div></div>
@@ -3662,21 +3585,17 @@ async function renderStatsView(force) {
     <div class="card${m === 'sessions' ? ' hl' : ''}"><h3>top sessions by tokens · ${P}</h3>${top}</div>
     ${calendar}
     ${hours}
-    <div class="summary four">${parallel}${waiting}${health}${records}</div>
-    <div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>
+    <div class="summary four">${parallel}${waiting}${health}${fun}</div>
+    ${achievementsCard}
+    ${wrappedCardHtml(d.wrapped)}
+    <div class="two"><div class="card"><h3>tool usage · ${P}</h3>${toolsT}</div>${records}</div>
     <div class="card${m === 'commits' ? ' hl' : ''}"><h3>commits from kcoder sessions · ${P} · ${fmtInt(ct.total)} total · <span class="ok">${fmtInt(ct.pushed)} pushed</span> · <span class="${ct.unpushed ? 'warn' : ''}">${fmtInt(ct.unpushed)} local only</span></h3>${commitsT}</div>`;
-  box.innerHTML = head + body;
-  box.dataset.tab = TAB;
-  progressNote(d.progression);
-  if (TAB === 'history') renderDailyTable();
-  $('#stats-tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (!b) return; state.statsTab = b.dataset.tab; localStorage.setItem('kcoder.statsTab', state.statsTab); renderStatsView(false); });
-  if (ranged) {
+  renderDailyTable();
   $('#stats-range').addEventListener('click', (e) => { const b = e.target.closest('[data-days]'); if (!b) return; state.statsDays = Number(b.dataset.days); state.statsDate = null; state.statsRange = null; localStorage.setItem('kcoder.statsDays', state.statsDays); renderStatsView(true); });
   $('#stats-day').addEventListener('change', (e) => { state.statsDate = e.target.value || null; state.statsRange = null; renderStatsView(true); });
   const rangeChange = () => { const a = $('#stats-from').value, b = $('#stats-to').value; if (a && b) { state.statsRange = { start: a <= b ? a : b, end: a <= b ? b : a }; state.statsDate = null; renderStatsView(true); } };
   $('#stats-from').addEventListener('change', rangeChange); $('#stats-to').addEventListener('change', rangeChange);
-  }
-  if ($('#stats-csv')) $('#stats-csv').addEventListener('click', exportStatsCsv);
+  $('#stats-csv').addEventListener('click', exportStatsCsv);
   $('#stats-refresh').addEventListener('click', () => renderStatsView(true));
   box.onclick = (e) => {
     const th = e.target.closest('th[data-sort]'); const tb = th && th.closest('[data-table]');
@@ -3685,8 +3604,6 @@ async function renderStatsView(force) {
     const mc = e.target.closest('.card.metric[data-metric]'); if (mc) { state.statsMetric = mc.dataset.metric; renderStatsView(false); return; }
     if (e.target.closest('[data-clear-day]')) { state.statsDate = null; state.statsRange = null; renderStatsView(true); return; }
     const wb = e.target.closest('[data-wrapped]'); if (wb) { wrappedDialog(wb.dataset.wrapped); return; }
-    const wl = e.target.closest('[data-wall]'); if (wl) { state.statsWall = wl.dataset.wall === 'on'; renderStatsView(false); return; }
-    const sr = e.target.closest('.srow[data-season]'); if (sr && e.target.closest('button.link')) { state.statsSeason = state.statsSeason === sr.dataset.season ? null : sr.dataset.season; renderStatsView(false); return; }
     if (e.target.closest('[data-go-fun]')) { funSelect('mine'); return; }
     const gg = e.target.closest('[data-go-game]'); if (gg) { funSelect(gg.dataset.goGame); return; }
     if (e.target.closest('[data-x="settings"]')) { settingsDialog(); return; }

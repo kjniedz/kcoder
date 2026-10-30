@@ -1781,9 +1781,6 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             return {"conditions": pl}
         return {"conditions": conditions.payload(manager.cfg)}
 
-    if t == "progress":
-        return {"progression": await asyncio.get_running_loop().run_in_executor(None, stats.progress)}
-
     if t == "stats_full":
         return await asyncio.get_running_loop().run_in_executor(None, stats.full, int(req.get("days") if req.get("days") is not None else 30), req.get("date") or None,
                                                                 req.get("start") or None, req.get("end") or None)

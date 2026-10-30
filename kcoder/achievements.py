@@ -94,7 +94,10 @@ def _peak_parallel_by_day(facts: dict) -> dict:
 
 
 def compute(all_days_desc: list, facts: dict, metas: dict, commits: list, first_date: str | None, today: str,
-            plan_price: float | None = None) -> dict:
+            plan_price: float | None = None, observed: dict | None = None) -> dict:
+    """observed: the conditions ledger ({"powder": date, "btc10": date, "moon": date}), facts the daemon
+    saw while kcoder was open and that history cannot replay; they become hidden badges."""
+    observed = observed or {}
     days = sorted(all_days_desc, key=lambda r: r["date"])          # ascending, every day with anything
     active = [r["date"] for r in days if r.get("total") or r.get("commits") or r.get("active_seconds")]
     tot = {k: sum(float(r.get(k) or 0) for r in days) for k in ("total", "commits", "insertions", "deletions", "api_equivalent", "active_seconds")}
@@ -218,6 +221,10 @@ def compute(all_days_desc: list, facts: dict, metas: dict, commits: list, first_
     add("fresh_tracks", "Fresh Tracks", "hidden", "worked on New Year's Day", 1 if fresh else 0, 1, fresh, hidden=True, fmt="flag")
     xmas = day_matches(lambda x: x.month == 12 and x.day == 25)
     add("holiday_shred", "Holiday Shred", "hidden", "worked on December 25", 1 if xmas else 0, 1, xmas, hidden=True, fmt="flag")
+    powder, btc10, moon = observed.get("powder"), observed.get("btc10"), observed.get("moon")
+    add("powder_morning", "Powder Morning", "hidden", "a powder day: 6 in or more of fresh snow at your place in 24 h while kcoder was open", 1 if powder else 0, 1, powder, hidden=True, fmt="flag")
+    add("btc_ten", "Ten Percent Day", "hidden", "bitcoin moved 10% in a day, either way, while kcoder was open", 1 if btc10 else 0, 1, btc10, hidden=True, fmt="flag")
+    add("full_moon", "Moonlit Run", "hidden", "a session on a full-moon night", 1 if moon else 0, 1, moon, hidden=True, fmt="flag")
     # ---- the Powder Day record: biggest token day, earned again whenever it is beaten ----
     record = None
     beaten = []
