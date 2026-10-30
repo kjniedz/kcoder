@@ -21,6 +21,7 @@
 </head>
 <body>
 <header id="header">
+  <div id="ridge" class="ridge" aria-hidden="true" hidden><svg class="ridgeline" viewBox="0 0 1000 16" preserveAspectRatio="none"><path class="rock" d="M0 16 L0 11 L35 7 L70 10 L110 4 L150 9 L190 6 L240 11 L285 5 L330 9 L370 3 L420 8 L470 5 L520 10 L560 6 L610 11 L650 4 L700 9 L740 6 L790 10 L830 3 L880 8 L930 5 L970 9 L1000 7 L1000 16 Z"></path><path class="cap" d="M0 11 L35 7 L70 10 L110 4 L150 9 L190 6 L240 11 L285 5 L330 9 L370 3 L420 8 L470 5 L520 10 L560 6 L610 11 L650 4 L700 9 L740 6 L790 10 L830 3 L880 8 L930 5 L970 9 L1000 7"></path></svg><div class="flakes"></div><span class="moon"></span><span class="btcline" hidden></span></div>
   <button id="brand" class="brand" title="About kcoder"><pre id="banner" class="banner compact" aria-label="KCODER"></pre><span class="wordmark">kcoder</span></button>
   <nav class="views" role="tablist">
     <button data-view="wall" title="Sessions: the grid, or 1 to 3 panes  (alt+1)">sessions</button>
@@ -28,6 +29,7 @@
     <button data-view="stats" title="Stats  (alt+3)">stats</button>
     <button data-view="fun" title="Just for fun: the token mine and the arcade  (alt+4)">fun</button>
   </nav>
+  <span id="cond-tag" class="cond-tag" hidden></span>
   <input id="omni" class="omni" type="search" placeholder="Search or run a command  ⌘K" autocomplete="off" title="Search sessions or run a command  (⌘K)">
   <div class="tools">
     <button id="btn-inbox" title="Inbox: approvals and sessions waiting on you  (a)">inbox <span id="inbox-count" class="count" hidden></span></button>
@@ -120,6 +122,7 @@
     <div class="recap-slot" hidden></div>
     <div class="chat-log"></div>
     <button class="jump" hidden>↓ jump to latest</button>
+    <div class="shell-drawer" hidden></div>
     <div class="composer-slot"></div>
   </div>
 </template>
@@ -131,7 +134,7 @@
     <div class="composer-row">
       <span class="prompt-label">you&gt;</span>
       <textarea rows="1" placeholder="Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)"></textarea>
-      <button type="button" class="mic" title="Voice input: click to start / stop, hold to talk (⌘⇧M toggles, ⌥Space push-to-talk)">🎤</button>
+      <button type="button" class="sh" title="Terminal here: a shell in this session's folder, docked under the chat  (⌘J toggles)">$</button>
       <button type="submit" class="send" title="Send (Enter)">➤</button>
       <button type="button" class="stop" title="Interrupt (Esc)" hidden>■</button>
     </div>

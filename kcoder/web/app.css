@@ -592,6 +592,30 @@ table.grid tr[data-sha] { cursor: pointer; }
 .card .row a { color: var(--accent-text); }
 @media (max-width: 900px) { .two { grid-template-columns: 1fr; } .summary { grid-template-columns: 1fr 1fr; } }
 
+/* ---- conditions: the header's ridgeline accent (fresh snow, bitcoin's day, the full moon) ---- */
+#header { position: relative; }
+#header > :not(.ridge) { position: relative; z-index: 1; }
+.ridge { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; --snow: #FFFFFF; }
+.ridge[data-light="true"] { --snow: #7EA6C8; }
+.ridge .ridgeline { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 16px; display: block; }
+.ridge[data-kind=""] .ridgeline { display: none; }
+.ridge .ridgeline .rock { fill: var(--accent); opacity: .09; }
+.ridge .ridgeline .cap { fill: none; stroke: var(--snow); stroke-width: 1.2; vector-effect: non-scaling-stroke; opacity: 0; transition: opacity 1.2s ease; }
+.ridge[data-kind="snow"] .ridgeline .cap { opacity: .6; }
+.ridge .btcline { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; transition: opacity 1.2s ease, background .6s ease; }
+.ridge .flakes i { position: absolute; top: -6px; width: var(--s, 2px); height: var(--s, 2px); border-radius: 50%; background: var(--snow); opacity: .55; animation: flake var(--d, 8s) linear var(--o, 0s) infinite; }
+@keyframes flake { from { transform: translateY(0); } to { transform: translateY(54px); } }
+.ridge.static .flakes i { animation: none; }
+.ridge .moon { display: none; position: absolute; right: 36%; bottom: 12px; width: 9px; height: 9px; border-radius: 50%; background: #ECEAE0; box-shadow: 0 0 7px 2px rgba(214,222,255,.35); }
+.ridge[data-kind="moon"] .moon { display: block; }
+html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line: #1E2C3E; --code-bg: #080B11; }
+.cond-tag { align-self: flex-end; margin-bottom: 2px; padding: 0 5px 1px; border-radius: 3px; background: var(--bg-2); font-size: 10.5px; color: var(--fg-mute); white-space: nowrap; letter-spacing: .02em; }
+.cond-tag.snow { color: var(--accent-text); }
+.cond-tag.btc.up { color: var(--green); }
+.cond-tag.btc.down { color: var(--red); }
+@media (prefers-reduced-motion: reduce) { .ridge .ridgeline .cap, .ridge .btcline { transition: none; } }
+@media (max-width: 900px) { .cond-tag { display: none; } }
+
 /* ---- header stays one line at any width ---- */
 #header { overflow: hidden; flex-wrap: nowrap; }
 .brand { flex: 0 0 auto; }
@@ -827,10 +851,17 @@ html[data-skin="rainbow"] .banner { filter: drop-shadow(0 0 5px rgba(255, 255, 2
 .dialog .list .item .kind.approval { color: var(--waiting); }
 .dialog .list .item .kind.error { color: var(--err, #e06c75); }
 
-.composer .mic { padding: 4px 8px; }
-.composer .mic.listening { color: var(--red); border-color: var(--red); animation: micpulse 1.2s ease-in-out infinite; }
-@keyframes micpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,.5); } 50% { box-shadow: 0 0 0 5px rgba(248,113,113,0); } }
-.pane.compact .composer .mic { padding: 1px 6px; font-size: 11px; }
+.composer .sh { padding: 4px 9px; font-family: ui-monospace, Menlo, monospace; font-weight: 700; }
+.pane:has(.shell-drawer:not([hidden])) .composer .sh, .cpane:has(.shell-drawer:not([hidden])) .composer .sh { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.pane.compact .composer .sh { padding: 1px 6px; font-size: 11px; }
+
+/* ---- terminal here: the session's shell docked under the chat, above the composer ---- */
+.shell-drawer { flex: 0 0 auto; height: clamp(150px, 36%, 340px); display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); background: var(--code-bg); }
+.shell-drawer .bar { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-size: 11px; color: var(--fg-dim); background: var(--bg-2); border-bottom: 1px solid var(--line); }
+.shell-drawer .bar .path { font-family: ui-monospace, Menlo, monospace; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shell-drawer .bar .help { color: var(--fg-mute); font-size: 10.5px; white-space: nowrap; }
+.shell-drawer .bar button { padding: 0 6px; line-height: 1.4; }
+.shell-drawer .box { flex: 1; min-height: 0; }
 
 /* density: compact squeezes padding and type sizes so more fits on screen (Settings → Density) */
 html[data-density="compact"] body { line-height: 1.3; font-size: calc(var(--font-size, 12.5px) - 0.5px); }

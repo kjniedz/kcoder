@@ -152,6 +152,11 @@ remembered.
 
 Every pane has its own input, model and trust pickers, and a **chat /
 terminal** toggle (v) that renders the same session as a plain transcript.
+The `$` button next to send (or ⌘J, or "terminal here" in the palette)
+docks a real **shell** under the chat, in the session's folder, in a grid
+pane or a chat-view pane alike: the daemon's own pty through xterm.js, so
+there is no Terminal window to open; ✕ or ⌘J again closes it. Voice input
+stays on ⌘⇧M (and ⌥Space push-to-talk) and in the palette.
 Grid panes also cycle through a real **shell** (xterm.js in the session's
 folder) and the **live preview** of a web project. Broadcast (⇶, with 2 or 3
 panes) sends one prompt to every pane, handy for comparing models.
@@ -208,8 +213,10 @@ kcoder", "commits in 3 repos today", "push a commit", "a commit before
 noon"...), each worth a little XP. **Shipping streak**: a commit a day, with
 one freeze a week that covers a missed day by itself. **Personal records**:
 best day for tokens, commits and lines, the longest session and the most
-sessions at once; a toast when one falls. **Secret badges**: ten that show
-as ??? until unusual behaviour unlocks them. Everything but the quests is
+sessions at once; a toast when one falls. **Secret badges**: thirteen that
+show as ??? until unusual behaviour unlocks them; three come from the
+conditions the daemon watches (below): the first powder day, a 10% bitcoin
+day and a session on a full-moon night. Everything but the quests is
 backfilled from history, so a fresh install starts with its levels, tiers,
 records and streak already earned. Toasts never stack: one shows at a time,
 and several unlocks at once (a level, tiers, quests, records, secrets)
@@ -486,10 +493,28 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   the stats page's fun tab.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
   routing, review policy, auto-publish, daily spend cap, the weekly plan
-  limit (token limit, reset day and hour, quota shift), plus links to your
-  Claude plan, providers, GitHub and phone approvals, updates, restart,
-  shortcuts and uninstall. About (banner click, or the macOS menu) shows the
-  version and credits.
+  limit (token limit, reset day and hour, quota shift), the conditions
+  accent (below), plus links to your Claude plan, providers, GitHub and
+  phone approvals, updates, restart, shortcuts and uninstall. About (banner
+  click, or the macOS menu) shows the version and credits.
+- **Conditions**: an ambient accent on the header that reflects real
+  conditions, never covering anything. Fresh snow at a fixed place (Alta by
+  default; the name and lat, lon are in settings, never your location):
+  when the last 24 h had an inch or more, a faint ridgeline appears under
+  the header with a snow cap, light falling snow (more for a bigger dump)
+  and a tag like `8" fresh at Alta`. Bitcoin: a thin line under the header
+  tints green or red with the 24 h move, stronger the bigger it is, and a
+  5% day either way puts a `₿ +6.2%` badge on the ridgeline. The moon: on
+  full-moon nights, dark mode gets a small moon over the ridgeline and
+  slightly cooler tones. One condition shows at a time, snow first, then a
+  big bitcoin day, then the moon; the thin bitcoin line is the only thing
+  that stays alongside. The daemon reads Open-Meteo and CoinGecko (Binance
+  as the fallback; all free, no keys) every 30 minutes; a failed read keeps
+  the last one, and a reading older than 12 hours counts as nothing, so an
+  offline laptop fades back to the plain header by itself. One master
+  toggle and one per condition; with reduced motion on, nothing moves (the
+  snow sits still). `KCODER_CONDITIONS=off` turns the reads off for the
+  daemon.
 
 ### Multi-monitor
 

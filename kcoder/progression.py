@@ -3,7 +3,9 @@ lines and merged PRs, weighted so shipping beats token burn), tiered badges
 (bronze to diamond, each tier about ten times the last), monthly seasons with
 a rotating badge set and a rank, three daily quests and a weekly one drawn
 from the real repos and recent activity, a daily shipping streak with one
-freeze a week, personal records and ten secret badges.
+freeze a week, personal records and thirteen secret badges (three of them
+from conditions the daemon observed: a powder day, a 10% bitcoin day and a
+full-moon session).
 
 Everything but the quests is computed from history, so a fresh install
 backfills the lot. The quests are drawn once per local day and kept in
@@ -251,7 +253,10 @@ def _series(days: list, facts: dict, metas: dict, commits: list, merges: list, p
 
 # ---- secret badges ----
 
-def _secrets(days: list, facts: dict, commits: list) -> list:
+def _secrets(days: list, facts: dict, commits: list, observed: dict | None = None) -> list:
+    """observed: the conditions ledger ({"powder": date, "btc10": date, "moon": date}), facts the
+    daemon saw while kcoder was open and that history cannot replay."""
+    observed = observed or {}
     active = [r["date"] for r in days if r.get("total") or r.get("commits") or r.get("active_seconds")]
     sorted_commits = sorted((c for c in commits if c.get("ts")), key=lambda c: float(c["ts"]))
 
@@ -291,6 +296,9 @@ def _secrets(days: list, facts: dict, commits: list) -> list:
             if rage is None or d < rage:
                 rage = d
     add("rage_quit", "Rage Quit", "five interrupts in one session", rage)
+    add("first_powder", "First Chair", "a powder day: 6 in or more of fresh snow at your place in 24 h while kcoder was open", observed.get("powder"))
+    add("btc_ten", "Diamond Hands", "bitcoin moved 10% in a day, either way, while kcoder was open", observed.get("btc10"))
+    add("full_moon", "Moonlit Run", "a session on a full-moon night", observed.get("moon"))
     return out
 
 
@@ -584,7 +592,7 @@ def quests(state: dict, today: str, days_by_date: dict, commits: list, metas: di
 # ---- the whole thing ----
 
 def compute(all_days_desc: list, facts: dict, metas: dict, commits: list, first_date: str | None, today: str,
-            plan_price: float | None = None) -> dict:
+            plan_price: float | None = None, observed: dict | None = None) -> dict:
     days = sorted(all_days_desc, key=lambda r: r["date"])
     days_by_date = {r["date"]: r for r in days}
     price = float(plan_price or achievements.PLAN_PRICE_DEFAULT)
@@ -603,7 +611,7 @@ def compute(all_days_desc: list, facts: dict, metas: dict, commits: list, first_
         ledger = list(state["ledger"])
     streak = ship_streak(days, today)
     tiers = _series(days, facts, metas, commits, merges, plan_cost, price, months, streak["longest"], streak["first_at"])
-    secrets = _secrets(days, facts, commits)
+    secrets = _secrets(days, facts, commits, observed or {})
     tot = {k: sum(float(r.get(k) or 0) for r in days) for k in ("total", "commits", "insertions", "deletions")}
     seasons_keys = sorted({d[:7] for d in days_by_date} | {today[:7]})
     seasons = [season(k, days_by_date, facts, commits, metas, ledger, today) for k in seasons_keys]

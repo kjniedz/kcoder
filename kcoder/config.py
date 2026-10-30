@@ -64,6 +64,10 @@ DEFAULTS = {
     # (0 = Monday) at reset_hour local time. shift: route small turns to the cheap tier when the
     # forecast says the limit runs out before the reset (off by default; always shown when active).
     "quota": {"limit_tokens": 0, "reset_weekday": 0, "reset_hour": 0, "shift": False},
+    # the header's conditions accent: fresh snow at a fixed place (Alta), bitcoin's day, the full moon;
+    # one master switch and one per condition (see conditions.py)
+    "conditions": {"enabled": True, "snow": True, "btc": True, "moon": True,
+                   "place": {"name": "Alta", "lat": 40.5884, "lon": -111.6386}},
 }
 
 _cache: dict | None = None

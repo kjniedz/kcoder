@@ -47,7 +47,7 @@ from websockets.asyncio.server import serve, unix_serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from . import __version__, auth, chatlog, compat, config, identity, paths, pricing, projects, repos, setup, stats, updater
+from . import __version__, auth, chatlog, compat, conditions, config, identity, paths, pricing, projects, repos, setup, stats, updater
 from . import checkpoints, hooks, review, routing
 from . import pr as prmod
 from . import preview as previewmod
@@ -238,6 +238,8 @@ class Manager:
         self.sessions: dict[str, Session] = {}   # active (engine loaded)
         self.chats: dict[str, dict] = {}         # every chat's meta, incl. archived
         self.clients: set[Client] = set()
+        self._cond_wake = asyncio.Event()   # set by a conditions settings change; the loop refreshes at once
+        self._cond_at = 0.0
         self.stop = asyncio.Event()
         self._usage_file = None
         self.today = {"date": _today(), "input": 0, "output": 0, "cost": 0.0, "calls": 0}
@@ -1673,6 +1675,24 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             except (TypeError, ValueError):
                 raise RequestError("preview_idle_minutes must be a number")
             config.save({"preview_idle_minutes": manager.cfg["preview_idle_minutes"]})
+        if any(k in req for k in ("conditions_enabled", "conditions_snow", "conditions_btc", "conditions_moon", "conditions_place", "conditions_latlon")):
+            cc = conditions.settings(manager.cfg)
+            for k in ("enabled", "snow", "btc", "moon"):
+                if "conditions_" + k in req:
+                    cc[k] = bool(req["conditions_" + k])
+            if "conditions_place" in req:
+                cc["place"]["name"] = str(req["conditions_place"] or "").strip()[:40] or conditions.DEFAULT_PLACE["name"]
+            if "conditions_latlon" in req:
+                try:
+                    lat, lon = (float(x) for x in str(req["conditions_latlon"]).replace(";", ",").split(",")[:2])
+                except ValueError:
+                    raise RequestError("lat, lon must be two numbers, for example 40.5884, -111.6386")
+                if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                    raise RequestError("lat must be within -90..90 and lon within -180..180")
+                cc["place"]["lat"], cc["place"]["lon"] = lat, lon
+            manager.cfg["conditions"] = cc
+            config.save({"conditions": cc})
+            manager._cond_wake.set()
         return {"config": {k: v for k, v in manager.cfg.items() if k != "pricing"}, "stats": manager.stats()}
 
     if t == "projects":
@@ -1752,6 +1772,14 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(None, quotamod.status, manager.cfg, None, True)
         return {"quota": data}
+
+    if t == "conditions":
+        if req.get("refresh") and time.time() - getattr(manager, "_cond_at", 0) > 60 and not conditions.disabled():
+            manager._cond_at = time.time()
+            pl = await asyncio.get_running_loop().run_in_executor(None, conditions.refresh, manager.cfg)
+            manager.broadcast_raw(json.dumps({"type": "conditions", **pl}))
+            return {"conditions": pl}
+        return {"conditions": conditions.payload(manager.cfg)}
 
     if t == "progress":
         return {"progression": await asyncio.get_running_loop().run_in_executor(None, stats.progress)}
@@ -2198,6 +2226,8 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         images = _save_images(session, req.get("images") or [])
         if not text.strip() and not images:
             raise RequestError("empty message")
+        if conditions.note_session_turn():
+            log.info("full-moon session: badge unlocked")
         if manager.cap_reached():
             raise RequestError(f"daily spend cap of {pricing.fmt_usd(manager.daily_cap())} reached")
         if engine.busy:
@@ -2840,6 +2870,7 @@ async def _handle(ws, manager: Manager, token: str) -> None:
                               "installed": updater.installed_version(), "dev": updater.is_dev_install()}))
     client.queue.put_nowait(manager.sessions_frame())
     client.queue.put_nowait(manager.chats_frame())
+    client.queue.put_nowait(json.dumps({"type": "conditions", **conditions.payload(manager.cfg)}))
     try:
         async for raw in ws:
             try:
@@ -2979,9 +3010,10 @@ async def _serve(host: str, port: int) -> None:
         sched = asyncio.create_task(_schedule_loop(manager))
         pv = asyncio.create_task(_preview_loop(manager))
         dp = asyncio.create_task(_deploy_loop(manager))
+        cond = asyncio.create_task(_conditions_loop(manager))
         await stop.wait()
         log.info("shutting down")
-        for task in (updates, prs, sched, pv, dp):
+        for task in (updates, prs, sched, pv, dp, cond):
             task.cancel()
         manager.shutdown()
         server.close()
@@ -3120,6 +3152,33 @@ async def _deploy_loop(manager: Manager) -> None:
             return
         except asyncio.TimeoutError:
             pass
+
+
+async def _conditions_loop(manager: Manager) -> None:
+    """Every 30 minutes (and right after a settings change): fetch the
+    snow and bitcoin readings and push them to every client. Off with
+    KCODER_CONDITIONS=off; a failed fetch keeps the last reading."""
+    loop = asyncio.get_running_loop()
+    await asyncio.sleep(2)
+    while not manager.stop.is_set():
+        manager._cond_wake.clear()
+        try:
+            if conditions.disabled() or not conditions.settings(manager.cfg)["enabled"]:
+                pl = conditions.payload(manager.cfg)
+            else:
+                manager._cond_at = time.time()
+                pl = await loop.run_in_executor(None, conditions.refresh, manager.cfg)
+            manager.broadcast_raw(json.dumps({"type": "conditions", **pl}))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("conditions refresh failed: %s", exc)
+        stopper = asyncio.ensure_future(manager.stop.wait())
+        waker = asyncio.ensure_future(manager._cond_wake.wait())
+        done, _ = await asyncio.wait({stopper, waker}, timeout=conditions.REFRESH, return_when=asyncio.FIRST_COMPLETED)
+        for f in (stopper, waker):
+            if not f.done():
+                f.cancel()
+        if stopper in done:
+            return
 
 
 async def _update_loop(manager: Manager) -> None:

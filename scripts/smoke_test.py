@@ -80,7 +80,7 @@ def main() -> int:
             json.dump(m, f)
     mode()
 
-    env = dict(os.environ, KCODER_DATA_DIR=data, KCODER_PORT="47998", KCODER_UPDATE_DELAY="3600",
+    env = dict(os.environ, KCODER_DATA_DIR=data, KCODER_PORT="47998", KCODER_UPDATE_DELAY="3600", KCODER_CONDITIONS="off",
                KCODER_AGENT_PLIST=os.path.join(data, "agent.plist"), KCODER_APP_BUNDLE=os.path.join(data, "kcoder.app"),
                KC_FAKE_DIR=fake, PATH=fake + os.pathsep + os.environ.get("PATH", ""),
                ANTHROPIC_API_KEY="sk-ant-api-must-not-reach-claude", PYTHONIOENCODING="utf-8")

@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 
-from . import achievements, identity, paths, progression, repos
+from . import achievements, conditions, identity, paths, progression, repos
 
 log = logging.getLogger("kcoder.stats")
 
@@ -866,7 +866,7 @@ def full(days: int = 30, date: str | None = None, start: str | None = None, end:
         "most_lines_day": {"date": most_lines["date"], "lines": most_lines["lines"]} if most_lines and most_lines["lines"] else None,
     }
 
-    prog = progression.compute(all_days, facts, metas, commits, first_date, t, _cfg_plan_price())
+    prog = progression.compute(all_days, facts, metas, commits, first_date, t, _cfg_plan_price(), conditions.unlocks())
     progression.remember(usage, my_commit_rows(), prog["level"])
     return {
         "days": days,

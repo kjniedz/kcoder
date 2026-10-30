@@ -86,6 +86,7 @@ function applyTheme() {
   $('#hljs-dark').disabled = eff === 'light'; $('#hljs-light').disabled = eff !== 'light';
   const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = eff === 'light' ? '#FFFFFF' : '#0C0E12';
   for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
+  renderConditions();
 }
 function setTheme(c) { localStorage.setItem('kcoder.theme', c); applyTheme(); }
 // ---- density: comfortable (default) or compact ----
@@ -209,6 +210,7 @@ async function onFrame(msg) {
   if (msg.type === 'chats') { state.chats = msg.chats; state.projects = msg.projects; renderSidebar(); return; }
   if (msg.type === 'event') { onEvent(msg.sid, msg.ev); return; }
   if (msg.type === 'shell') { onShellData(msg.sid, msg.data, msg.exit); return; }
+  if (msg.type === 'conditions') { onConditions(msg); return; }
   if (msg.type === 'plan_usage') { state.claude = { ...(state.claude || {}), usage: msg.usage }; renderClaudeButton(); if (state.dialog === 'claude' && state._renderClaude) state._renderClaude(state.claude); return; }
   if (msg.type === 'notice') { toast(`${msg.title}: ${msg.body}`, 'warn'); notify(msg.title, msg.body, msg.sid, 'wait'); return; }
 }
@@ -772,6 +774,7 @@ function renderWall() {
 function paneSkeleton() {
   return `<div class="pane-title"><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell  (v)"></span></div>
   <div class="pane-body"></div>
+  <div class="shell-drawer" hidden></div>
   <div class="approval-bar" hidden></div>
   <div class="pane-actions" hidden></div>
   <div class="composer-slot" hidden></div>
@@ -1056,9 +1059,10 @@ function cyclePaneView(sid) {
   setPaneView(sid, next);
 }
 function setPaneView(sid, v) {
+  const pane = $(`.pane[data-sid="${sid}"]`);
+  if (pane) closeShellDrawer(pane);
   if (v !== 'shell') closeShell(sid);
   state.paneView.set(sid, v);
-  const pane = $(`.pane[data-sid="${sid}"]`);
   if (pane) { $('.composer-slot', pane).innerHTML = ''; renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); }
 }
 function togglePin(sid) {
@@ -1427,16 +1431,8 @@ function mountComposer(slot, sid, termStyle) {
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + 'px'; };
   ta.addEventListener('input', () => { grow(); updateMenu(comp); });
   ta.addEventListener('keydown', (e) => onComposerKey(e, comp));
-  const mic = $('.mic', form);
-  if (!speechSupported()) mic.hidden = true;
-  else {
-    mic.title = micTitle();
-    // click toggles; press and hold is push-to-talk (release stops)
-    mic.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; comp._micDown = Date.now(); if (!voiceActive(comp)) { comp._micStarted = true; startVoice(comp); } else comp._micStarted = false; });
-    mic.addEventListener('pointerup', () => { const held = Date.now() - (comp._micDown || 0); if (comp._micStarted && held >= 450) stopVoice(comp); comp._micDown = 0; });
-    mic.addEventListener('pointerleave', () => { if (comp._micDown && comp._micStarted && Date.now() - comp._micDown >= 450) { stopVoice(comp); comp._micDown = 0; } });
-    mic.addEventListener('click', (e) => { e.preventDefault(); if (comp._micStarted) { comp._micStarted = false; return; } if (voiceActive(comp)) stopVoice(comp); });
-  }
+  // the $ button docks this session's shell under the chat (voice input stays on ⌘⇧M and in the palette)
+  $('.sh', form).addEventListener('click', (e) => { e.preventDefault(); toggleShellDrawer(form); });
   ta.addEventListener('paste', (e) => onPaste(e, comp));
   form.addEventListener('drop', (e) => { if (state.dragChat) return; const files = Array.from(e.dataTransfer.files || []); if (files.length) { e.preventDefault(); e.stopPropagation(); addFiles(comp, files); } });
   form.addEventListener('dragover', (e) => { if (!state.dragChat) e.preventDefault(); });
@@ -1686,6 +1682,73 @@ async function slashCommand(sid, line) {
 }
 
 // ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// conditions: the header's ridgeline accent. The daemon reads fresh snow at the place in settings
+// (Alta) and bitcoin's 24 h move every 30 minutes and pushes them; the moon is arithmetic. One
+// condition shows at a time (snow, then a big bitcoin day, then the full moon in dark mode); the
+// thin bitcoin line under the header is separate and only tints. A reading older than 12 hours is
+// nothing, so an offline laptop fades back to the plain header by itself.
+// ----------------------------------------------------------------------
+const COND_STALE = 12 * 3600;
+function onConditions(msg) {
+  const prev = state.conditions; state.conditions = msg;
+  if (prev && JSON.stringify(prev.unlocks || {}) !== JSON.stringify(msg.unlocks || {})) progressSoon();   // a new secret badge
+  renderConditions();
+}
+function condReduced() { return matchMedia('(prefers-reduced-motion: reduce)').matches; }
+function condNight() { const h = new Date().getHours(); return h >= 18 || h < 6; }
+function condPick(C) {
+  const st = C.settings || {}; if (!st.enabled) return { kind: null, line: null, snow: 0, btc: null };
+  const now = Date.now() / 1000; const fresh = (src) => !!(src && src.at && now - src.at <= COND_STALE);
+  const snow = st.snow && fresh(C.snow) ? Number(C.snow.inches || 0) : 0;
+  const btc = st.btc && fresh(C.btc) ? Number(C.btc.pct || 0) : null;
+  const moon = !!(st.moon && C.moon && C.moon.near_full && condNight() && effectiveTheme() === 'dark');
+  const kind = snow >= 1 ? 'snow' : btc != null && Math.abs(btc) >= 5 ? 'btc' : moon ? 'moon' : null;
+  return { kind, snow, btc, line: btc };
+}
+function condRand(seed) { let t = seed * 2654435761 >>> 0; return () => { t = (t + 0x6D2B79F5) >>> 0; let r = Math.imul(t ^ (t >>> 15), 1 | t); r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r; return ((r ^ (r >>> 14)) >>> 0) / 4294967296; }; }
+function renderConditions() {
+  const ridge = $('#ridge'), tag = $('#cond-tag'); if (!ridge || !tag) return;
+  const C = state.conditions; const P = C ? condPick(C) : { kind: null, line: null, snow: 0, btc: null };
+  const still = condReduced();
+  const line = $('.btcline', ridge);
+  if (P.line != null && Math.abs(P.line) >= 0.2) { line.hidden = false; line.style.background = P.line > 0 ? 'var(--green)' : 'var(--red)'; line.style.opacity = Math.min(0.85, 0.15 + Math.abs(P.line) / 5 * 0.7).toFixed(2); }
+  else line.hidden = true;
+  ridge.hidden = !P.kind && line.hidden;
+  ridge.classList.toggle('static', still);
+  ridge.dataset.kind = P.kind || '';
+  ridge.dataset.light = effectiveTheme() === 'light' ? 'true' : 'false';
+  const flakes = $('.flakes', ridge);
+  if (P.kind === 'snow') {
+    const n = Math.min(48, Math.round(8 + P.snow * 3)); const key = `${n}:${still ? 's' : 'm'}`;
+    if (flakes.dataset.key !== key) { flakes.dataset.key = key; flakes.innerHTML = Array.from({ length: n }, (_, i) => { const r = condRand(i + 7); return `<i style="left:${(r() * 100).toFixed(1)}%;--d:${(5 + r() * 6).toFixed(1)}s;--o:${(-r() * 11).toFixed(1)}s;--s:${(1.5 + r() * 2).toFixed(1)}px;top:${still ? (r() * 90).toFixed(0) + '%' : '-6px'}"></i>`; }).join(''); }
+  } else { flakes.innerHTML = ''; delete flakes.dataset.key; }
+  if (P.kind === 'snow') { tag.hidden = false; tag.className = 'cond-tag snow'; tag.textContent = `${Math.round(P.snow)}" fresh at ${C.snow.place || 'the hill'}`; tag.title = `fresh snow in the last 24 h at ${C.snow.place || 'the place in settings'} (Open-Meteo) · read ${age(C.snow.at)} ago`; }
+  else if (P.kind === 'btc') { tag.hidden = false; tag.className = 'cond-tag btc ' + (P.btc > 0 ? 'up' : 'down'); tag.textContent = `₿ ${P.btc > 0 ? '+' : ''}${P.btc.toFixed(1)}%`; tag.title = `bitcoin's 24 h move${C.btc.price ? ' · ' + fmtUsd(C.btc.price) : ''} (CoinGecko) · read ${age(C.btc.at)} ago`; }
+  else tag.hidden = true;
+  if (P.kind === 'moon') document.documentElement.dataset.cond = 'moon'; else delete document.documentElement.dataset.cond;
+}
+setInterval(renderConditions, 5 * 60 * 1000);   // staleness, nightfall and the hour move on their own
+matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', renderConditions);
+
+// terminal here: this session's shell (the daemon's pty, in the session's folder) docked under the chat,
+// in a grid pane or a chat-view pane alike. The $ button in the composer and ⌘J toggle it.
+function toggleShellDrawer(el) {
+  const pane = el.closest('.pane, .cpane'); const drawer = pane && $('.shell-drawer', pane); const sid = pane && pane.dataset.sid;
+  if (!drawer || !sid) return;
+  if (pane.classList.contains('pane') && paneViewOf(sid) === 'shell') { setPaneView(sid, 'chat'); return; }
+  if (!drawer.hidden && drawer.dataset.sid === sid) { closeShellDrawer(pane); focusComposer(); return; }
+  const s = state.sessions.get(sid) || {}; const cwd = s.cwd || '';
+  drawer.innerHTML = `<div class="bar"><span class="path" title="${esc(cwd)}">$ ${esc(cwd.replace(/^\/(Users|home)\/[^/]+/, '~'))}</span><span class="help">this session's folder · ⌘J toggles</span><span class="spacer"></span><button class="sec" data-sh="close" title="Close the terminal (ends the shell)">✕</button></div><div class="box shell-box"></div>`;
+  drawer.dataset.sid = sid; drawer.hidden = false;
+  ensureShell(sid, $('.box', drawer));
+}
+function closeShellDrawer(pane) {
+  const drawer = $('.shell-drawer', pane); if (!drawer || drawer.hidden) return;
+  closeShell(drawer.dataset.sid); drawer.hidden = true; drawer.innerHTML = ''; delete drawer.dataset.sid;
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-sh="close"]'); if (!b) return; const pane = b.closest('.pane, .cpane'); if (pane) { closeShellDrawer(pane); focusComposer(); } });
+
 // shell pane (xterm.js over the daemon's pty)
 // ----------------------------------------------------------------------
 function ensureShell(sid, box) {
@@ -2056,9 +2119,9 @@ function toggleVoice(comp) {
     ta.value = base + finals + interim; ta.dispatchEvent(new Event('input'));
   };
   rec.onerror = (e) => { if (e.error === 'not-allowed') toast('microphone access was refused; allow it for kcoder and try again', 'err'); else if (e.error !== 'aborted' && e.error !== 'no-speech') toast('voice input: ' + e.error, 'err'); };
-  rec.onend = () => { comp._rec = null; mic.classList.remove('listening'); mic.title = micTitle(); ta.value = (base + finals).replace(/\s+$/, ''); ta.dispatchEvent(new Event('input')); ta.focus(); };
+  rec.onend = () => { comp._rec = null; if (mic) { mic.classList.remove('listening'); mic.title = micTitle(); } ta.value = (base + finals).replace(/\s+$/, ''); ta.dispatchEvent(new Event('input')); ta.focus(); };
   try { rec.start(); } catch (e) { toast('voice input could not start: ' + e.message, 'err'); return; }
-  comp._rec = rec; mic.classList.add('listening'); mic.title = 'Listening… click to stop';
+  comp._rec = rec; if (mic) { mic.classList.add('listening'); mic.title = 'Listening… click to stop'; }
 }
 
 // ---- the morning brief: what every session did, what waits on you, what is in review ----
@@ -2184,6 +2247,13 @@ async function settingsDialog() {
     ${sel('quota_reset_hour', String(q.reset_hour || 0), 'at (hour, local time)', Array.from({ length: 24 }, (_, h) => [String(h), `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`]))}
     ${chk('quota_shift', !!q.shift, 'Quota shift', 'when the forecast says the weekly limit runs out before the reset, small turns in sessions pinned to the big model run on the cheaper tier (always shown in the status bar while active)')}`; })()}
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
+    <div class="label-h">conditions</div>
+    ${(() => { const c = cfg.conditions || {}; const pl = c.place || {}; return `${chk('conditions_enabled', c.enabled !== false, 'Conditions in the header', 'an ambient accent on the header\'s ridgeline: fresh snow, bitcoin\'s day, the full moon; one at a time (snow first), refreshed every 30 minutes, kept while offline and gone after 12 hours; with reduced motion on, nothing moves')}
+    ${chk('conditions_snow', c.snow !== false, 'Fresh snow', 'light falling snow and a tag with the inches when the place below had snow in the last 24 h (Open-Meteo, no key; the place is fixed here, never your location)')}
+    <label class="setting"><span>Snow place <span class="help">the name in the tag</span></span><input type="text" data-set="conditions_place" value="${esc(pl.name || 'Alta')}" placeholder="Alta"></label>
+    <label class="setting"><span>Snow place lat, lon <span class="help">decimal degrees</span></span><input type="text" data-set="conditions_latlon" value="${esc(`${pl.lat ?? 40.5884}, ${pl.lon ?? -111.6386}`)}" placeholder="40.5884, -111.6386"></label>
+    ${chk('conditions_btc', c.btc !== false, 'Bitcoin', 'a thin line under the header, green or red with the 24 h move and stronger the bigger it is; a 5% day gets a badge on the ridgeline (CoinGecko, no key)')}
+    ${chk('conditions_moon', c.moon !== false, 'Full moon', 'in dark mode on full-moon nights: a small moon over the ridgeline and slightly cooler tones')}`; })()}
     <div class="label-h">accounts</div>
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
     <div class="label-h">kcoder</div>
@@ -2200,7 +2270,7 @@ async function settingsDialog() {
       if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
       if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
       if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
-      const fields = k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'ci_autofix' ? { ci_autofix: el.checked } : k === 'plan_price_usd' ? { plan_price_usd: Number(el.value) } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : k === 'quota_shift' ? { quota_shift: el.checked } : k === 'quota_limit_tokens' ? { quota_limit_tokens: Number(el.value) || 0 } : k === 'quota_reset_weekday' || k === 'quota_reset_hour' ? { [k]: Number(el.value) } : { [k]: el.value };
+      const fields = k.startsWith('conditions_') ? { [k]: el.type === 'checkbox' ? el.checked : el.value } : k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'ci_autofix' ? { ci_autofix: el.checked } : k === 'plan_price_usd' ? { plan_price_usd: Number(el.value) } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : k === 'quota_shift' ? { quota_shift: el.checked } : k === 'quota_limit_tokens' ? { quota_limit_tokens: Number(el.value) || 0 } : k === 'quota_reset_weekday' || k === 'quota_reset_hour' ? { [k]: Number(el.value) } : { [k]: el.value };
       const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');
     } catch (err) { toast(err.message, 'err'); }
   });
@@ -2801,6 +2871,7 @@ const SHORTCUTS = [
   { id: 'archive', group: 'sessions', combo: 'e', label: 'archive the focused session (undo on the toast)', scope: 'plain', when: () => !!(state.focus || (state.view === 'chat' && focusedSid())), run: () => archiveChat(state.focus || focusedSid()) },
   { id: 'archive-idle', group: 'sessions', label: 'archive every idle chat (not running, pinned, in a pane or current)', scope: 'alias', palette: 'archive idle chats', run: () => archiveIdle() },
   { id: 'voice', group: 'sessions', combo: 'mod+shift+m', label: 'voice input into the composer (start / stop)', scope: 'app', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { const comp = activeComposer(); if (comp) toggleVoice(comp); } },
+  { id: 'shellhere', group: 'sessions', combo: 'mod+j', label: 'terminal here: this session\'s shell docked under the chat (toggle)', scope: 'app', palette: 'terminal here (a shell in the session\'s folder, under the chat)', run: () => { const comp = activeComposer(); if (comp) toggleShellDrawer(comp.form); } },
   { id: 'ptt', group: 'sessions', keys: '⌥Space (hold)', label: 'push-to-talk: dictate while held, release to stop (also: hold the 🎤 button)', scope: 'composer' },
   { id: 'slash', group: 'sessions', combo: '/', label: 'slash commands (/model, /trust, …)', scope: 'plain', when: () => state.view !== 'wall' || !!state.focus, run: () => { focusComposer(); const ta = document.activeElement; if (ta && ta.tagName === 'TEXTAREA') { ta.value = '/'; ta.dispatchEvent(new Event('input')); } } },
   { id: 'send', group: 'sessions', keys: '↩', label: 'send', scope: 'composer' },
@@ -2981,7 +3052,7 @@ function renderSplit() {
   L.panes.forEach((sid, i) => {
     const pane = split.children[i];
     pane.dataset.pane = i;
-    if (pane.dataset.sid !== (sid || '')) { pane.dataset.sid = sid || ''; $('.composer-slot', pane).innerHTML = ''; $('.chat-log', pane).innerHTML = ''; pane._rendered = null; if (pane._find) closeFind(pane, true); }
+    if (pane.dataset.sid !== (sid || '')) { closeShellDrawer(pane); pane.dataset.sid = sid || ''; $('.composer-slot', pane).innerHTML = ''; $('.chat-log', pane).innerHTML = ''; pane._rendered = null; if (pane._find) closeFind(pane, true); }
     pane.classList.toggle('focused', i === L.focus);
     pane.classList.toggle('zoom', L.zoom === i);
     pane.hidden = L.zoom != null && L.zoom !== i;
