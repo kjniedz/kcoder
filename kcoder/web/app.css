@@ -441,9 +441,16 @@ select:hover { border-color: var(--accent); }
 ::highlight(kc-find-0), ::highlight(kc-find-1), ::highlight(kc-find-2) { background-color: rgba(251,191,36,.35); }
 ::highlight(kc-cur-0), ::highlight(kc-cur-1), ::highlight(kc-cur-2) { background-color: #fbbf24; color: var(--on-accent); }
 .sidebar-foot { display: flex; gap: 8px; align-items: center; padding: 6px; border-top: 1px solid var(--line); }
-.sidebar-foot .help { color: var(--fg-mute); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#btn-archived { border: none; background: none; color: var(--fg-dim); font-size: 10.5px; padding: 0; text-decoration: underline dotted; white-space: nowrap; }
-#btn-archived:hover { color: var(--fg); }
+.sidebar-foot .help { color: var(--fg-mute); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.sidebar-foot .link { border: none; background: none; color: var(--fg-dim); font-size: 10.5px; padding: 0; text-decoration: underline dotted; white-space: nowrap; }
+.sidebar-foot .link:hover { color: var(--fg); }
+.sidebar-foot:has(.link:not([hidden]) ~ .link:not([hidden])) .help { display: none; }   /* two links: the drag hint makes way */
+/* the archive ✕ takes the age's place while the row is hovered */
+.chat-item .arch { display: none; border: none; background: none; color: var(--fg-dim); font-size: 11px; line-height: 1; padding: 0 2px; cursor: pointer; }
+.chat-item:hover .arch { display: inline-block; }
+.chat-item:hover .age { display: none; }
+.chat-item .arch:hover { color: var(--fg); }
+@media (pointer: coarse) { .chat-item .arch { display: inline-block; } }
 .chat-item .badge { margin-left: 2px; }
 .chat-item .pane-no { background: var(--accent); color: var(--on-accent); border-radius: 3px; font-size: 9.5px; padding: 0 4px; font-weight: 700; }
 .chat-item.in-pane .title { color: var(--accent-text); }

@@ -1,14 +1,17 @@
 #!/bin/bash
 # kcoder installer for macOS (and Linux). No terminal experience needed.
 #
-# kcoder is a private repo, so get a copy first (green "Code" button →
-# Download ZIP, or `gh repo clone kjniedz/kcoder`), then in Terminal:
+# One line in Terminal does it all:
+#
+#   curl -fsSL https://raw.githubusercontent.com/kjniedz/kcoder/main/install.sh | bash
+#
+# or, from a downloaded copy of the repo (green "Code" button, Download ZIP):
 #
 #   bash ~/Downloads/kcoder-main/install.sh        # or: bash ~/kcoder/install.sh
 #
-# Run from a git checkout it installs that checkout; run from a ZIP it clones
-# the repo to ~/kcoder first (with your GitHub sign-in), so `kcoder update`
-# can pull new commits later. On a Mac without Python it installs Python from
+# Run from a git checkout it installs that checkout; run from a ZIP or through
+# the pipe it clones the repo to ~/kcoder first, so `kcoder update` can pull
+# new commits later. On a Mac without Python it installs Python from
 # python.org (one password prompt), puts kcoder.app in ~/Applications and
 # opens it. The app then walks you through signing in to your AI model.
 #
@@ -16,6 +19,8 @@
 # KCODER_REPO (clone URL), KCODER_PYTHON (python.org version to install),
 # KCODER_NO_LAUNCH=1 (do not open the app), KCODER_DRY_RUN=1 (print the steps).
 
+# everything sits in main so that bash has read the whole script before a
+# command runs: piped through curl, nothing below can eat the rest of it
 main() {
   set -euo pipefail
   local REPO="${KCODER_REPO:-https://github.com/kjniedz/kcoder.git}"
@@ -73,7 +78,7 @@ main() {
       say "Updating the kcoder checkout in $CHECKOUT"
       run git -C "$CHECKOUT" pull --ff-only
     else
-      say "Downloading kcoder into $CHECKOUT (kcoder is a private repo: sign in to GitHub if asked)"
+      say "Downloading kcoder into $CHECKOUT"
       if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
         run gh repo clone "$REPO" "$CHECKOUT"
       else

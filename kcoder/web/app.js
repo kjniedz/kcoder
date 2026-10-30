@@ -1123,7 +1123,7 @@ async function handleAction(el, sid) {
       case 'discard': if (await confirmDialog(`Discard all work in ${s.worktree.branch}?`, 'The worktree and branch are deleted. This cannot be undone.')) { await request('discard', { sid }); toast('discarded', 'warn'); } break;
       case 'open-chat': assignPane(state.layout.focus, sid); setView('chat'); break;
       case 'export': await exportChat(sid); break;
-      case 'archive': await request('archive', { sid }); if (state.focus === sid) focusPane(null); break;
+      case 'archive': await archiveChat(sid); break;
       case 'new': openNewSession(); break;
       case 'edit': {
         const msg = el.closest('.msg-user'); const turn = Number(msg.dataset.turn);
@@ -1234,6 +1234,8 @@ function renderSidebar() {
   }).join('') || `<div class="hit">${hiddenChats ? 'no live chats' : 'no chats yet'} - press + to start one</div>`;
   const b = $('#btn-archived');
   b.hidden = !show && !hiddenChats;
+  const idle = idleChats().length, ai = $('#btn-archive-idle');
+  ai.hidden = idle < 2; ai.textContent = `archive ${idle} idle`; ai.title = `Archive the ${idle} chats that are not running, pinned, in a pane or the current one (undo on the toast)`;
   b.textContent = show ? 'hide archived' : `show ${hiddenChats} archived`; b.title = show ? 'Hide archived chats and projects with no live session' : `${hiddenChats} archived chat${hiddenChats === 1 ? '' : 's'}${hiddenProjects ? ` in ${hiddenProjects} project${hiddenProjects === 1 ? '' : 's'} with nothing live` : ''} are hidden`;
 }
 function showArchived() { return localStorage.getItem('kcoder.showArchived') === 'on'; }
@@ -1243,8 +1245,38 @@ function chatItemHtml(c) {
   const st = c.archived ? 'archived' : (live ? live.status : c.status);
   const label = st === 'working' ? 'running' : st === 'waiting' ? (live && live.pending_approval ? 'needs approval' : 'needs you') : st === 'error' ? 'error' : st === 'idle' && live ? 'idle' : '';
   const inPane = state.layout.panes.indexOf(c.id);
-  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${st === 'working' ? `<span class="badge working">${statusLineHtml(c.id, true)}</span>` : st === 'error' ? `<button class="badge error" data-err="${c.id}" title="what happened, send again, copy a report">error · details</button>` : label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span></div>`;
+  return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${st === 'working' ? `<span class="badge working">${statusLineHtml(c.id, true)}</span>` : st === 'error' ? `<button class="badge error" data-err="${c.id}" title="what happened, send again, copy a report">error · details</button>` : label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span>${c.archived ? '' : `<button class="arch" data-archive="${c.id}" title="archive this chat (undo on the toast; it stays searchable and comes back from show archived)">✕</button>`}</div>`;
 }
+// one click archives a chat; the toast offers undo, which resumes it without opening it anywhere
+async function archiveChat(sid) {
+  const c = state.chats.find((x) => x.id === sid) || state.sessions.get(sid); if (!c) return false;
+  const live = state.sessions.get(sid);
+  if (live && live.status === 'working' && !(await confirmDialog(`Archive ${c.title || c.name}?`, 'It is still running: archiving interrupts the turn. Cancel to let it finish first.'))) return false;
+  try { await request('archive', { sid }); } catch (e) { toast(e.message, 'err'); return false; }
+  if (state.focus === sid) focusPane(null);
+  toast(`archived ${c.title || c.name}`, 'ok', { label: 'undo', run: () => request('unarchive', { sid }).catch((e) => toast(e.message, 'err')) });
+  return true;
+}
+// the chats a bulk archive takes: not archived, not pinned, not running or waiting, not in a pane and not the current one
+function idleChats(pid) {
+  return state.chats.filter((c) => {
+    if (c.archived || c.pinned || c.id === state.sid || state.layout.panes.includes(c.id)) return false;
+    if (pid && ((c.project || {}).id || 'other') !== pid) return false;
+    const live = state.sessions.get(c.id); const st = live ? live.status : c.status;
+    return st !== 'working' && st !== 'waiting';
+  });
+}
+async function archiveIdle(pid) {
+  const list = idleChats(pid);
+  if (!list.length) { toast('nothing idle to archive: every chat is running, pinned, in a pane or the current one'); return; }
+  const where = pid ? ` in ${(list[0].project || {}).name || 'this project'}` : '';
+  const n = (k) => `${k} idle chat${k === 1 ? '' : 's'}`;
+  if (!(await confirmDialog(`Archive ${n(list.length)}${where}?`, 'Pinned chats, the current one and the ones in your panes stay. Archived chats are still searchable and come back from "show archived", or with undo on the toast.'))) return;
+  const done = [];
+  for (const c of list) { try { await request('archive', { sid: c.id }); done.push(c.id); if (state.focus === c.id) focusPane(null); } catch (e) { toast(e.message, 'err'); } }
+  toast(`archived ${n(done.length)}${where}`, 'ok', { label: 'undo', run: async () => { for (const sid of done) { try { await request('unarchive', { sid }); } catch (e) { toast(e.message, 'err'); } } } });
+}
+$('#btn-archive-idle').addEventListener('click', () => archiveIdle());
 $('#projects').addEventListener('dragstart', (e) => { const item = e.target.closest('.chat-item[data-sid]'); if (!item) return; state.dragChat = item.dataset.sid; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', item.dataset.sid); });
 $('#projects').addEventListener('dragend', () => { state.dragChat = null; for (const p of $$('.cpane')) p.classList.remove('drop'); });
 
@@ -1254,6 +1286,7 @@ $('#projects').addEventListener('click', async (e) => {
   if (e.target.closest('[data-search-all]')) { searchDialog($('#search').value.trim()); return; }
   const add = e.target.closest('[data-new-in]'); if (add) { openNewSession({ cwd: add.dataset.newIn }); e.stopPropagation(); return; }
   const head = e.target.closest('.project-head'); if (head) { const pid = head.parentElement.dataset.pid; const c = JSON.parse(localStorage.getItem('kcoder.collapsed') || '{}'); c[pid] = !c[pid]; localStorage.setItem('kcoder.collapsed', JSON.stringify(c)); renderSidebar(); return; }
+  const ar = e.target.closest('[data-archive]'); if (ar) { e.stopPropagation(); archiveChat(ar.dataset.archive); return; }
   const item = e.target.closest('.chat-item[data-sid]'); if (item) openChat(item.dataset.sid);
 });
 $('#projects').addEventListener('contextmenu', (e) => {
@@ -1335,7 +1368,7 @@ async function chatMenu(sid) {
     if (choice === 'rename') { const t = await promptDialog('Chat title', '', c.title || ''); if (t) await request('title', { sid, title: t }); }
     else if (choice === 'pin') await request('pin', { sid, pinned: !c.pinned });
     else if (choice === 'export') await exportChat(sid);
-    else if (choice === 'archive') await request('archive', { sid });
+    else if (choice === 'archive') await archiveChat(sid);
     else if (choice === 'unarchive') await openChat(sid);
     else if (choice === 'delete' && await confirmDialog('Delete this chat?', 'Its history is removed from disk.')) { await request('delete', { sid }); if (state.sid === sid) state.sid = null; }
   } catch (e) { toast(e.message, 'err'); }
@@ -1904,13 +1937,16 @@ function paletteItems() {
     items.push([`open: ${s.name}`, () => { state.sid = s.id; if (state.view === 'chat') assignPane(state.layout.focus, s.id); else setView('chat'); }]);
     if (s.status === 'working' || s.status === 'waiting') items.push([`interrupt: ${s.name}`, () => request('interrupt', { sid: s.id })]);
     if (s.status === 'error') items.push([`error details: ${s.name}`, () => errorDialog(s.id)]);
-    items.push([`archive: ${s.name}`, () => request('archive', { sid: s.id })]);
+    items.push([`archive: ${s.name}`, () => archiveChat(s.id)]);
     items.push([`export: ${s.name}`, () => exportChat(s.id)]);
     items.push([`shell: ${s.name}`, () => { if (state.view !== 'wall') setView('wall'); setPaneView(s.id, 'shell'); focusPane(s.id); }]);
     if (s.project && s.project.git) items.push([`pull from remote: ${s.name}`, () => handleAction({ dataset: { act: 'pull' } }, s.id)]);
     if (s.worktree) { items.push([`changes: ${s.name}${s.needs_review ? ' (needs review)' : ''}`, () => changesDialog(s.id)]); items.push([`merge: ${s.name}`, () => handleAction({ dataset: { act: 'merge' } }, s.id)]); items.push([`open PR: ${s.name}`, () => handleAction({ dataset: { act: 'pr' } }, s.id)]); }
     items.push([`instructions: ${s.name}`, () => instructionsDialog(s.id)]);
   }
+  const perProject = new Map();
+  for (const c of idleChats()) { const pid = (c.project || {}).id || 'other'; perProject.set(pid, (perProject.get(pid) || { name: (c.project || {}).name || 'other', n: 0 })); perProject.get(pid).n++; }
+  for (const [pid, g] of perProject) items.push([`archive ${g.n} idle chat${g.n === 1 ? '' : 's'}: ${g.name}`, () => archiveIdle(pid)]);
   for (const c of state.chats.filter((c) => c.archived).slice(0, 50)) items.push([`resume: ${c.title || c.name}`, () => openChat(c.id)]);
   return items;
 }
@@ -2740,6 +2776,8 @@ const SHORTCUTS = [
   { id: 'open', group: 'sessions', combo: 'Enter', label: 'focus the current session on the wall', scope: 'plain', when: () => state.view === 'wall' && !state.focus && !!state.sid, run: () => focusPane(state.sid) },
   { id: 'view', group: 'sessions', combo: 'v', label: 'pane view: chat ↔ terminal (grid panes also: shell → preview)', scope: 'plain', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
   { id: 'pin', group: 'sessions', combo: 'p', label: 'pin the focused session to this window', scope: 'plain', when: () => !!state.focus, run: () => togglePin(state.focus) },
+  { id: 'archive', group: 'sessions', combo: 'e', label: 'archive the focused session (undo on the toast)', scope: 'plain', when: () => !!(state.focus || (state.view === 'chat' && focusedSid())), run: () => archiveChat(state.focus || focusedSid()) },
+  { id: 'archive-idle', group: 'sessions', label: 'archive every idle chat (not running, pinned, in a pane or current)', scope: 'alias', palette: 'archive idle chats', run: () => archiveIdle() },
   { id: 'voice', group: 'sessions', combo: 'mod+shift+m', label: 'voice input into the composer (start / stop)', scope: 'app', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { const comp = activeComposer(); if (comp) toggleVoice(comp); } },
   { id: 'ptt', group: 'sessions', keys: '⌥Space (hold)', label: 'push-to-talk: dictate while held, release to stop (also: hold the 🎤 button)', scope: 'composer' },
   { id: 'slash', group: 'sessions', combo: '/', label: 'slash commands (/model, /trust, …)', scope: 'plain', when: () => state.view !== 'wall' || !!state.focus, run: () => { focusComposer(); const ta = document.activeElement; if (ta && ta.tagName === 'TEXTAREA') { ta.value = '/'; ta.dispatchEvent(new Event('input')); } } },

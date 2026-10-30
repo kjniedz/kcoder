@@ -1,13 +1,17 @@
 # kcoder installer for Windows 10 and 11. No terminal experience needed.
 #
-# From a downloaded copy of the repo (green "Code" button, Download ZIP, unzip),
-# right-click install.ps1 and choose "Run with PowerShell", or in PowerShell:
+# One line in PowerShell does it all:
+#
+#   irm https://raw.githubusercontent.com/kjniedz/kcoder/main/install.ps1 | iex
+#
+# or, from a downloaded copy of the repo (green "Code" button, Download ZIP,
+# unzip), right-click install.ps1 and choose "Run with PowerShell", or:
 #
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1
 #
 # What it does: installs Git and Python with winget if they are missing, makes
-# a git checkout of kcoder (cloning the private repo with your GitHub sign-in
-# if you ran it from a ZIP, so `kcoder update` can pull new commits), installs
+# a git checkout of kcoder (cloning it to ~\kcoder when run from a ZIP or the
+# pipe, so `kcoder update` can pull new commits), installs
 # kcoder into its own Python environment, puts the `kcoder` command on your
 # PATH, adds kcoder to the Start Menu and Desktop, and opens the app.
 #
@@ -18,7 +22,13 @@ $ErrorActionPreference = 'Continue'   # native tools write progress to stderr; e
 $ProgressPreference = 'SilentlyContinue'
 
 function Say($msg) { Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan }
-function Fail($msg) { Write-Host ""; Write-Host $msg -ForegroundColor Red; if (-not $env:KCODER_NO_LAUNCH) { Read-Host "Press Enter to close" }; exit 1 }
+function Fail($msg) {
+    Write-Host ""; Write-Host $msg -ForegroundColor Red
+    # pasted into a terminal (irm | iex) there is no file: stop the script, keep the window
+    if (-not $PSCommandPath) { throw 'kcoder was not installed' }
+    if (-not $env:KCODER_NO_LAUNCH) { Read-Host "Press Enter to close" }
+    exit 1
+}
 function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 }
@@ -75,9 +85,9 @@ if ($here -and (Test-Path (Join-Path $here '.git')) -and (Test-Path (Join-Path $
         Say "Updating the kcoder checkout in $checkout"
         git -C $checkout pull --ff-only
     } else {
-        Say "Downloading kcoder into $checkout (a GitHub sign-in window may open: kcoder is a private repo)"
+        Say "Downloading kcoder into $checkout"
         git clone $repo $checkout
-        if ($LASTEXITCODE -ne 0) { Fail "Could not clone $repo. Sign in to GitHub with the account that can see kcoder and run this again." }
+        if ($LASTEXITCODE -ne 0) { Fail "Could not clone $repo. Check your internet connection and run this again." }
     }
 }
 

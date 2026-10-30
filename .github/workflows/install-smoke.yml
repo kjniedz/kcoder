@@ -57,6 +57,17 @@ jobs:
         run: |
           & "$env:LOCALAPPDATA\Programs\kcoder\venv\Scripts\python.exe" scripts\smoke_test.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: install.ps1 works piped into the shell from the home folder (the README's one-line install clones to KCODER_HOME)
+        shell: powershell
+        env:
+          KCODER_NO_LAUNCH: "1"
+          KCODER_HOME: ${{ runner.temp }}\kcoder-piped
+        run: |
+          Set-Location $HOME
+          Get-Content "$env:GITHUB_WORKSPACE\install.ps1" -Raw | Invoke-Expression
+          if (-not (Test-Path "$env:KCODER_HOME\kcoder\cli.py")) { Write-Error "the pipe did not clone kcoder into $env:KCODER_HOME"; exit 1 }
+          & "$env:LOCALAPPDATA\Programs\kcoder\venv\Scripts\python.exe" -P -m kcoder.cli --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
   linux:
     runs-on: ubuntu-latest
@@ -82,3 +93,11 @@ jobs:
           rmdir "$HOME/kcoder"
       - name: Smoke test
         run: ~/.local/share/kcoder-venv/bin/python scripts/smoke_test.py
+      - name: install.sh works piped into bash from the home folder (the README's one-line install clones to KCODER_HOME)
+        env:
+          KCODER_NO_LAUNCH: "1"
+          KCODER_HOME: ${{ runner.temp }}/kcoder-piped
+        run: |
+          cd "$HOME" && cat "$GITHUB_WORKSPACE/install.sh" | bash
+          test -f "$KCODER_HOME/kcoder/cli.py" || { echo "the pipe did not clone kcoder into $KCODER_HOME"; exit 1; }
+          ~/.local/share/kcoder-venv/bin/python -P -m kcoder.cli --version

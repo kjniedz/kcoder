@@ -47,41 +47,45 @@ them in one window. Developed by Kyle Niedzwiecki.
 
 ## Get kcoder
 
-kcoder is a private repo, so you need a GitHub account that can see it. Get a
-copy first: on the repo page click the green **Code** button, then **Download
-ZIP**, and unzip it (or clone it if you use git). The installer sets everything
-up, including a git checkout in your home folder so `kcoder update` can pull
-new commits later.
+One command installs everything: paste it into a terminal and press Enter. It
+sets up Python if you have none, clones kcoder into your home folder (so
+`kcoder update` can pull new commits later), installs it and opens the app.
 
-**Mac.** Open the Terminal app (Cmd+Space, type Terminal, Enter) and run the
-installer from the folder you unzipped:
+**Mac.** Open the Terminal app (Cmd+Space, type Terminal, Enter) and paste:
 
 ```bash
-bash ~/Downloads/kcoder-main/install.sh
+curl -fsSL https://raw.githubusercontent.com/kjniedz/kcoder/main/install.sh | bash
 ```
 
-It installs Python if your Mac does not have it (your Mac asks for your
-password once), installs kcoder, puts **kcoder.app** in your Applications
-folder and opens it. Pin it: right-click the kcoder icon in the Dock, choose
-Options, then Keep in Dock. From then on you launch kcoder like any other app.
+Your Mac asks for your password once if it has to install Python. The
+installer puts **kcoder.app** in your Applications folder and opens it. Pin
+it: right-click the kcoder icon in the Dock, choose Options, then Keep in
+Dock. From then on you launch kcoder like any other app.
 
-**Windows 10 / 11.** Open the unzipped folder, click the address bar, type
-`powershell`, press Enter, then run:
+**Windows 10 / 11.** Open PowerShell (Start, type PowerShell, Enter) and
+paste:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+irm https://raw.githubusercontent.com/kjniedz/kcoder/main/install.ps1 | iex
 ```
 
 It installs Git and Python with winget if they are missing, clones kcoder to
-`%USERPROFILE%\kcoder` (a GitHub sign-in window opens the first time),
-installs kcoder into its own Python environment, adds the `kcoder` command to
-your PATH, puts **kcoder** in the Start Menu and on the Desktop, and opens it.
-Pin it: right-click kcoder in the Start Menu, Pin to taskbar. Files live in
-`%LOCALAPPDATA%\kcoder`, settings and keys in `%APPDATA%\kcoder`.
+`%USERPROFILE%\kcoder`, installs kcoder into its own Python environment, adds
+the `kcoder` command to your PATH, puts **kcoder** in the Start Menu and on
+the Desktop, and opens it. Pin it: right-click kcoder in the Start Menu, Pin
+to taskbar. Files live in `%LOCALAPPDATA%\kcoder`, settings and keys in
+`%APPDATA%\kcoder`.
 
-**Linux.** `bash install.sh` works the same way: kcoder goes into its own
+**Linux.** The Mac command works the same way: kcoder goes into its own
 environment in `~/.local/share/kcoder-venv` and the command into
 `~/.local/bin`.
+
+**Rather look first?** Download the repo (green **Code** button, **Download
+ZIP**, unzip) and run the installer from that folder: on a Mac
+`bash ~/Downloads/kcoder-main/install.sh`, on Windows open the unzipped
+folder, type `powershell` in its address bar and run
+`powershell -ExecutionPolicy Bypass -File .\install.ps1`. Run from a git
+checkout, the installer installs that checkout instead of cloning a new one.
 
 **"kcoder is not recognized as the name of a cmdlet"** (or `command not
 found`) means the `kcoder` command was never installed, or the terminal was
@@ -168,7 +172,11 @@ that explains what happened, lets you **send the prompt again**, and copies a
 report you can paste into a kcoder session to get it fixed.
 
 The sidebar lists live chats only; projects with nothing running and archived
-chats sit behind a "show N archived" link. Right-click a chat to rename, pin,
+chats sit behind a "show N archived" link. Hover a chat and click its ✕ to
+archive it in one click (undo is on the toast), press `e` to archive the
+focused session, or click **archive N idle** at the bottom of the sidebar to
+clear every chat that is not running, pinned, in a pane or the current one;
+the palette offers the same per project. Right-click a chat to rename, pin,
 archive, export or delete it. Transcripts are real text: select across
 messages, ⌘C copies clean markdown, ⌘F finds in a session, ⌘⇧F searches all
 of them, and files dropped on a pane attach to the prompt.
