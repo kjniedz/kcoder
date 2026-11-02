@@ -11,9 +11,19 @@
 #
 # Run from a git checkout it installs that checkout; run from a ZIP or through
 # the pipe it clones the repo to ~/kcoder first, so `kcoder update` can pull
-# new commits later. On a Mac without Python it installs Python from
-# python.org (one password prompt), puts kcoder.app in ~/Applications and
-# opens it. The app then walks you through signing in to your AI model.
+# new commits later.
+#
+# On a Mac it needs nothing in place first. If git is missing it has macOS
+# install Apple's command line tools (a dialog: click Install). kcoder always
+# runs on its own Python from python.org, installed if it is not there (one
+# password prompt): the Python that Homebrew or Apple ship refuses to install
+# packages ("externally-managed-environment ... try brew install xyz"), so
+# those are left alone even when they are on the PATH. Then it puts
+# kcoder.app in ~/Applications and opens it. The app walks you through signing
+# in to your AI model. Linux gets kcoder's own Python environment in
+# ~/.local/share/kcoder-venv and the command in ~/.local/bin.
+#
+# Running the same command again is always safe: it picks up where it stopped.
 #
 # Environment overrides: KCODER_HOME (where to clone, default ~/kcoder),
 # KCODER_REPO (clone URL), KCODER_PYTHON (python.org version to install),
@@ -22,24 +32,68 @@
 # everything sits in main so that bash has read the whole script before a
 # command runs: piped through curl, nothing below can eat the rest of it
 main() {
-  set -euo pipefail
+  set -Eeuo pipefail   # -E: the ERR trap below fires inside functions too
   local REPO="${KCODER_REPO:-https://github.com/kjniedz/kcoder.git}"
   local PY_VERSION="${KCODER_PYTHON:-3.14.3}"
-  local FRAMEWORK=/Library/Frameworks/Python.framework/Versions
+  local FRAMEWORK="${KCODER_FRAMEWORK:-/Library/Frameworks/Python.framework/Versions}"   # KCODER_FRAMEWORK: tests only
   local DRY="${KCODER_DRY_RUN:-}"
-  local OS
+  local OS STEP="starting"
   OS="$(uname -s)"
 
-  say() { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
+  say() { STEP="$*"; printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
   run() { if [ -n "$DRY" ]; then echo "    \$ $*"; else "$@"; fi; }
+  # a failed command lands here (set -e): say what step it was and what to do,
+  # in plain words, instead of leaving a bare error as the last line
+  fail() {
+    printf '\n\033[1;31m==>\033[0m kcoder could not finish this step: %s\n' "$STEP"
+    echo "    The reason is in the lines above this one. The usual ones:"
+    echo "    - a download failed or 'Could not resolve host': check the internet connection"
+    echo "    - 'Sorry, try again' or 'is not in the sudoers file': the password is the one you log in"
+    echo "      to this Mac with, and the account must be an administrator"
+    echo "    - 'externally-managed-environment' or 'try brew install': a Python that refuses to"
+    echo "      install packages was used; this installer brings its own, so run it again"
+    echo "    Running the same command again is safe and picks up where it stopped."
+    echo "    Still stuck? Select everything in this window, copy it and send it to Kyle."
+  }
+  trap fail ERR
 
+  # --- git (Apple's command line tools on a Mac) ---
+  if [ "$OS" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then
+    say "Installing Apple's command line tools (they bring git). A window opens: click Install and wait; this continues by itself when it is done"
+    run xcode-select --install >/dev/null 2>&1 || true
+    if [ -z "$DRY" ]; then
+      local waited=0
+      until xcode-select -p >/dev/null 2>&1; do
+        sleep 5
+        waited=$((waited + 5))
+        if [ $((waited % 60)) -eq 0 ]; then echo "    still waiting for the command line tools (click Install in the dialog if it is still open)"; fi
+        if [ "$waited" -ge 1800 ]; then
+          echo "The command line tools did not finish in 30 minutes. If the dialog was closed, run this command again to get it back."
+          exit 1
+        fi
+      done
+      say "The command line tools are installed"
+    fi
+  fi
+  if [ "$OS" != "Darwin" ] && ! command -v git >/dev/null 2>&1; then
+    echo "kcoder needs git. Install it with your package manager (for example: sudo apt install git) and run this again."
+    exit 1
+  fi
+
+  # --- Python ---
   find_python() {
     local v p
     if [ "$OS" = "Darwin" ]; then
+      # python.org's framework build only. Homebrew's python3 and Apple's
+      # /usr/bin/python3 are skipped on purpose: their pip refuses every
+      # install ("externally-managed-environment ... try brew install xyz")
+      # and Apple's is too old. The framework one installs kcoder as is and
+      # its interpreter goes into kcoder.app, so the Dock says "kcoder".
       for v in 3.14 3.13 3.12 3.11; do
         p="$FRAMEWORK/$v/bin/python3"
         if [ -x "$p" ]; then echo "$p"; return 0; fi
       done
+      return 1
     fi
     for p in python3.14 python3.13 python3.12 python3.11 python3; do
       if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
@@ -56,9 +110,9 @@ main() {
       echo "kcoder needs Python 3.11 or newer. Install it with your package manager (for example: sudo apt install python3 python3-venv) and run this again."
       exit 1
     fi
-    say "Installing Python $PY_VERSION from python.org (your Mac will ask for your password once)"
+    say "Installing Python $PY_VERSION from python.org for kcoder to run on (your Mac asks for your login password once; nothing you type shows)"
     local PKG="/tmp/python-$PY_VERSION.pkg"
-    run curl -fL "https://www.python.org/ftp/python/$PY_VERSION/python-$PY_VERSION-macos11.pkg" -o "$PKG"
+    run curl -fL --progress-bar "https://www.python.org/ftp/python/$PY_VERSION/python-$PY_VERSION-macos11.pkg" -o "$PKG"
     run sudo installer -pkg "$PKG" -target /
     run rm -f "$PKG"
     PY="$(find_python || true)"
@@ -66,7 +120,7 @@ main() {
     PY="${PY:-$FRAMEWORK/${PY_VERSION%.*}/bin/python3}"
   fi
 
-  # the checkout: this one, or a clone in ~/kcoder
+  # --- the checkout: this one, or a clone in ~/kcoder ---
   local HERE CHECKOUT
   HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
   if [ -n "$HERE" ] && [ -d "$HERE/.git" ] && [ -f "$HERE/kcoder/cli.py" ]; then

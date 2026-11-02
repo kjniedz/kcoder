@@ -47,9 +47,12 @@ them in one window. Developed by Kyle Niedzwiecki.
 
 ## Get kcoder
 
-One command installs everything: paste it into a terminal and press Enter. It
-sets up Python if you have none, clones kcoder into your home folder (so
-`kcoder update` can pull new commits later), installs it and opens the app.
+One command installs everything: paste it into a terminal and press Enter.
+You need nothing in place first. It sets up what is missing, clones kcoder
+into your home folder (so `kcoder update` can pull new commits later),
+installs it and opens the app. If it stops, it says which step failed and
+what to do; running the same command again is always safe and picks up where
+it stopped.
 
 **Mac.** Open the Terminal app (Cmd+Space, type Terminal, Enter) and paste:
 
@@ -57,10 +60,16 @@ sets up Python if you have none, clones kcoder into your home folder (so
 curl -fsSL https://raw.githubusercontent.com/kjniedz/kcoder/main/install.sh | bash
 ```
 
-Your Mac asks for your password once if it has to install Python. The
-installer puts **kcoder.app** in your Applications folder and opens it. Pin
-it: right-click the kcoder icon in the Dock, choose Options, then Keep in
-Dock. From then on you launch kcoder like any other app.
+Two things can come up on a Mac that has never run developer tools. If git is
+missing, a window from macOS offers to install Apple's command line tools:
+click Install, wait for it to finish, the installer carries on by itself. And
+kcoder runs on its own copy of Python from python.org: if that is not there
+yet the installer downloads it and your Mac asks for your login password once
+(nothing shows while you type it). It does this even when another Python is
+around, because the ones Homebrew and Apple ship refuse to install packages.
+The installer then puts **kcoder.app** in your Applications folder and opens
+it. Pin it: right-click the kcoder icon in the Dock, choose Options, then Keep
+in Dock. From then on you launch kcoder like any other app.
 
 **Windows 10 / 11.** Open PowerShell (Start, type PowerShell, Enter) and
 paste:
@@ -94,6 +103,14 @@ itself installs nothing: run the installer, then open a **new** terminal
 window. The full path works from anywhere:
 `%LOCALAPPDATA%\Programs\kcoder\venv\Scripts\kcoder.exe app` on Windows,
 `python3 -P -m kcoder app` on a Mac.
+
+**"externally-managed-environment"**, with a note to "try brew install xyz"
+or to use a virtual environment, means pip was run with Homebrew's (or a Linux
+distribution's) Python, which refuses to install anything on its own. That
+happened with an older copy of the installer, or with `pip install` typed by
+hand. Nothing is wrong with your Mac: run the one-line installer above again.
+It ignores that Python, installs kcoder's own copy from python.org if it is
+not there yet, and finishes the install with it.
 
 **"cannot import name '__version__' from 'kcoder' (unknown location)"** means
 Python was started as `python3 -m kcoder…` without `-P` from a folder that
