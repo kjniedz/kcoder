@@ -15,10 +15,10 @@ Pace: used / elapsed. The forecast is linear: at this pace the limit is hit
 at window_start + elapsed / utilization. It is marked reliable once six
 hours of the window have passed or a fifth of the limit is used.
 
-Quota shift (config quota.shift, off by default): while the forecast says
+Quota shift (config quota.shift, on by default): while the forecast says
 the limit runs out before the reset, small turns in sessions pinned to the
-provider's large tier go to the small tier instead (shift_model). The
-status bar shows it whenever it is active.
+provider's large tier, or on the plan default, go to the small tier instead
+(shift_model). The status bar shows it whenever it is active.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _cfg(cfg: dict | None) -> dict:
         hr = max(0, min(23, int(q.get("reset_hour") or 0)))
     except (TypeError, ValueError):
         hr = 0
-    return {"limit_tokens": limit, "reset_weekday": wd, "reset_hour": hr, "shift": bool(q.get("shift"))}
+    return {"limit_tokens": limit, "reset_weekday": wd, "reset_hour": hr, "shift": q.get("shift") is not False}
 
 
 def estimate_window(cfg: dict | None = None, now: float | None = None) -> tuple[float, float]:
@@ -214,7 +214,7 @@ def shift_model(provider, model: str, text: str, context_tokens: int, cfg: dict 
     if not small or not large or model == small:
         return None
     from .providers import model_family
-    same = model == large or (provider.kind in ("claude", "anthropic") and model_family(model) == model_family(large) and model_family(model) != "other")
+    same = model in (large, routing.PLAN_DEFAULT) or (provider.kind in ("claude", "anthropic") and model_family(model) == model_family(large) and model_family(model) != "other")
     if not same:
         return None
     if routing.classify(text, context_tokens) != "small":

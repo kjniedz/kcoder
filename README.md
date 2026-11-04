@@ -486,7 +486,7 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   week, a month). Deals, boards cleared, best time and daily deals show on
   the stats page next to the mine.
 - **Settings** (⌘,): theme, text font and size, sound, default trust, model
-  routing, review policy, auto-publish, daily spend cap, the weekly plan
+  routing, effort, review policy, auto-publish, daily spend cap, the weekly plan
   limit (token limit, reset day and hour, quota shift), the conditions
   accent (below), plus links to your Claude plan, providers, GitHub and
   phone approvals, updates, restart, shortcuts and uninstall. About (banner
@@ -579,7 +579,19 @@ turn; it turns amber at 80%), `plan limit` or `connect Claude`; click it for
 every limit with its reset time, the share each session used (the increase
 seen during its turns, approximate when sessions run in parallel), and to
 reconnect or clear a limit you reset yourself. Each session's pane and
-sidebar row show its own share. In a terminal: `kcoder login` and `kcoder
+sidebar row show its own share.
+
+**The plan's own model, by default.** A new Claude session is on **default**:
+kcoder sends Claude Code no model flag, so it picks the model exactly as it
+does in the terminal (the plan's default, or the `model` in your own Claude
+Code settings) and keeps its own plan management, such as moving to Sonnet
+partway through a Max window. The pane shows which model it picked
+("default → opus-4-8") and the usage log records that name. Picking `opus`,
+`sonnet` or `fable` pins the model and never steps down, which is what makes
+kcoder use far more of a plan than the terminal; pin only when you mean it.
+**Effort** (Settings, `medium` by default) is passed to every Claude turn as
+Claude Code's `--effort`: `low` for the quickest answers, `high` for hard
+tasks, `default` to leave it to Claude Code. In a terminal: `kcoder login` and `kcoder
 plan [--clear]`.
 
 **Weekly plan limit meter.** The status bar's `wk` item shows the week's
@@ -592,11 +604,12 @@ reset against a weekly token limit you set in Settings, with the reset
 weekday and hour (labelled "estimate"). The forecast is linear and counts
 as reliable after six hours of the window or a fifth of the limit. Toasts
 and a notification warn once per window at 75% and 90%. **Quota shift**
-(Settings, off by default): while the forecast says the limit runs out
-before the reset, small turns in sessions pinned to the provider's big
-model run on the cheap tier instead (Opus → Sonnet); the status bar shows
-"⇣ cheaper models" the whole time it is active and each shifted turn says
-so in the transcript. Sessions on `auto` already route that way.
+(Settings, on by default): while the forecast says the limit runs out
+before the reset, small turns in sessions on the plan default or pinned to
+the provider's big model run on the cheap tier instead (Opus → Sonnet); the
+status bar shows "⇣ cheaper models" the whole time it is active and each
+shifted turn says so in the transcript. Sessions on `auto` already route
+that way.
 
 **Long-running work.** Shell commands get ten minutes (up to an hour when
 the model asks). For anything longer, the agent runs `kcoder job run --
@@ -684,9 +697,13 @@ every rule it understood and what it does; the pane chip shows the count.
   feed the queue. A job missed while the Mac slept runs once on wake. A run
   that changed nothing just logs; one that did opens a draft PR or lands in
   review.
-- **Model routing**: a session or task on **auto** (the default) gets a
-  cheaper model for small turns and a stronger one for large work (`sonnet` /
-  `opus` on your plan). Pick a concrete model to turn routing off.
+- **Model routing**: a session or task on **auto** gets a cheaper model for
+  small turns and a stronger one for large work (`sonnet` / `opus` on your
+  plan). A turn is judged by its own prompt (length, several files, words
+  like refactor or migrate), never by how long the conversation is, so a
+  short follow-up in a long session stays on the cheap tier. New Claude
+  sessions start on **default** (the plan's own choice, above) rather than
+  auto; pick a concrete model to turn routing off.
 - **Fallback**: on a rate limit or outage the turn moves to the next
   configured provider, never from your Claude plan to a paid API key, never
   to a paid provider once the daily cap is reached.
@@ -746,7 +763,7 @@ when the turn finishes kcoder prints the exact counts (`✓ 4.2s · 12,043 in �
 
 | Provider | id | Default model | Env var (optional) |
 |---|---|---|---|
-| Claude Code (your Claude plan) | `claude` | `opus` | - (uses the `claude` login) |
+| Claude Code (your Claude plan) | `claude` | `default` (the plan's choice) | - (uses the `claude` login) |
 | Anthropic (Claude) | `anthropic` | `claude-opus-4-8` | `ANTHROPIC_API_KEY` |
 | Xiaomi MiMo | `xiaomi` | `MiMo-V2.5-Pro` | `XIAOMI_MIMO_API_KEY` |
 | DeepSeek | `deepseek` | `deepseek-chat` | `DEEPSEEK_API_KEY` |

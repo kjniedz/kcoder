@@ -112,10 +112,12 @@ PROVIDERS = {
         key_env="",
         key_url="https://claude.com/product/claude-code",
         base_url=None,
-        # Claude Code aliases resolve to the plan's current models. Fable is listed last:
+        # "default" sends no model flag: Claude Code picks the model as it does in the terminal
+        # (the plan's default or the user's own Claude Code settings) and manages the plan itself.
+        # The aliases resolve to the plan's current models. Fable is listed last:
         # Fable draws on its own weekly allowance, so it is never a default; at any limit kcoder stops (no credits).
-        models=["opus", "sonnet", "haiku", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5", "fable", "claude-fable-5-1"],
-        default_model="opus",
+        models=["default", "opus", "sonnet", "haiku", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5", "fable", "claude-fable-5-1"],
+        default_model="default",
     ),
     "anthropic": Provider(
         id="anthropic",
@@ -575,12 +577,31 @@ _LIMIT_LABEL = {"five_hour": "5-hour limit", "seven_day": "weekly limit", "seven
 _SCOPE_LABEL = {"all": "Claude", "opus": "Opus", "sonnet": "Sonnet", "fable": "Fable"}
 
 
+EFFORT_LEVELS = ("default", "low", "medium", "high", "xhigh", "max")   # "default": no --effort flag, Claude Code's own
+DEFAULT_EFFORT = "medium"
+
+
+def effort_level(cfg: dict | None = None) -> str | None:
+    """The `--effort` Claude Code gets on every turn (config `effort`), or None for its own default."""
+    if cfg is None:
+        from . import config
+        cfg = config.load()
+    level = str(cfg.get("effort") or DEFAULT_EFFORT).strip().lower()
+    if level not in EFFORT_LEVELS:
+        level = DEFAULT_EFFORT
+    return None if level == "default" else level
+
+
 def model_family(model: str | None) -> str:
+    """fable / opus / sonnet / haiku, "default" for the plan default (whichever
+    model the plan gives: only an all-models limit blocks it), "other" otherwise."""
     m = (model or "").lower()
+    if not m or m == "default":
+        return "default"
     for fam in ("fable", "opus", "sonnet", "haiku"):
         if fam in m:
             return fam
-    return "opus" if not m or m in ("default", "opusplan") else "other"
+    return "opus" if m == "opusplan" else "other"
 
 
 def _load_limits() -> dict:
@@ -660,7 +681,8 @@ def plan_usage() -> list:
 
 def plan_block_for(model: str | None) -> dict | None:
     lim = plan_limits()
-    return lim.get("all") or lim.get(model_family(model))
+    fam = model_family(model)
+    return lim.get("all") or (None if fam == "default" else lim.get(fam))
 
 
 def _when(ts: float | None) -> str:
@@ -752,8 +774,14 @@ class ClaudeCodeBackend:
         args = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
         if blocks is not None:
             args += ["--input-format", "stream-json"]
-        if model:
+        from . import routing
+        pinned = bool(model) and model != routing.PLAN_DEFAULT
+        if pinned:
             args += ["--model", model]
+        # else: no flag, Claude Code chooses as in the terminal; the model it picked is read from the stream below
+        effort = effort_level()
+        if effort:
+            args += ["--effort", effort]
         if trust == "auto":
             args += ["--dangerously-skip-permissions"]
         elif trust == "write":
@@ -831,6 +859,8 @@ class ClaudeCodeBackend:
                 t = d.get("type")
                 if t == "system" and d.get("subtype") == "init":
                     self.session_id = d.get("session_id") or self.session_id
+                    if not pinned and d.get("model") and hasattr(hooks, "model_used"):
+                        hooks.model_used(str(d["model"]))    # the plan's choice: name it in the pane and the usage log
                     src = d.get("apiKeySource")
                     if src not in (None, "none", "oauth"):
                         _kill(proc)

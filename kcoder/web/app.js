@@ -786,8 +786,10 @@ function renderPaneChrome(pane, s, num) {
   const branch = s.worktree ? s.worktree.branch : (state.gitInfo.get(s.id) || {}).branch;
   $('.repo', pane).textContent = proj.name ? proj.name + (branch ? ' @ ' + branch : '') : shortHome(s.cwd);
   const am = (s.active_model || '').split('/')[1];
-  $('.model', pane).textContent = s.model === 'auto' ? (am && am !== 'auto' ? 'auto → ' + am : 'auto') : (s.model || '');
-  $('.model', pane).title = s.model === 'auto' ? 'model routing: ' + (s.active_model || '') : (s.active_model || '');
+  $('.model', pane).textContent = s.model === 'auto' ? (am && am !== 'auto' ? 'auto → ' + am : 'auto')
+    : s.model === 'default' ? (am && am !== 'default' ? 'default → ' + am.replace(/^claude-/, '') : 'default') : (s.model || '');
+  $('.model', pane).title = s.model === 'auto' ? 'model routing: ' + (s.active_model || '')
+    : s.model === 'default' ? 'plan default: the model your plan gives the terminal' + (am && am !== 'default' ? ' (' + am + ' on the last turn)' : '') : (s.active_model || '');
   let chips = $('.chips', pane); if (!chips) { chips = document.createElement('span'); chips.className = 'chips'; $('.model', pane).after(chips); }
   chips.innerHTML = paneChips(s);
   $('.window-pin', pane).classList.toggle('on', state.pins.includes(s.id));
@@ -843,7 +845,7 @@ function fillModelSelect(sel, s) {
   const models = prov ? prov.models.slice() : [];
   if (prov && prov.auto && !models.includes('auto')) models.unshift('auto');
   if (s.model && !models.includes(s.model)) models.unshift(s.model);
-  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : claudeModelNote(s.provider, m) ? esc(m) + ' (' + claudeModelNote(s.provider, m) + ')' : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
+  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : m === 'default' && s.provider === 'claude' ? 'default (the plan\'s choice)' : claudeModelNote(s.provider, m) ? esc(m) + ' (' + claudeModelNote(s.provider, m) + ')' : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
   sel.value = s.model;
 }
 
@@ -1932,7 +1934,7 @@ async function openNewSession(pre = {}) {
   if (pre.template) { tplSel.value = pre.template; applyTpl(tpls.find((x) => x.id === pre.template)); }
   $('#ns-setup', d).addEventListener('click', (e) => { e.preventDefault(); const pid = provSel.value; closeDialog(); setupDialog(pid); });
   $('#ns-trust', d).value = state.config && state.config.default_trust ? state.config.default_trust : 'auto';
-  const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; const auto = p.auto && (!state.config || !state.config.routing || state.config.routing.enabled !== false); modelSel.innerHTML = (auto ? `<option value="auto" selected>auto (${esc((p.tiers || {}).small || '')} for small tasks, ${esc((p.tiers || {}).large || '')} for large)</option>` : '') + (p.models || []).map((m) => `<option${!auto && m === p.default_model ? ' selected' : ''}>${esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
+  const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; const auto = p.auto && (!state.config || !state.config.routing || state.config.routing.enabled !== false); const plan = p.default_model === 'default'; modelSel.innerHTML = (auto ? `<option value="auto"${plan ? '' : ' selected'}>auto (${esc((p.tiers || {}).small || '')} for small tasks, ${esc((p.tiers || {}).large || '')} for large)</option>` : '') + (p.models || []).map((m) => `<option${(plan || !auto) && m === p.default_model ? ' selected' : ''}>${m === 'default' && plan ? 'default (the plan\'s choice, as in the terminal)' : esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
   provSel.addEventListener('change', fill); fill();
   // repo picker: local git repos + GitHub repos via gh
   let repos = state.repoCache;
@@ -2228,6 +2230,7 @@ async function settingsDialog() {
     ${chk('sound', state.sound, 'Sound', 'a ping when a session needs you')}
     ${sel('default_trust', cfg.default_trust || 'auto', 'Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']])}
     ${chk('routing_enabled', !(cfg.routing && cfg.routing.enabled === false), 'Model routing', 'auto picks a cheap model for small turns, a strong one for large')}
+    ${sel('effort', cfg.effort || 'medium', 'Effort (Claude sessions)', [['default', 'default - Claude Code\'s own'], ['low', 'low - quickest, least of the plan'], ['medium', 'medium - the everyday setting'], ['high', 'high - harder tasks'], ['xhigh', 'xhigh'], ['max', 'max - the most thinking, the most of the plan']])}
     ${sel('review_required', cfg.review_required || 'push', 'Review required before', [['push', 'push - PRs, pushes and merges'], ['commit', 'commit - every commit'], ['none', 'none - review is optional']])}
     ${chk('auto_publish', cfg.auto_publish === true, 'Auto-publish local folders to GitHub', 'a private repo is created and pushed for folders with no remote')}
     ${chk('connector_approvals', cfg.connector_approvals !== false, 'Connector approvals', 'reads (Gmail, Calendar, Drive, Linear…) run by themselves; sends and changes wait for your approval')}
@@ -2238,7 +2241,7 @@ async function settingsDialog() {
     ${(() => { const q = cfg.quota || {}; return `<label class="setting"><span>Weekly limit (tokens, 0 = none) <span class="help">used when Claude Code has not reported the real weekly number: the meter estimates from plan tokens since the reset</span></span><input type="number" min="0" step="1000000" data-set="quota_limit_tokens" value="${Number(q.limit_tokens || 0)}"></label>
     ${sel('quota_reset_weekday', String(q.reset_weekday || 0), 'Resets on', WEEKDAYS.map((d, i) => [String(i), d]))}
     ${sel('quota_reset_hour', String(q.reset_hour || 0), 'at (hour, local time)', Array.from({ length: 24 }, (_, h) => [String(h), `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`]))}
-    ${chk('quota_shift', !!q.shift, 'Quota shift', 'when the forecast says the weekly limit runs out before the reset, small turns in sessions pinned to the big model run on the cheaper tier (always shown in the status bar while active)')}`; })()}
+    ${chk('quota_shift', q.shift !== false, 'Quota shift', 'when the forecast says the weekly limit runs out before the reset, small turns in sessions on the plan default or pinned to the big model run on the cheaper tier (always shown in the status bar while active)')}`; })()}
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
     <div class="label-h">conditions</div>
     ${(() => { const c = cfg.conditions || {}; const pl = c.place || {}; return `${chk('conditions_enabled', c.enabled !== false, 'Conditions in the header', 'an ambient accent on the header\'s ridgeline: fresh snow, bitcoin\'s day, the full moon; one at a time (snow first), refreshed every 30 minutes, kept while offline and gone after 12 hours; with reduced motion on, nothing moves')}
@@ -2590,7 +2593,7 @@ async function renderTasksView(force) {
 // ---- /model: every provider and its models in one list ----
 // on Kyle's Max plan Fable turns are billed as overage credits, not plan usage
 const claudeModelNote = (pid, m) => {
-  if (pid !== 'claude' || !m || m === 'auto') return '';
+  if (pid !== 'claude' || !m || m === 'auto' || m === 'default') return '';
   const fam = /fable/i.test(m) ? 'fable' : /sonnet/i.test(m) ? 'sonnet' : /haiku/i.test(m) ? 'haiku' : 'opus';
   if (((state.claude || {}).limits || []).some((l) => l.scope === 'all' || l.scope === fam)) return 'limit reached';
   return fam === 'fable' ? 'weekly Fable limit' : '';
@@ -2611,7 +2614,7 @@ async function modelPicker(sid) {
   for (const p of state.providers || []) {
     const models = (p.auto ? ['auto'] : []).concat(p.models || []);
     if (!p.configured) { rows.push({ pid: p.id, model: p.default_model, label: p.label, meta: 'not set up · connect', off: true }); continue; }
-    for (const m of models) rows.push({ pid: p.id, model: m, label: p.label, meta: m === 'auto' ? `auto (${(p.tiers || {}).small || ''} / ${(p.tiers || {}).large || ''})` : claudeModelNote(p.id, m) ? `${m} · ${claudeModelNote(p.id, m)}` : m, cur: p.id === s.provider && m === s.model });
+    for (const m of models) rows.push({ pid: p.id, model: m, label: p.label, meta: m === 'auto' ? `auto (${(p.tiers || {}).small || ''} / ${(p.tiers || {}).large || ''})` : m === 'default' && p.id === 'claude' ? 'default · the plan\'s own choice, as in the terminal' : claudeModelNote(p.id, m) ? `${m} · ${claudeModelNote(p.id, m)}` : m, cur: p.id === s.provider && m === s.model });
   }
   let sel = Math.max(0, rows.findIndex((r) => r.cur)), shown = rows;
   const d = openDialog(`<div class="palette"><input id="mp-in" placeholder="model or provider… (provider/model to type any model)"><div class="list" id="mp-list"></div></div>`, 'palette');

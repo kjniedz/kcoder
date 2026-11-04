@@ -717,6 +717,16 @@ class Engine:
         self.emit("tool_result", id=call_id, name=name, content=content[:TOOL_RESULT_PREVIEW],
                   truncated=len(content) > TOOL_RESULT_PREVIEW, is_error=is_error, external=True)
 
+    def model_used(self, name: str) -> None:
+        """The backend learned which model the turn runs on (a Claude Code session on
+        the plan default): the pane, the usage log and the stats show that name."""
+        if not name or name == self.turn_model:
+            return
+        self.turn_model = name
+        if self._current is not None:
+            self._current = (self._current[0], self._current[1], name)
+        self.emit("turn_model", model=name)
+
     def usage(self, input_tokens: int, output_tokens: int, cache_read: int = 0,
               cache_write: int = 0, cost: float | None = None, context: int | None = None) -> None:
         """`input_tokens` is the full prompt size (cached portions included);

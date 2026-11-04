@@ -1,10 +1,18 @@
 """Model routing and provider fallback.
 
+Plan default: a Claude Code session whose model is "default" sends no model
+flag at all, so Claude Code picks the model exactly as it does in the
+terminal (the plan's default, or the `model` in the user's own Claude Code
+settings) and keeps its own plan management. It is what a new Claude session
+gets; pinning a model costs the plan more and never steps down.
+
 Routing: a session (or task) whose model is "auto" gets a cheaper model for
 small tasks and a stronger one for large or multi-file work, per provider
 tier table (config `routing.tiers.<provider> = {"small": ..., "large": ...}`
-overrides the defaults below). Setting a concrete model on a session or a
-task turns routing off for it.
+overrides the defaults below). A turn is classified by its own prompt, never
+by how long the conversation already is: a one-line follow-up in a long chat
+is still a small turn. Setting a concrete model on a session or a task turns
+routing off for it.
 
 Fallback candidates are chosen by the daemon (see Manager.fallbacks): the
 next configured provider, never from a subscription (Claude Code, kind
@@ -16,6 +24,7 @@ from __future__ import annotations
 import re
 
 AUTO = "auto"
+PLAN_DEFAULT = "default"   # Claude Code: no --model flag, the plan decides (as in the terminal)
 
 TIERS = {
     "claude": {"small": "sonnet", "large": "opus"},   # stays on the plan (Fable has its own weekly limit)
@@ -46,10 +55,11 @@ def enabled(cfg: dict | None) -> bool:
 
 
 def classify(text: str, context_tokens: int = 0) -> str:
-    """'small' or 'large' for one turn."""
+    """'small' or 'large' for one turn, from the prompt alone. `context_tokens`
+    (the size of the conversation so far) is accepted for callers but does not
+    count: routing every turn of a long session to the large tier is what made
+    the small tier go unused."""
     t = (text or "").strip()
-    if context_tokens and context_tokens > 60_000:
-        return "large"
     words = len(t.split())
     if words > 120 or t.count("\n") > 15:
         return "large"
@@ -69,5 +79,9 @@ def pick(provider, text: str, context_tokens: int, cfg: dict | None = None) -> t
 
 
 def default_model(provider, cfg: dict | None = None) -> str:
-    """What a new session gets when no model was chosen."""
+    """What a new session gets when no model was chosen: the plan's own choice
+    where the provider has one (Claude Code), else auto routing, else the
+    provider's default model."""
+    if provider.default_model == PLAN_DEFAULT:
+        return PLAN_DEFAULT
     return AUTO if enabled(cfg) and has_tiers(provider, cfg) else provider.default_model

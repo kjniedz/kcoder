@@ -1322,6 +1322,8 @@ class Manager:
             session.save_messages()      # so a crash mid-turn keeps the user's message
             if (session.meta.get("project") or {}).get("git") or session.meta.get("worktree"):
                 session.head_at_turn_start = stats.head(session.engine.cwd)
+        elif t == "turn_model":
+            session.meta["last_model"] = event.get("model")    # the plan default's actual pick, for the pane and the session list
         elif t == "turn_end":
             session.meta.pop("turn_pid", None)
             session.meta.setdefault("usage", {}).setdefault("turns", 0)
@@ -1332,7 +1334,7 @@ class Manager:
             if not session.meta.get("title"):
                 session.meta["title"] = chatlog.auto_title(session.engine.messages, session.meta["name"])
         self._record(session, event)
-        if t in ("status", "turn_start", "turn_end", "usage", "compaction", "fallback"):
+        if t in ("status", "turn_start", "turn_model", "turn_end", "usage", "compaction", "fallback"):
             session.save_meta()
             self.broadcast_sessions()
         if t == "turn_end":
@@ -1638,6 +1640,13 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             manager.cfg["max_concurrent"] = n
             config.save({"max_concurrent": n})
             asyncio.get_running_loop().create_task(manager.schedule_tasks())
+        if "effort" in req:
+            from .providers import EFFORT_LEVELS
+            level = str(req["effort"] or "").strip().lower()
+            if level not in EFFORT_LEVELS:
+                raise RequestError("effort must be one of " + ", ".join(EFFORT_LEVELS))
+            manager.cfg["effort"] = level
+            config.save({"effort": level})
         if "routing_enabled" in req:
             r = dict(manager.cfg.get("routing") or {}); r["enabled"] = bool(req["routing_enabled"])
             manager.cfg["routing"] = r

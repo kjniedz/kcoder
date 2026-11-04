@@ -182,6 +182,8 @@ def pick_provider_model(current_pid: str, current_model: str):
                 blocked = plan_block_for(m) if m != "auto" else None
                 if blocked:
                     note = f"  [yellow](limit reached, back {escape(_when_short(blocked.get('until')))})[/yellow]"
+                elif m == "default":
+                    note = "  [dim](the plan's own choice, as in the terminal)[/dim]"
                 elif model_family(m) == "fable":
                     note = "  [dim](weekly Fable limit; stops there, no credits)[/dim]"
             labels.append(f"[dim]{escape(p.label)} ·[/dim] {escape(m)}" + note
