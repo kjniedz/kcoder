@@ -398,6 +398,9 @@ class Engine:
         """Swap backends. History is cleared because message formats differ."""
         if self.busy:
             raise EngineBusy("can't switch provider while a turn is running")
+        close = getattr(self.backend, "close", None)
+        if close and self.backend is not backend:
+            close()                 # a Claude session's long-lived process goes with it
         self.provider = provider
         self.backend = backend
         self.model = model or provider.default_model

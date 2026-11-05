@@ -743,17 +743,128 @@ def describe_claude_tool(name: str, inp: dict) -> str:
     return f"{name}: {short[:160]}" + ("…" if len(short) > 160 else "")
 
 
+# How long a session's Claude Code process stays alive between turns before
+# kcoder closes it (the next turn resumes the same Claude session cold).
+CLAUDE_IDLE_SECONDS = 30 * 60
+
+_live_backends: "set[ClaudeCodeBackend]" = set()
+_live_lock = threading.Lock()
+_reaper_started = False
+
+
+def _start_reaper() -> None:
+    """One thread for the whole daemon: closes idle long-lived claude processes."""
+    global _reaper_started
+    if _reaper_started:
+        return
+    _reaper_started = True
+
+    def loop():
+        while True:
+            time.sleep(60)
+            with _live_lock:
+                backends = list(_live_backends)
+            now = time.monotonic()
+            for b in backends:
+                if b._proc is not None and not b._in_turn and now - b._proc_used > CLAUDE_IDLE_SECONDS:
+                    b.close()
+
+    threading.Thread(target=loop, daemon=True, name="kcoder-claude-reaper").start()
+
+
+def close_all_claude() -> None:
+    """Daemon shutdown: end every session's long-lived claude process."""
+    with _live_lock:
+        backends = list(_live_backends)
+    for b in backends:
+        b.close()
+
+
 class ClaudeCodeBackend:
+    """Runs turns on the `claude` CLI.
+
+    One claude process lives per session and takes each turn over stream-json
+    stdin. Earlier kcoder spawned `claude -p --resume` for every turn, and
+    Claude Code brings its claude.ai connectors (Gmail, Linear, Higgsfield ...)
+    up without waiting for them, so the first model call of every turn went
+    out with the connectors still connecting: the model was told they had
+    "disconnected", then a second later that they were back, every turn. A
+    process that stays up keeps those connections (and the warm start) across
+    turns. The process is replaced when the launch arguments change (model,
+    effort, trust, system prompt, settings), when the Claude session it holds
+    is reset (clear, edit-and-resend, checkpoint), when it died, or after
+    CLAUDE_IDLE_SECONDS without a turn; one-off calls (recaps, which pass
+    claude_args) always run their own short-lived process.
+    """
     kind = "claude"
 
     def __init__(self, provider: Provider):
         self.provider = provider
         self.session_id: str | None = None   # Claude Code's own session, persisted by the daemon
+        self._proc = None                    # the long-lived claude process, if one is up
+        self._proc_key: tuple | None = None  # the launch arguments it was started with
+        self._proc_session: str | None = None   # the Claude session it holds
+        self._proc_model: str | None = None  # the model its init message named (plan default sessions)
+        self._proc_lines: queue.Queue | None = None
+        self._proc_err: list | None = None   # bounded tail of its stderr
+        self._proc_used = time.monotonic()
+        self._in_turn = False
 
     def validate(self) -> None:
         if not claude_available():
             raise RuntimeError("the `claude` CLI is not installed")
         subprocess.run([claude_path() or CLAUDE_BIN, "--version"], capture_output=True, timeout=20)
+
+    # ---- the long-lived process ------------------------------------------------
+
+    @property
+    def process_alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def close(self) -> None:
+        """End the session's claude process (idle, session reset, shutdown, archive)."""
+        proc, self._proc = self._proc, None
+        self._proc_key = self._proc_session = self._proc_model = None
+        self._proc_lines = None
+        with _live_lock:
+            _live_backends.discard(self)
+        if proc is None:
+            return
+        try:
+            if proc.stdin:
+                proc.stdin.close()     # EOF: Claude Code finishes and exits by itself
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _spawn(self, args: list, cwd: str, env: dict):
+        proc = _spawn_claude(args, cwd, env=env)
+        lines: queue.Queue = queue.Queue()
+        err: list = []
+
+        def reader():
+            for line in proc.stdout:
+                lines.put(line)
+            lines.put(None)
+
+        def err_reader():      # a pipe nobody reads blocks the child once it fills
+            for line in proc.stderr:
+                err.append(line)
+                if len(err) > 200:
+                    del err[:100]
+
+        threading.Thread(target=reader, daemon=True).start()
+        threading.Thread(target=err_reader, daemon=True).start()
+        return proc, lines, err
+
+    # ---- a turn ------------------------------------------------------------------
 
     def run_turn(self, messages: list, model: str, system: str, hooks) -> None:
         from .engine import Interrupted
@@ -771,8 +882,9 @@ class ClaudeCodeBackend:
         prompt = _prompt_text(last)
         blocks = _prompt_blocks(last)      # text + image blocks: sent as a stream-json user message
         trust = getattr(hooks, "trust", "read")
+        one_off = bool(getattr(hooks, "claude_args", None))   # recaps: own process, --tools "" etc.
         args = [CLAUDE_BIN, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
-        if blocks is not None:
+        if not one_off or blocks is not None:
             args += ["--input-format", "stream-json"]
         from . import routing
         pinned = bool(model) and model != routing.PLAN_DEFAULT
@@ -790,38 +902,63 @@ class ClaudeCodeBackend:
             args += ["--permission-mode", "plan"]     # dry run: Claude Code reads and plans, edits are off
         else:
             args += ["--permission-mode", "default"]   # headless: anything needing approval is denied
-        if self.session_id:
-            args += ["--resume", self.session_id]
         if system:
             args += ["--append-system-prompt", system]
         settings = _claude_settings(getattr(hooks, "sid", None))
         if settings:
             args += ["--settings", settings]
-        args += list(getattr(hooks, "claude_args", None) or [])   # one-off calls (recaps) add --tools "" etc.
+        args += list(getattr(hooks, "claude_args", None) or [])
         cwd = getattr(hooks, "cwd", None) or os.getcwd()
         env = _claude_env()
         if getattr(hooks, "session_env", None):
             env.update({k: v for k, v in hooks.session_env().items() if v})
-        proc = _spawn_claude(args, cwd, env=env)
+        key = (tuple(args), cwd, tuple(sorted(env.items())))
+
+        reused = False
+        if one_off:
+            spawn_args = list(args)
+            if self.session_id:
+                spawn_args += ["--resume", self.session_id]
+            proc, lines, err = self._spawn(spawn_args, cwd, env)
+        else:
+            if self.process_alive and self._proc_key == key and self._proc_session and self._proc_session == self.session_id:
+                proc, lines, err = self._proc, self._proc_lines, self._proc_err
+                reused = True
+                while True:                 # nothing from the previous turn may count for this one
+                    try:
+                        lines.get_nowait()
+                    except queue.Empty:
+                        break
+            else:
+                self.close()
+                spawn_args = list(args)
+                if self.session_id:
+                    spawn_args += ["--resume", self.session_id]
+                proc, lines, err = self._spawn(spawn_args, cwd, env)
+                self._proc, self._proc_lines, self._proc_err = proc, lines, err
+                self._proc_key = key
+                self._proc_session = self.session_id
+                self._proc_model = None
+                with _live_lock:
+                    _live_backends.add(self)
+                _start_reaper()
+        self._in_turn = True
+        self._proc_used = time.monotonic()
         if hasattr(hooks, "proc"):
             hooks.proc = proc
+        if reused and not pinned and self._proc_model and hasattr(hooks, "model_used"):
+            hooks.model_used(self._proc_model)    # the init message came with the first turn; name the model again
         try:
-            if blocks is not None:
-                proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": blocks}}) + "\n")
-            else:
+            if one_off and blocks is None:
                 proc.stdin.write(prompt)
-            proc.stdin.close()
+            else:
+                content = blocks if blocks is not None else prompt
+                proc.stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n")
+            proc.stdin.flush()
+            if one_off:
+                proc.stdin.close()
         except (BrokenPipeError, OSError):
             pass
-
-        lines: queue.Queue = queue.Queue()
-
-        def reader():
-            for line in proc.stdout:
-                lines.put(line)
-            lines.put(None)
-
-        threading.Thread(target=reader, daemon=True).start()
 
         emit = getattr(hooks, "emit", None)
         blocks: list = []          # content blocks of the current assistant message
@@ -838,6 +975,15 @@ class ClaudeCodeBackend:
                 messages.append({"role": "assistant", "content": blocks})
                 blocks = []
 
+        def drop():
+            """This process is done for: kill it and forget it."""
+            _kill(proc)
+            if proc is self._proc:
+                self._proc = None
+                self._proc_key = self._proc_session = None
+                with _live_lock:
+                    _live_backends.discard(self)
+
         try:
             while True:
                 try:
@@ -846,6 +992,8 @@ class ClaudeCodeBackend:
                     check = getattr(hooks, "_check_interrupt", None)
                     if check:
                         check()
+                    if proc.poll() is not None and lines.empty():
+                        break        # died between lines: fall through to the exit-code report
                     continue
                 if line is None:
                     break
@@ -859,11 +1007,14 @@ class ClaudeCodeBackend:
                 t = d.get("type")
                 if t == "system" and d.get("subtype") == "init":
                     self.session_id = d.get("session_id") or self.session_id
+                    if proc is self._proc:
+                        self._proc_session = self.session_id
+                        self._proc_model = str(d["model"]) if d.get("model") else None
                     if not pinned and d.get("model") and hasattr(hooks, "model_used"):
                         hooks.model_used(str(d["model"]))    # the plan's choice: name it in the pane and the usage log
                     src = d.get("apiKeySource")
                     if src not in (None, "none", "oauth"):
-                        _kill(proc)
+                        drop()
                         forget_claude_auth()
                         raise NotOnPlan(f"Claude Code picked up a per-token credential ({src}) instead of your Claude plan.")
                 elif t == "rate_limit_event":
@@ -882,7 +1033,7 @@ class ClaudeCodeBackend:
                         except Exception:  # noqa: BLE001 - bookkeeping never stops a turn
                             pass
                     if credits or info.get("status") == "rejected":
-                        _kill(proc)
+                        drop()
                         scope = _LIMIT_SCOPE.get(limit or "", "all")
                         msg = plan_limit_message(scope, limit, resets, credits=credits)
                         _block(scope, resets or time.time() + 3600, limit, msg)
@@ -951,6 +1102,8 @@ class ClaudeCodeBackend:
                 elif t == "result":
                     got_result = True
                     self.session_id = d.get("session_id") or self.session_id
+                    if proc is self._proc:
+                        self._proc_session = self.session_id
                     # The result's usage is the sum over every model call of the turn (what the
                     # turn cost), not the size of the conversation: a turn with ten tool calls
                     # at 30k context reports 300k input. The context the session is at is the
@@ -966,29 +1119,45 @@ class ClaudeCodeBackend:
                         low = text_.lower()
                         if any(k in low for k in ("usage limit", "hit your limit", "session limit", "weekly limit",
                                                   "credit balance", "out of usage", "extra usage", "out of credits")):
-                            _kill(proc)
+                            drop()
                             raise PlanLimitReached("Claude Code: " + text_.strip()[:300] +
                                                    ". kcoder stopped instead of spending credits.", scope="all")
                         if any(k in text_.lower() for k in _OUTAGE_TEXT):
-                            _kill(proc)
+                            drop()
                             raise ProviderOutage(f"Claude Code: {text_.strip()[:200]}")
                         failure = _claude_api_failure(text_, model)
                         if failure is not None:     # a refused sign-in (401) or a model the plan cannot use: say so, with the way out
-                            _kill(proc)
+                            drop()
                             if isinstance(failure, NotOnPlan):
                                 forget_claude_auth()
                             raise failure
                         hooks.notice(f"Claude Code: {d.get('subtype')}: {str(d.get('result') or '')[:500]}")
+                    if proc is self._proc:
+                        break        # the turn is over; the process stays up for the next one
         except Interrupted:
-            _kill(proc)
+            drop()
             raise
         finally:
+            self._in_turn = False
+            self._proc_used = time.monotonic()
             if hasattr(hooks, "proc"):
                 hooks.proc = None
         flush_assistant()
-        code = proc.wait(timeout=10)
+        if got_result and proc is self._proc:
+            return
+        if proc is self._proc:         # EOF without a result: the long-lived process is gone
+            self._proc = None
+            self._proc_key = self._proc_session = None
+            with _live_lock:
+                _live_backends.discard(self)
+        try:
+            code = proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+            code = proc.wait(timeout=5)
         if not got_result:
-            err = (proc.stderr.read() or "").strip()
+            time.sleep(0.1)           # let the stderr reader catch the last lines
+            err = "".join(err or []).strip()
             if "not logged in" in err.lower() or "login" in err.lower():
                 forget_claude_auth()
                 raise NotOnPlan("Claude Code is not signed in to your Claude account.")

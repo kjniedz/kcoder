@@ -41,19 +41,33 @@ FAKE_CLAUDE = textwrap.dedent('''
         sys.exit(0)
     if sys.argv[1:2] == ["--version"]:
         print("9.9.9 (fake)"); sys.exit(0)
-    sys.stdin.read()
     def out(d):
         print(json.dumps(d)); sys.stdout.flush()
-    out({"type": "system", "subtype": "init", "session_id": "s1", "apiKeySource": "none"})
+    def turn(n):
+        text = "hello from the fake claude"
+        out({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}})
+        out({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}})
+        out({"type": "stream_event", "event": {"type": "content_block_stop"}})
+        out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+        out({"type": "result", "subtype": "success", "session_id": "s1", "usage": {"input_tokens": 5, "output_tokens": 3}, "num_turns": n})
+    out({"type": "system", "subtype": "init", "session_id": "s1", "apiKeySource": "none", "model": mode.get("model", "claude-opus-4-8")})
     if mode.get("rle"):
         out({"type": "rate_limit_event", "rate_limit_info": mode["rle"]})
         time.sleep(1)
-    text = "hello from the fake claude"
-    out({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "text"}}})
-    out({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}})
-    out({"type": "stream_event", "event": {"type": "content_block_stop"}})
-    out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
-    out({"type": "result", "subtype": "success", "session_id": "s1", "usage": {"input_tokens": 5, "output_tokens": 3}})
+    with open(os.path.join(D, "turns.log"), "a") as tl:
+        tl.write("start %d\\n" % os.getpid())
+    if "--input-format" in sys.argv:        # one process, a turn per stream-json user line, until EOF
+        n = 0
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            n += 1
+            with open(os.path.join(D, "turns.log"), "a") as tl:
+                tl.write("turn %d %d\\n" % (os.getpid(), n))
+            turn(n)
+    else:
+        sys.stdin.read()
+        turn(1)
 ''')
 
 
@@ -176,6 +190,41 @@ def main() -> int:
                                 got += base64.b64decode(m["data"]).decode("utf-8", "replace")
                         check("terminal view echoes", "kc-shell-ok" in got, got[-200:])
                         req("shell_close", sid=sid)
+                    # two turns of one session run on one claude process (connectors and warm start kept)
+                    req("attach", sid=sid)
+                    def wait_turn_end(limit=60):
+                        deadline = time.time() + limit
+                        while time.time() < deadline:
+                            try:
+                                m = json.loads(ws.recv(timeout=5))
+                            except TimeoutError:
+                                continue
+                            if m.get("type") == "event" and m.get("sid") == sid and (m.get("ev") or {}).get("t") == "turn_end":
+                                return True
+                        return False
+                    r = req("send", sid=sid, text="first")
+                    ok1 = wait_turn_end()
+                    r = req("send", sid=sid, text="second")
+                    ok2 = wait_turn_end()
+                    try:
+                        log_lines = open(os.path.join(fake, "turns.log"), encoding="utf-8").read().split("\n")
+                    except OSError:
+                        log_lines = []
+                    turns = [l.split() for l in log_lines if l.startswith("turn ")]
+                    pids = {t[1] for t in turns[-2:]}
+                    check("two turns, one claude process", ok1 and ok2 and len(turns) >= 2 and len(pids) == 1 and turns[-1][2] == "2",
+                          f"turn_end {ok1},{ok2}; turns.log tail {log_lines[-4:]}")
+                    r = req("clear", sid=sid)
+                    r = req("send", sid=sid, text="third")
+                    ok3 = wait_turn_end()
+                    log_lines = open(os.path.join(fake, "turns.log"), encoding="utf-8").read().split("\n")
+                    turns = [l.split() for l in log_lines if l.startswith("turn ")]
+                    check("clear starts a fresh claude process", ok3 and len(turns) >= 3 and turns[-1][1] not in pids and turns[-1][2] == "1",
+                          f"turn_end {ok3}; turns.log tail {log_lines[-4:]}")
+                    pid3 = int(turns[-1][1]) if turns and turns[-1][1].isdigit() else 0
+                    r = req("archive", sid=sid)
+                    time.sleep(1.5)
+                    check("archive ends the claude process", r.get("ok", True) and "error" not in r and not compat.pid_alive(pid3), json.dumps(r)[:200])
         except Exception as exc:  # noqa: BLE001
             check("websocket session + terminal", False, f"{type(exc).__name__}: {exc}")
 

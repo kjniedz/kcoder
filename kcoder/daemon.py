@@ -66,7 +66,7 @@ from . import deploys as deploysmod
 from . import wrapped as wrappedmod
 from . import recap as recapmod
 from . import search as searchmod
-from .providers import plan_usage as providers_plan_usage
+from .providers import close_all_claude, plan_usage as providers_plan_usage
 from .errors import RequestError
 from .engine import DEFAULT_COMPACT_AT, TRUST_LEVELS, Engine, EngineBusy
 from .providers import PROVIDERS, supports_images
@@ -750,6 +750,7 @@ class Manager:
             if t is not None and t.is_alive():
                 t.join(max(0.05, deadline - time.monotonic()))
             session.meta.pop("turn_pid", None)
+        close_all_claude()                # the sessions' long-lived claude processes
         for session in self.sessions.values():
             if session.shell is not None:
                 try:
@@ -947,6 +948,7 @@ class Manager:
             session.save_messages()
             meta = session.snapshot()
             session.close_files()
+            _close_backend(session.engine)
             del self.sessions[sid]
         if meta is None:
             raise KeyError(f"no session {sid!r}")
@@ -2396,6 +2398,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         if hasattr(engine.backend, "session_id"):
             engine.backend.session_id = None
             session.meta.pop("claude_session", None)
+            _close_backend(engine)
         _truncate_events(session, k)
         checkpoints.drop_after(session.dir, engine.cwd, session.id, item["n"] - 1)
         session.meta["needs_review"] = False
@@ -2508,6 +2511,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             if hasattr(engine.backend, "session_id"):
                 engine.backend.session_id = None   # Claude Code can't rewind; it restarts from our history summary
                 session.meta.pop("claude_session", None)
+                _close_backend(engine)
         except EngineBusy as exc:
             raise RequestError(str(exc))
         _truncate_events(session, k)
@@ -2618,6 +2622,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             if hasattr(engine.backend, "session_id"):
                 engine.backend.session_id = None
                 session.meta.pop("claude_session", None)
+                _close_backend(engine)
         except EngineBusy as exc:
             raise RequestError(str(exc))
         session.save_messages()
@@ -2929,6 +2934,16 @@ def read_daemon_info() -> dict | None:
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
+
+
+def _close_backend(engine) -> None:
+    """End a Claude session's long-lived claude process (its session was reset or closed)."""
+    close = getattr(engine.backend, "close", None)
+    if close:
+        try:
+            close()
+        except Exception:  # noqa: BLE001
+            pass
 
 def _pid_alive(pid: int) -> bool:
     return compat.pid_alive(pid)

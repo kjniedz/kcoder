@@ -631,6 +631,16 @@ told to wait, and a later approval lets the same call through without asking
 again. Unknown connector tools ask. Off switch in Settings ("Connector
 approvals").
 
+**One `claude` process per session.** A Claude session keeps its `claude`
+process up between turns and hands it each new message over stdin, so the
+claude.ai connectors stay connected and a turn starts warm. (Starting a
+fresh `claude --resume` for every turn, as kcoder once did, had the model
+told every turn that the connectors had disconnected, then that they were
+back, because Claude Code brings them up without waiting for them.) The
+process is replaced when the model, effort, trust level or system prompt
+changes, when the history is cleared or rewound, if it died, or after 30
+minutes without a turn; `kcoder daemon stop` and archiving a session end it.
+
 **Daemon security.** `kcoderd` can run shell commands, so it treats every
 other app and web page on the machine as hostile: the CLI talks to it over a
 user-only Unix socket, the app over `127.0.0.1` only, with Host and Origin
@@ -849,7 +859,7 @@ The smoke test also runs in GitHub Actions on Windows and Linux
 | Module | Role |
 |---|---|
 | `kcoder/engine.py` | Headless agent loop: emits events (`text`, `tool_call`, `approval_request`, `usage`, `progress`, `turn_end`, …), takes `send()`, `approve()`, `interrupt()`. |
-| `kcoder/providers.py` | Claude Code, Anthropic and OpenAI-compatible backends; the plan-only guard. |
+| `kcoder/providers.py` | Claude Code (one long-lived `claude` process per session), Anthropic and OpenAI-compatible backends; the plan-only guard. |
 | `kcoder/daemon.py` | `kcoderd`: owns sessions, runs them concurrently, persists them, streams events over WebSocket. |
 | `kcoder/client.py`, `kcoder/cli.py` | The terminal client. |
 | `kcoder/tools.py`, `kcoder/compat.py` | Tool executors scoped to the session folder; process control that works on macOS, Linux and Windows. |
