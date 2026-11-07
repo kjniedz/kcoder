@@ -729,8 +729,9 @@ every rule it understood and what it does; the pane chip shows the count.
   tokens (150k) the session writes a handoff summary (goal, what changed
   where, decisions, state, next steps) and continues as a fresh session in
   the same worktree and branch, with the pending message and the queue moved
-  over; panes follow, the old session is archived with a link forward. Turn
-  it off in Settings to summarise in place instead; `/compact` does that on
+  over; panes follow, and whatever you were typing (text, paste chips,
+  images) stays in the box; the old session is archived with a link
+  forward. Turn it off in Settings to summarise in place instead; `/compact` does that on
   demand.
 - **Resilience**: sessions, queues and the window layout survive app crashes,
   daemon restarts and reboots. A session that was mid-turn comes back

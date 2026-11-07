@@ -69,6 +69,7 @@ const state = {
   statsSort: { key: 'date', dir: -1 },
   recapShown: new Map(),   // sid -> when the "where we left off" card was last shown in this app run
   recaps: new Map(),       // sid -> the recap on screen
+  drafts: new Map(),       // sid -> what was typed in a composer that was torn down (text, cursor, paste chips, images); restored when one mounts again
 };
 
 if (!state.winName) { state.winName = 'w' + Math.random().toString(36).slice(2, 7); sessionStorage.setItem('kcoder.win', state.winName); }
@@ -307,6 +308,7 @@ function onEvent(sid, ev) {
   if (ev.t === 'job_output') { state.jobTails.set(sid + ':' + ev.id, ((state.jobTails.get(sid + ':' + ev.id) || '') + ev.delta).slice(-60000)); if (state.dialog === 'job' && state.jobOpen === sid + ':' + ev.id) renderJobDialogTail(); return; }
   if (ev.t === 'job') { if (state.dialog === 'job' && state.jobOpen === sid + ':' + ev.id) setTimeout(() => jobDialog(sid, ev.id), 200); }
   if (ev.t === 'handoff' && ev.to) {      // follow the work: every pane showing the old session shows the new one
+    stashDraftsOf(sid, ev.to); restoreDraftsInto(ev.to);   // what is being typed follows too (the old session's panes are torn down or archived)
     setTimeout(() => { state.layout.panes.forEach((p, i) => { if (p === sid) assignPane(i, ev.to); }); if (state.sid === sid) { state.sid = ev.to; localStorage.setItem('kcoder.sid', ev.to); } toast(`${ev.name}: fresh session with a handoff summary`, 'ok'); }, 300);
   }
   if (ev.t === 'turn_start') store.turn = { input: 0, output: 0 };
@@ -762,7 +764,7 @@ function renderWall() {
     renderPaneChrome(pane, s, i + 1);
     renderPaneBody(pane, s.id);
   });
-  for (const p of $$('.pane', wall)) if (!seen.has(p.dataset.sid)) { closeShell(p.dataset.sid); p.remove(); }
+  for (const p of $$('.pane', wall)) if (!seen.has(p.dataset.sid)) { closeShell(p.dataset.sid); stashDraft($('.composer', p)); p.remove(); }
 }
 
 function paneSkeleton() {
@@ -1059,7 +1061,7 @@ function setPaneView(sid, v) {
   if (pane) closeShellDrawer(pane);
   if (v !== 'shell') closeShell(sid);
   state.paneView.set(sid, v);
-  if (pane) { $('.composer-slot', pane).innerHTML = ''; renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); }
+  if (pane) { clearComposerSlot($('.composer-slot', pane)); renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); }
 }
 function togglePin(sid) {
   if (state.pins.includes(sid)) state.pins = state.pins.filter((x) => x !== sid); else state.pins.push(sid);
@@ -1398,9 +1400,9 @@ function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeigh
 function renderTermLog() { /* terminal rendering lives in each pane now (cpaneView / paneView = 'term') */ }
 function ensureComposer(slotSel, sid, termStyle) {
   const slot = $(slotSel);
-  if (!sid) { slot.innerHTML = ''; slot.dataset.sid = ''; return; }
+  if (!sid) { clearComposerSlot(slot); slot.dataset.sid = ''; return; }
   if (slot.dataset.sid === sid && slot.firstChild) { updateComposerState(slot, sid); return; }
-  slot.innerHTML = ''; slot.dataset.sid = sid; mountComposer(slot, sid, termStyle);
+  clearComposerSlot(slot); slot.dataset.sid = sid; mountComposer(slot, sid, termStyle);
 }
 function focusComposer() {
   let ta;
@@ -1412,6 +1414,32 @@ function focusComposer() {
 // ----------------------------------------------------------------------
 // composer (shared by chat view, terminal view, focused pane)
 // ----------------------------------------------------------------------
+// A composer is torn down whenever its pane changes session (a handoff moving the pane to the fresh
+// session, a pane switch, the view toggling); what was typed must not go with it. stashDraft keeps the
+// text, cursor, paste chips and images under the session (or another key: a handoff re-keys the old
+// session's drafts to the new one), and mountComposer restores and drops the stash.
+function stashDraft(form, key) {
+  const comp = form && form._comp; if (!comp) return;
+  if (!key && comp.movedTo) return;            // its draft already went to the new session (a handoff); a copy would overwrite what is typed there
+  if (key) comp.movedTo = key;
+  const k = key || comp.sid;
+  if (!comp.ta.value && !comp.pastes.size && !comp.images.length) { if (!key) state.drafts.delete(k); return; }
+  state.drafts.set(k, { text: comp.ta.value, start: comp.ta.selectionStart, end: comp.ta.selectionEnd, pastes: new Map(comp.pastes), images: comp.images.slice() });
+}
+function stashDraftsOf(sid, key) { for (const form of $$('.composer')) if (form._comp && form._comp.sid === sid) stashDraft(form, key); }
+function restoreDraftsInto(sid) {   // a composer for the session is already on screen (a wall pane): fill it now rather than at its next mount
+  for (const form of $$('.composer')) { const c = form._comp; if (c && c.sid === sid && form.getClientRects().length && !c.ta.value && !c.pastes.size && !c.images.length) { restoreDraft(c); c.ta.dispatchEvent(new Event('input')); return; } }   // on screen only: a hidden view's pane must not swallow it
+}
+function clearComposerSlot(slot) { if (!slot) return; stashDraft($('.composer', slot)); slot.innerHTML = ''; }
+function restoreDraft(comp) {
+  const d = state.drafts.get(comp.sid); if (!d) return;
+  state.drafts.delete(comp.sid);
+  for (const [n, p] of d.pastes) comp.pastes.set(n, p);
+  comp.images = d.images.slice();
+  comp.ta.value = d.text;
+  try { comp.ta.setSelectionRange(d.start, d.end); } catch (e) { /* not focused yet */ }
+  renderChips(comp); renderAtts(comp);
+}
 function mountComposer(slot, sid, termStyle) {
   const frag = $('#tpl-composer').content.cloneNode(true);
   slot.appendChild(frag);
@@ -1436,6 +1464,7 @@ function mountComposer(slot, sid, termStyle) {
   $('.stop', form).addEventListener('click', () => request('interrupt', { sid }).catch(() => {}));
   menu.addEventListener('mousedown', (e) => { const it = e.target.closest('.item'); if (it) { e.preventDefault(); comp.menuSel = Number(it.dataset.i); applyMenu(comp); } });
   chips.addEventListener('click', (e) => { const chip = e.target.closest('.chip'); if (!chip) return; if (e.target.classList.contains('x')) removeChip(comp, Number(chip.dataset.n)); else expandChip(comp, Number(chip.dataset.n)); });
+  restoreDraft(comp);
   updateComposerState(slot, sid);
   grow();
 }
@@ -3039,13 +3068,13 @@ function renderSplit() {
   L.panes.forEach((sid, i) => {
     const pane = split.children[i];
     pane.dataset.pane = i;
-    if (pane.dataset.sid !== (sid || '')) { closeShellDrawer(pane); pane.dataset.sid = sid || ''; $('.composer-slot', pane).innerHTML = ''; $('.chat-log', pane).innerHTML = ''; pane._rendered = null; if (pane._find) closeFind(pane, true); }
+    if (pane.dataset.sid !== (sid || '')) { closeShellDrawer(pane); pane.dataset.sid = sid || ''; clearComposerSlot($('.composer-slot', pane)); $('.chat-log', pane).innerHTML = ''; pane._rendered = null; if (pane._find) closeFind(pane, true); }
     pane.classList.toggle('focused', i === L.focus);
     pane.classList.toggle('zoom', L.zoom === i);
     pane.hidden = L.zoom != null && L.zoom !== i;
     renderCpaneBar(pane); renderCpaneLog(pane);
     const slot = $('.composer-slot', pane);
-    if (sid) { if (!slot.firstChild) mountComposer(slot, sid, false); else updateComposerState(slot, sid); } else slot.innerHTML = '';
+    if (sid) { if (!slot.firstChild) mountComposer(slot, sid, false); else updateComposerState(slot, sid); } else clearComposerSlot(slot);
   });
 }
 function renderSplitBars() { if (state.view !== 'chat') return; for (const p of $$('#split .cpane')) { renderCpaneBar(p); const slot = $('.composer-slot', p); if (p.dataset.sid && slot.firstChild) updateComposerState(slot, p.dataset.sid); } }
@@ -3080,7 +3109,7 @@ function toggleCpaneView(pane) {
   const term = cpaneViewOf(sid) !== 'term';
   state.cpaneView.set(sid, term ? 'term' : 'chat');
   pane._rendered = null; $('.chat-log', pane).innerHTML = '';
-  const slot = $('.composer-slot', pane); slot.innerHTML = ''; mountComposer(slot, sid, term);
+  const slot = $('.composer-slot', pane); clearComposerSlot(slot); mountComposer(slot, sid, term);
   renderCpaneBar(pane); renderCpaneLog(pane); focusComposer();
 }
 // ---- "where we left off": a cached recap (kcoder/recap.py) over the transcript, with the live branch state
