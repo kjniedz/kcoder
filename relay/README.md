@@ -24,6 +24,13 @@ wrangler secret put VAPID_PRIVATE  # paste the private key
 wrangler deploy
 ```
 
+If wrangler is signed in to another Cloudflare account (or none), deploy
+with an account API token instead of `wrangler login`: export
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` for the account that
+should own the Worker and run the same commands. Kyle's relay lives on the
+kyleniedz99 account at `https://kcoder-relay.kyleniedz99.workers.dev`, the
+default the phone dialog prefills.
+
 Then in kcoder on the Mac: ⌘K → **phone** → turn on with the Worker URL
 (`https://kcoder-relay.<you>.workers.dev`) → **pair a phone** → scan the QR
 code with the phone's camera → Share → Add to Home Screen. On the phone,

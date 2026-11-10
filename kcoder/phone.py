@@ -34,7 +34,7 @@ from . import __version__, compat, paths
 log = logging.getLogger("kcoderd")
 STATE_PATH = os.path.join(paths.DATA_DIR, "phone.json")
 CHUNK = 180_000          # base64 characters per tunnel frame for a file (the relay's frames stay well under its limit)
-DEFAULT_RELAY = "https://kcoder-relay.kyle-d12.workers.dev"
+DEFAULT_RELAY = "https://kcoder-relay.kyleniedz99.workers.dev"
 
 
 class PhoneError(Exception):
