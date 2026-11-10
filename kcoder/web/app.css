@@ -372,6 +372,7 @@ a { color: var(--accent-text); }
 .palette input { width: 100%; border: none; border-bottom: 1px solid var(--line); background: transparent; padding: 10px 14px; font-size: 14px; }
 .palette input:focus { outline: none; }
 .help-grid { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; }
+.help-grid.keys { grid-template-columns: max-content 1fr; margin: 2px 0 8px; font-size: 12px; }
 .help-grid kbd { justify-self: end; }
 .toasts { position: fixed; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; z-index: 60; }
 .toast { background: var(--bg-3); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; font-size: 12px; max-width: 360px; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
@@ -598,7 +599,6 @@ table.grid tr[data-sha] { cursor: pointer; }
 .ridge .ridgeline .rock { fill: var(--accent); opacity: .09; }
 .ridge .ridgeline .cap { fill: none; stroke: var(--snow); stroke-width: 1.2; vector-effect: non-scaling-stroke; opacity: 0; transition: opacity 1.2s ease; }
 .ridge[data-kind="snow"] .ridgeline .cap { opacity: .6; }
-.ridge .btcline { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; transition: opacity 1.2s ease, background .6s ease; }
 .ridge .flakes i { position: absolute; top: -6px; width: var(--s, 2px); height: var(--s, 2px); border-radius: 50%; background: var(--snow); opacity: .55; animation: flake var(--d, 8s) linear var(--o, 0s) infinite; }
 @keyframes flake { from { transform: translateY(0); } to { transform: translateY(54px); } }
 .ridge.static .flakes i { animation: none; }
@@ -609,7 +609,7 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .cond-tag.snow { color: var(--accent-text); }
 .cond-tag.btc.up { color: var(--green); }
 .cond-tag.btc.down { color: var(--red); }
-@media (prefers-reduced-motion: reduce) { .ridge .ridgeline .cap, .ridge .btcline { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .ridge .ridgeline .cap { transition: none; } }
 @media (max-width: 900px) { .cond-tag { display: none; } }
 
 /* ---- header stays one line at any width ---- */
@@ -767,17 +767,11 @@ html[data-skin="rainbow"] .banner { filter: drop-shadow(0 0 5px rgba(255, 255, 2
 .pv-frame.mobile iframe { width: 390px; max-width: 100%; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 
 /* ---- keyboard shortcuts sheet (Cmd+/) ---- */
-.dialog.sheet { width: min(980px, 94vw); }
-.keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px 22px; }
-.keys h3 { margin: 0 0 6px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; }
-.keys .help-grid { grid-template-columns: max-content 1fr; }
 
 /* ---- /model picker ---- */
 .palette .group-h { padding: 6px 12px 2px; font-size: 10.5px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: .05em; border-top: 1px solid var(--line); }
 .palette .group-h:first-child { border-top: none; }
 .palette .item.off span:first-child { color: var(--fg-mute); }
-.keys-q { flex: 0 1 260px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 4px; padding: 3px 8px; font-size: 12px; color: var(--fg); text-transform: none; letter-spacing: 0; }
-.keys-q:focus { outline: none; border-color: var(--focus); }
 
 .rules { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .rules .rule { display: flex; gap: 10px; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 4px; }
@@ -819,7 +813,6 @@ html[data-skin="rainbow"] .banner { filter: drop-shadow(0 0 5px rgba(255, 255, 2
 .search .sr .hit .k { color: var(--accent-text); margin-right: 8px; font-size: 10px; text-transform: uppercase; }
 .search button.link { background: none; border: none; color: var(--accent-text); padding: 0; font: inherit; font-weight: 600; cursor: pointer; }
 
-.approval-bar .keys { color: var(--fg-dim); font-size: 10px; white-space: nowrap; }
 .dialog .list .item .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-dim); flex: 0 0 60px; }
 .dialog .list .item .kind.approval { color: var(--waiting); }
 .dialog .list .item .kind.error { color: var(--err, #e06c75); }
@@ -1004,7 +997,7 @@ html[data-style="rounded"] { --font: "Poppins", "SF Pro Rounded", "Segoe UI Vari
 html[data-style="rounded"] pre, html[data-style="rounded"] code, html[data-style="rounded"] kbd, html[data-style="rounded"] .banner, html[data-style="rounded"] .xterm, html[data-style="rounded"] .shell-box, html[data-style="rounded"] .diff, html[data-style="rounded"] .omni, html[data-style="rounded"] .composer textarea, html[data-style="rounded"] .term-composer { font-family: var(--mono); }
 html[data-style="rounded"] button, html[data-style="rounded"] input, html[data-style="rounded"] select, html[data-style="rounded"] textarea, html[data-style="rounded"] .views button, html[data-style="rounded"] .statusbar .status-item, html[data-style="rounded"] .toast, html[data-style="rounded"] kbd { border-radius: 10px; }
 html[data-style="rounded"] .pane, html[data-style="rounded"] .cpane, html[data-style="rounded"] .card, html[data-style="rounded"] .dialog, html[data-style="rounded"] .msg-user .bubble, html[data-style="rounded"] .composer .menu, html[data-style="rounded"] .project, html[data-style="rounded"] .card.achievements .next, html[data-style="rounded"] .mine-unit, html[data-style="rounded"] .empty { border-radius: 16px; }
-html[data-style="rounded"] .chat-item, html[data-style="rounded"] .hit, html[data-style="rounded"] .mine-up, html[data-style="rounded"] .keys-q, html[data-style="rounded"] .cpane-find input { border-radius: 10px; }
+html[data-style="rounded"] .chat-item, html[data-style="rounded"] .hit, html[data-style="rounded"] .mine-up, html[data-style="rounded"] .cpane-find input { border-radius: 10px; }
 html[data-style="rounded"] button { padding: 3px 12px; }
 html[data-style="rounded"] .card { padding: 14px 16px; }
 html[data-style="rounded"] .composer textarea { border-radius: 14px; padding: 8px 12px; }

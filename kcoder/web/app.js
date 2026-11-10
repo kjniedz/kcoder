@@ -262,7 +262,7 @@ async function onConnected() {
   renderAll();
   if (!state._setupShown && (((state.providers || []).length && !state.providers.some((p) => p.configured)) || (state.github && !state.github.connected))) { state._setupShown = true; setupDialog(); }
   const open = new URLSearchParams(location.search).get('open');
-  if (open && !state._openedOnce) { state._openedOnce = true; ({ new: openNewSession, inbox: openInbox, palette: openPalette, help: helpDialog, changes: () => state.sid && changesDialog(state.sid) }[open] || (() => {}))(); }
+  if (open && !state._openedOnce) { state._openedOnce = true; ({ new: openNewSession, inbox: openInbox, palette: openPalette, help: settingsDialog, changes: () => state.sid && changesDialog(state.sid) }[open] || (() => {}))(); }
 }
 
 function applyUrlParams() {
@@ -667,7 +667,7 @@ function renderHeader() {
   const n = (st.pending_approvals || []).length;
   const needs = Math.max(n, st.waiting || 0);   // approvals + sessions waiting on an answer
   const c = $('#inbox-count'); c.hidden = !needs; c.textContent = needs;
-  $('#btn-inbox').title = needs ? `${needs} waiting on you: approvals and questions  (a)` : 'Inbox: approvals and sessions waiting on you  (a)';
+  $('#btn-inbox').title = needs ? `${needs} waiting on you: approvals and questions` : 'Inbox: approvals and sessions waiting on you';
   for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === tabOf(state.view));
   renderSessionsBar();
   renderStatusBar();
@@ -684,7 +684,7 @@ function renderSessionsBar() {
   for (const b of $$('.layout-picker button', bar)) b.classList.toggle('active', b.dataset.layout === cur);
   const bc = $('#btn-broadcast'); bc.classList.toggle('active', !!state.broadcast); bc.hidden = state.view !== 'chat' || state.layout.panes.length < 2;
   const n = state.order.length;
-  $('#sessions-hint').textContent = state.view === 'wall' ? (n ? `${n} live session${n === 1 ? '' : 's'} · click a pane to focus it · 1-9 jump` : '') : (state.broadcast ? 'broadcast on: a prompt goes to every pane' : 'drag a chat from the sidebar onto a pane');
+  $('#sessions-hint').textContent = state.view === 'wall' ? (n ? `${n} live session${n === 1 ? '' : 's'} · click a pane to focus it` : '') : (state.broadcast ? 'broadcast on: a prompt goes to every pane' : 'drag a chat from the sidebar onto a pane');
 }
 
 function renderStatusBar() {
@@ -792,7 +792,7 @@ function renderWall() {
 }
 
 function paneSkeleton() {
-  return `<div class="pane-title"><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell  (v)"></span></div>
+  return `<div class="pane-title"><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell"></span></div>
   <div class="pane-body"></div>
   <div class="shell-drawer" hidden></div>
   <div class="approval-bar" hidden></div>
@@ -837,7 +837,7 @@ function renderPaneChrome(pane, s, num) {
     const store = state.events.get(s.id);
     const req = store && store.list.slice().reverse().find((e) => e.t === 'approval_request' && e.id === s.pending_approval);
     bar.hidden = false;
-    bar.innerHTML = `<span>allow</span><code title="${esc(req ? req.description : '')}">${esc(req ? req.description : 'pending tool call')}</code><button class="primary" data-act="approve" data-rid="${esc(s.pending_approval)}">yes</button><button class="danger" data-act="decline" data-rid="${esc(s.pending_approval)}">no</button><span class="keys" title="keyboard: y approves, shift+N declines, then the next waiting item comes up; w jumps to the next one">y · ⇧N · w</span>`;
+    bar.innerHTML = `<span>allow</span><code title="${esc(req ? req.description : '')}">${esc(req ? req.description : 'pending tool call')}</code><button class="primary" data-act="approve" data-rid="${esc(s.pending_approval)}">yes</button><button class="danger" data-act="decline" data-rid="${esc(s.pending_approval)}">no</button>`;
   } else bar.hidden = true;
   // actions (focused only)
   const acts = $('.pane-actions', pane);
@@ -1410,7 +1410,7 @@ async function chatMenu(sid) {
 function renderTitlebars() { /* the terminal view is now a per-pane toggle (see renderCpaneBar) */ }
 function _renderTitlebarsLegacy() {
   const s = state.sid ? (state.sessions.get(state.sid) || state.chats.find((c) => c.id === state.sid)) : null;
-  const html = !s ? '<span class="meta">pick a chat on the left, or press n for a new one</span>' :
+  const html = !s ? '<span class="meta">pick a chat on the left, or start a new one</span>' :
     `<span class="dot ${s.archived ? 'archived' : s.status}"></span><span class="title">${esc(s.title || s.name)}</span><span class="meta">${esc((s.project || {}).name || '')}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} · ${esc(shortHome(s.cwd))}</span><span class="spacer"></span>` +
     `<span class="meta">ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? (planShareText(s) ? 'plan ' + planShareText(s) : 'on your plan') : fmtUsd((s.usage || {}).cost || 0)}</span>` +
     `<select data-act="trust" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select>` +
@@ -1479,7 +1479,7 @@ function mountComposer(slot, sid, termStyle) {
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + 'px'; };
   ta.addEventListener('input', () => { grow(); updateMenu(comp); });
   ta.addEventListener('keydown', (e) => onComposerKey(e, comp));
-  // the $ button docks this session's shell under the chat (voice input stays on ⌘⇧M and in the palette)
+  // the $ button docks this session's shell under the chat (voice input is the mic button and the palette)
   $('.sh', form).addEventListener('click', (e) => { e.preventDefault(); toggleShellDrawer(form); });
   ta.addEventListener('paste', (e) => onPaste(e, comp));
   form.addEventListener('drop', (e) => { if (state.dragChat) return; const files = Array.from(e.dataTransfer.files || []); if (files.length) { e.preventDefault(); e.stopPropagation(); addFiles(comp, files); } });
@@ -1701,7 +1701,7 @@ async function slashCommand(sid, line) {
   const s = state.sessions.get(sid) || {};
   try {
     switch (cmd) {
-      case '/help': helpDialog(); return true;
+      case '/help': settingsDialog(); return true;
       case '/clear': await request('clear', { sid }); return true;
       case '/cd': if (arg) await request('set', { sid, cwd: arg }); return true;
       case '/model': {
@@ -1734,8 +1734,8 @@ async function slashCommand(sid, line) {
 // ----------------------------------------------------------------------
 // conditions: the header's ridgeline accent. The daemon reads fresh snow at the place in settings
 // (Alta) and bitcoin's 24 h move every 30 minutes and pushes them; the moon is arithmetic. One
-// condition shows at a time (snow, then a big bitcoin day, then the full moon in dark mode); the
-// thin bitcoin line under the header is separate and only tints. A reading older than 12 hours is
+// condition shows at a time (snow, then a big bitcoin day, then the full moon in dark mode). A
+// reading older than 12 hours is
 // nothing, so an offline laptop fades back to the plain header by itself.
 // ----------------------------------------------------------------------
 const COND_STALE = 12 * 3600;
@@ -1752,17 +1752,14 @@ function condPick(C) {
   const btc = st.btc && fresh(C.btc) ? Number(C.btc.pct || 0) : null;
   const moon = !!(st.moon && C.moon && C.moon.near_full && condNight() && effectiveTheme() === 'dark');
   const kind = snow >= 1 ? 'snow' : btc != null && Math.abs(btc) >= 5 ? 'btc' : moon ? 'moon' : null;
-  return { kind, snow, btc, line: btc };
+  return { kind, snow, btc };
 }
 function condRand(seed) { let t = seed * 2654435761 >>> 0; return () => { t = (t + 0x6D2B79F5) >>> 0; let r = Math.imul(t ^ (t >>> 15), 1 | t); r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r; return ((r ^ (r >>> 14)) >>> 0) / 4294967296; }; }
 function renderConditions() {
   const ridge = $('#ridge'), tag = $('#cond-tag'); if (!ridge || !tag) return;
-  const C = state.conditions; const P = C ? condPick(C) : { kind: null, line: null, snow: 0, btc: null };
+  const C = state.conditions; const P = C ? condPick(C) : { kind: null, snow: 0, btc: null };
   const still = condReduced();
-  const line = $('.btcline', ridge);
-  if (P.line != null && Math.abs(P.line) >= 0.2) { line.hidden = false; line.style.background = P.line > 0 ? 'var(--green)' : 'var(--red)'; line.style.opacity = Math.min(0.85, 0.15 + Math.abs(P.line) / 5 * 0.7).toFixed(2); }
-  else line.hidden = true;
-  ridge.hidden = !P.kind && line.hidden;
+  ridge.hidden = !P.kind;
   ridge.classList.toggle('static', still);
   ridge.dataset.kind = P.kind || '';
   ridge.dataset.light = effectiveTheme() === 'light' ? 'true' : 'false';
@@ -1780,14 +1777,14 @@ setInterval(renderConditions, 5 * 60 * 1000);   // staleness, nightfall and the 
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', renderConditions);
 
 // terminal here: this session's shell (the daemon's pty, in the session's folder) docked under the chat,
-// in a grid pane or a chat-view pane alike. The $ button in the composer and ⌘J toggle it.
+// in a grid pane or a chat-view pane alike. The $ button in the composer and the palette toggle it.
 function toggleShellDrawer(el) {
   const pane = el.closest('.pane, .cpane'); const drawer = pane && $('.shell-drawer', pane); const sid = pane && pane.dataset.sid;
   if (!drawer || !sid) return;
   if (pane.classList.contains('pane') && paneViewOf(sid) === 'shell') { setPaneView(sid, 'chat'); return; }
   if (!drawer.hidden && drawer.dataset.sid === sid) { closeShellDrawer(pane); focusComposer(); return; }
   const s = state.sessions.get(sid) || {}; const cwd = s.cwd || '';
-  drawer.innerHTML = `<div class="bar"><span class="path" title="${esc(cwd)}">$ ${esc(cwd.replace(/^\/(Users|home)\/[^/]+/, '~'))}</span><span class="help">this session's folder · ⌘J toggles</span><span class="spacer"></span><button class="sec" data-sh="close" title="Close the terminal (ends the shell)">✕</button></div><div class="box shell-box"></div>`;
+  drawer.innerHTML = `<div class="bar"><span class="path" title="${esc(cwd)}">$ ${esc(cwd.replace(/^\/(Users|home)\/[^/]+/, '~'))}</span><span class="help">this session's folder</span><span class="spacer"></span><button class="sec" data-sh="close" title="Close the terminal (ends the shell)">✕</button></div><div class="box shell-box"></div>`;
   drawer.dataset.sid = sid; drawer.hidden = false;
   ensureShell(sid, $('.box', drawer));
 }
@@ -1858,22 +1855,9 @@ function chooseDialog(title, items) {
 }
 function infoDialog(title, html) { openDialog(`<h2>${esc(title)}<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">${html}</div>`, 'info').addEventListener('click', (e) => { if (e.target.closest('[data-x]')) closeDialog(); }); }
 
-function helpDialog() {
-  const rows = SHORTCUTS.filter((sc) => !sc.hidden && sc.scope !== 'alias' || sc.group === 'queue');
-  const render = (q) => {
-    q = (q || '').toLowerCase().trim();
-    return KEY_GROUPS.map((g) => {
-      const items = rows.filter((sc) => sc.group === g && (!q || (shortcutKeys(sc) + ' ' + sc.label + ' ' + g).toLowerCase().includes(q)));
-      return items.length ? `<section><h3>${esc(g)}</h3><div class="help-grid">${items.map((sc) => `<kbd>${esc(shortcutKeys(sc))}</kbd><span>${esc(sc.label)}${sc.scope === 'mouse' ? ' <span class="help">(mouse)</span>' : ''}</span>`).join('')}</div></section>` : '';
-    }).join('') || '<div class="empty-row">no shortcut matches</div>';
-  };
-  const d = openDialog(`<h2>keyboard shortcuts<span class="spacer"></span><input id="keys-q" class="keys-q" placeholder="search shortcuts…" autocomplete="off"><button data-x="close">✕</button></h2><div class="body"><div class="keys" id="keys-list">${render('')}</div></div>`, 'keys');
-  d.classList.add('sheet');
-  const q = $('#keys-q', d);
-  q.addEventListener('input', () => { $('#keys-list', d).innerHTML = render(q.value); });
-  q.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (q.value) { q.value = ''; q.dispatchEvent(new Event('input')); } else closeDialog(); } });
-  d.addEventListener('click', (e) => { if (e.target.closest('[data-x]')) closeDialog(); });
-  setTimeout(() => q.focus(), 10);
+function keysHtml() {   // the short list under Settings
+  const rows = SHORTCUTS.filter((sc) => shortcutKeys(sc) && !sc.hidden);
+  return `<div class="help-grid keys">${rows.map((sc) => `<kbd>${esc(shortcutKeys(sc))}</kbd><span>${esc(sc.label)}</span>`).join('')}</div>`;
 }
 
 // approval inbox
@@ -1922,7 +1906,7 @@ function renderInbox() {
   const row = (it, i) => `<div class="item${i === sel ? ' sel' : ''}" data-i="${i}"><span class="sess">${esc(it.name)}</span><span class="kind ${it.kind}">${it.kind}</span><code${it.kind === 'error' ? ' class="warn"' : ''}>${esc(it.desc)}</code><span class="meta">${age(it.ts)} ago</span>` +
     (it.kind === 'approval' ? `<button class="primary" data-ap="1" data-sid="${it.sid}" data-rid="${esc(it.rid)}">yes</button><button class="danger" data-ap="0" data-sid="${it.sid}" data-rid="${esc(it.rid)}">no</button>`
       : it.kind === 'review' ? `<button class="primary" data-go="${i}">changes</button>` : it.kind === 'error' ? `<button data-go="${i}">details</button>` : `<button class="primary" data-go="${i}">open</button>`) + '</div>';
-  const html = `<h2>inbox <span class="help">${n('approval')} approval${n('approval') === 1 ? '' : 's'}${n('question') ? ` · ${n('question')} question${n('question') === 1 ? '' : 's'}` : ''}${n('review') ? ` · ${n('review')} in review` : ''}${n('error') ? ` · ${n('error')} error${n('error') === 1 ? '' : 's'}` : ''} · ↑↓ or j k move · y approve · n decline · ↩ open · a approve all · esc</span><span class="spacer"></span><button data-x="close">✕</button></h2>` +
+  const html = `<h2>inbox <span class="help">${n('approval')} approval${n('approval') === 1 ? '' : 's'}${n('question') ? ` · ${n('question')} question${n('question') === 1 ? '' : 's'}` : ''}${n('review') ? ` · ${n('review')} in review` : ''}${n('error') ? ` · ${n('error')} error${n('error') === 1 ? '' : 's'}` : ''} · ↑↓ move · ↩ open · esc</span><span class="spacer"></span>${n('approval') > 1 ? '<button data-ib="all" title="Approve every pending tool call in the list">approve all</button>' : ''}<button data-x="close">✕</button></h2>` +
     `<div class="list">${items.map(row).join('') || '<div class="empty-row">nothing waiting on you</div>'}</div>`;
   state.inboxItems = items;
   if (state.dialog === 'inbox') { $('#overlay .dialog').innerHTML = html; }
@@ -1933,6 +1917,7 @@ function openInbox() { state.inboxSel = 0; renderInbox(); }
 $('#overlay').addEventListener('click', async (e) => {
   if (state.dialog !== 'inbox') return;
   if (e.target.closest('[data-x]')) { closeDialog(); return; }
+  if (e.target.closest('[data-ib="all"]')) { (state.inboxItems || []).filter((p) => p.kind === 'approval').forEach((p) => approve(p.sid, p.rid, true)); return; }
   const b = e.target.closest('[data-ap]');
   if (b) { await approve(b.dataset.sid, b.dataset.rid, b.dataset.ap === '1'); return; }
   const g = e.target.closest('[data-go]');
@@ -1945,12 +1930,9 @@ async function approve(sid, rid, ok, advance = false) {
 }
 function inboxKey(e) {
   const items = state.inboxItems || []; const cur = items[state.inboxSel || 0];
-  if (e.key === 'ArrowDown' || e.key === 'j') { state.inboxSel = Math.min(items.length - 1, (state.inboxSel || 0) + 1); renderInbox(); }
-  else if (e.key === 'ArrowUp' || e.key === 'k') { state.inboxSel = Math.max(0, (state.inboxSel || 0) - 1); renderInbox(); }
-  else if (e.key === 'y' && cur && cur.kind === 'approval') approve(cur.sid, cur.rid, true);
-  else if (e.key === 'n' && cur && cur.kind === 'approval') approve(cur.sid, cur.rid, false);
+  if (e.key === 'ArrowDown') { state.inboxSel = Math.min(items.length - 1, (state.inboxSel || 0) + 1); renderInbox(); }
+  else if (e.key === 'ArrowUp') { state.inboxSel = Math.max(0, (state.inboxSel || 0) - 1); renderInbox(); }
   else if (e.key === 'Enter' && cur) { closeDialog(); showWaiting(cur); }
-  else if (e.key === 'a') items.filter((p) => p.kind === 'approval').forEach((p) => approve(p.sid, p.rid, true));
   else if (e.key === 'Escape') closeDialog();
   else return; e.preventDefault();
 }
@@ -2132,7 +2114,7 @@ function endVoice(comp) {
   comp._voice = false; if (voiceComp === comp) voiceComp = null;
   const ta = comp.ta; ta.value = ta.value.replace(/\s+$/, ''); ta.dispatchEvent(new Event('input')); ta.focus();
 }
-function micTitle() { return nativeDictation() ? 'Voice input, on-device: click to start / stop, hold to talk, ⌥Space push-to-talk, ⌘⇧M toggle. Words land here for you to edit; nothing is sent by itself.' : 'Voice input: speak, the words land here; click again or pause to stop (⌘⇧M, hold ⌥Space to talk)'; }
+function micTitle() { return nativeDictation() ? 'Voice input, on-device: click to start / stop, hold to talk. Words land here for you to edit; nothing is sent by itself.' : 'Voice input: speak, the words land here; click again or pause to stop (hold the button to talk)'; }
 function voiceActive(comp) { return !!(comp._voice || comp._rec); }
 async function startVoice(comp) {
   if (voiceActive(comp)) return;
@@ -2260,9 +2242,9 @@ function aboutDialog() {
   const d = openDialog(`<div class="body"><img class="logo" src="icon-192.png" alt=""><pre class="banner" aria-label="KCODER">${esc(BANNER)}</pre>
     <div class="tagline">${esc(ABOUT_LINES[Math.floor(Math.random() * ABOUT_LINES.length)])}</div>
     <div class="credits">© Kyle Niedzwiecki<br><span class="ver">kcoder ${esc(v.running || '')}</span></div>
-    <div class="row"><button data-x="settings">Settings</button><button data-x="customize">Customize</button><button data-x="keys">Keyboard shortcuts</button><button class="primary" data-x="close">Close</button></div></div>`, 'about');
+    <div class="row"><button data-x="settings">Settings</button><button data-x="customize">Customize</button><button class="primary" data-x="close">Close</button></div></div>`, 'about');
   d.classList.add('about');
-  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; closeDialog(); if (b.dataset.x === 'settings') settingsDialog(); else if (b.dataset.x === 'customize') customizeDialog(); else if (b.dataset.x === 'keys') helpDialog(); });
+  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; closeDialog(); if (b.dataset.x === 'settings') settingsDialog(); else if (b.dataset.x === 'customize') customizeDialog(); });
 }
 
 // customize: the look (theme, style, colours, fonts, density) and the conditions, from the kcoder logo
@@ -2298,7 +2280,7 @@ async function customizeDialog() {
     ${chk('conditions_snow', c.snow !== false, 'Fresh snow', 'light falling snow and a tag with the inches when the place below had snow in the last 24 h (Open-Meteo, no key; the place is fixed here, never your location)')}
     <label class="setting"><span>Snow place <span class="help">the name in the tag</span></span><input type="text" data-set="conditions_place" value="${esc(pl.name || 'Alta')}" placeholder="Alta"></label>
     <label class="setting"><span>Snow place lat, lon <span class="help">decimal degrees</span></span><input type="text" data-set="conditions_latlon" value="${esc(`${pl.lat ?? 40.5884}, ${pl.lon ?? -111.6386}`)}" placeholder="40.5884, -111.6386"></label>
-    ${chk('conditions_btc', c.btc !== false, 'Bitcoin', 'a thin line under the header, green or red with the 24 h move and stronger the bigger it is; a 5% day gets a badge on the ridgeline (CoinGecko, no key)')}
+    ${chk('conditions_btc', c.btc !== false, 'Bitcoin', 'a 5% day either way puts a ₿ badge on the header (CoinGecko, no key)')}
     ${chk('conditions_moon', c.moon !== false, 'Full moon', 'in dark mode on full-moon nights: a small moon over the ridgeline and slightly cooler tones')}`; })()}
   </div><div class="foot"><span class="help plain">The day shows at the right of the status bar.</span><span class="spacer" style="flex:1"></span><button class="primary" data-x="close">Done</button></div>`, 'customize');
   d.classList.add('settings');
@@ -2354,8 +2336,10 @@ async function settingsDialog() {
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
     <div class="label-h">accounts</div>
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
+    <div class="label-h">keyboard</div>
+    ${keysHtml()}
     <div class="label-h">kcoder</div>
-    <div class="links"><button data-x="update">Check for new commits</button><button data-x="restart">Restart kcoderd</button><button data-x="keys">Keyboard shortcuts</button><button data-x="about">About</button><button class="danger" data-x="uninstall">Uninstall…</button></div>
+    <div class="links"><button data-x="update">Check for new commits</button><button data-x="restart">Restart kcoderd</button><button data-x="about">About</button><button class="danger" data-x="uninstall">Uninstall…</button></div>
   </div><div class="foot"><button class="primary" data-x="close">Done</button></div>`, 'settings');
   d.classList.add('settings');
   d.addEventListener('change', async (e) => {
@@ -2371,7 +2355,7 @@ async function settingsDialog() {
     const b = e.target.closest('[data-x]'); if (!b) return;
     const x = b.dataset.x; closeDialog();
     ({ claude: claudeDialog, setup: () => setupDialog(), remote: remoteDialog, notif: () => Notification.requestPermission().then((p) => toast('notifications: ' + p)),
-       update: checkUpdates, restart: restartDaemon, keys: helpDialog, about: aboutDialog, uninstall: uninstallDialog, customize: customizeDialog }[x] || (() => {}))();
+       update: checkUpdates, restart: restartDaemon, about: aboutDialog, uninstall: uninstallDialog, customize: customizeDialog }[x] || (() => {}))();
   });
 }
 
@@ -2841,101 +2825,60 @@ function toggleSound() { state.sound = !state.sound; localStorage.setItem('kcode
 // ----------------------------------------------------------------------
 // keyboard
 // ----------------------------------------------------------------------
-// ----------------------------------------------------------------------
-// keyboard shortcuts: ONE registry. The global key handler dispatches from
-// it, the ⌘K palette and pane menus take their hints from it, and the ⌘/
-// sheet is rendered from it, so documentation can't drift from behaviour.
+// keyboard shortcuts: ONE registry, kept small on purpose. The global key handler
+// dispatches from it, the ⌘K palette takes its entries from it (an entry with no
+// combo is palette-only) and the list under Settings is rendered from it. The
+// editing keys (⌘C, ⌘V, ⌘X, ⌘A in a field, ⌘Z) are the browser's own.
 //   combo   'mod+shift+w' style (mod = ⌘ or Ctrl); plain keys match e.key exactly
-//   test(e) custom matcher (when one combo isn't enough, e.g. 1 … 9)
 //   when()  only active when this returns true
-//   scope   'global' (also with a dialog open), 'app' (default: no dialog),
-//           'plain' (no dialog, not typing in a field), or a component name
-//           ('composer', 'inbox', 'find', 'mouse') for keys handled locally;
-//           those rows are listed in the sheet but dispatched by their component
+//   scope   'global' (also with a dialog open), 'app' (no dialog), 'plain' (no
+//           dialog, not typing in a field), 'plain-esc' (same, for Escape), or
+//           a component name ('composer', 'native') for keys handled elsewhere
+//           and only listed
 //   palette label for the ⌘K palette (omit to keep it out of the palette)
 // ----------------------------------------------------------------------
 const chatPane = () => $$('#split .cpane')[state.layout.focus];
 const focusedSession = () => (state.view === 'chat' ? state.sessions.get(focusedSid()) : (state.focus && state.sessions.get(state.focus)));
 const toChat = () => { if (state.view !== 'chat') setView('chat'); };
 const SHORTCUTS = [
-  // navigation
-  { id: 'palette', group: 'navigation', combo: 'mod+k', label: 'command palette', scope: 'global', run: () => (state.dialog ? closeDialog() : openPalette()) },
-  { id: 'sheet', group: 'navigation', combo: 'mod+/', label: 'keyboard shortcuts (this sheet)', scope: 'global', palette: 'keyboard shortcuts', run: () => (state.dialog === 'keys' ? closeDialog() : helpDialog()) },
-  { id: 'sheet2', group: 'navigation', combo: '?', label: 'keyboard shortcuts (outside a text field)', scope: 'plain', run: () => helpDialog() },
-  { id: 'v-sessions', group: 'navigation', combo: 'alt+1', label: 'sessions', scope: 'app', palette: 'sessions', run: () => openSessions() },
-  { id: 'v-stats', group: 'navigation', combo: 'alt+2', label: 'stats', scope: 'app', palette: 'stats', run: () => setView('stats') },
-  { id: 'v-fun', group: 'navigation', combo: 'alt+3', label: 'just for fun: the mine and the arcade', scope: 'app', palette: 'just for fun', run: () => setView('fun') },
-  { id: 'v-mine', group: 'navigation', label: 'just for fun: the token mine', scope: 'alias', palette: 'just for fun: the token mine', run: () => funSelect('mine') },
-  { id: 'v-2048', group: 'navigation', label: 'just for fun: 2048', scope: 'alias', palette: 'just for fun: 2048', run: () => funSelect('2048') },
-  { id: 'v-mahjong', group: 'navigation', label: 'just for fun: mahjong solitaire', scope: 'alias', palette: 'just for fun: mahjong', run: () => funSelect('mahjong') },
-  { id: 'l-grid', group: 'navigation', combo: 'alt+g', label: 'sessions: grid of every live session', scope: 'app', palette: 'sessions: grid', run: () => setLayout('grid') },
-  { id: 'l-1', group: 'navigation', keys: '⌥⇧1 … 3', label: 'sessions: 1, 2 or 3 panes side by side', scope: 'app', test: (e) => e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && /^(Digit[123]|[123!@#])$/.test(e.code || e.key), palette: 'sessions: 1 pane', run: (e) => setLayout(e.code ? e.code.replace('Digit', '') : '1') },
-  { id: 'l-2', group: 'navigation', label: 'sessions: 2 panes', scope: 'alias', palette: 'sessions: 2 panes', run: () => setLayout('2') },
-  { id: 'l-3', group: 'navigation', label: 'sessions: 3 panes', scope: 'alias', palette: 'sessions: 3 panes', run: () => setLayout('3') },
-  { id: 'settings', group: 'navigation', combo: 'mod+,', label: 'settings', scope: 'app', palette: 'settings', run: () => settingsDialog() },
-  { id: 'about', group: 'navigation', label: 'about kcoder', scope: 'alias', palette: 'about kcoder', run: () => aboutDialog() },
-  { id: 'fullscreen', group: 'navigation', combo: 'ctrl+mod+f', label: 'full screen', scope: 'app', palette: 'full screen', run: () => toggleFullscreen() },
-  { id: 'search', group: 'navigation', combo: 'mod+shift+f', label: 'search across sessions', scope: 'app', palette: 'search across sessions', run: () => { toChat(); const si = $('#search'); si.focus(); si.select(); } },
-  { id: 'escape', group: 'navigation', combo: 'Escape', label: 'close dialog · back to the grid', scope: 'plain', when: () => !!state.focus, run: () => focusPane(null) },
-  // sessions
-  { id: 'new', group: 'sessions', combo: 'n', label: 'new session', scope: 'plain', palette: 'new session', run: () => openNewSession() },
-  { id: 'waiting', group: 'sessions', combo: 'w', label: 'next item waiting on you (approval, question, review, error)', scope: 'plain', palette: 'next item waiting on you', run: () => cycleWaiting() },
-  { id: 'jump', group: 'sessions', keys: '1 … 9', label: 'jump to pane on the wall', scope: 'plain', test: (e) => !e.metaKey && !e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key), run: (e) => { const s = visibleSessions()[Number(e.key) - 1]; if (s) { if (state.view !== 'wall') setView('wall'); focusPane(s.id); } } },
-  { id: 'open', group: 'sessions', combo: 'Enter', label: 'focus the current session on the wall', scope: 'plain', when: () => state.view === 'wall' && !state.focus && !!state.sid, run: () => focusPane(state.sid) },
-  { id: 'view', group: 'sessions', combo: 'v', label: 'pane view: chat ↔ terminal (grid panes also: shell → preview)', scope: 'plain', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
-  { id: 'pin', group: 'sessions', combo: 'p', label: 'pin the focused session to this window', scope: 'plain', when: () => !!state.focus, run: () => togglePin(state.focus) },
-  { id: 'archive', group: 'sessions', combo: 'e', label: 'archive the focused session (undo on the toast)', scope: 'plain', when: () => !!(state.focus || (state.view === 'chat' && focusedSid())), run: () => archiveChat(state.focus || focusedSid()) },
-  { id: 'archive-idle', group: 'sessions', label: 'archive every idle chat (not running, pinned, in a pane or current)', scope: 'alias', palette: 'archive idle chats', run: () => archiveIdle() },
-  { id: 'voice', group: 'sessions', combo: 'mod+shift+m', label: 'voice input into the composer (start / stop)', scope: 'app', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { const comp = activeComposer(); if (comp) toggleVoice(comp); } },
-  { id: 'shellhere', group: 'sessions', combo: 'mod+j', label: 'terminal here: this session\'s shell docked under the chat (toggle)', scope: 'app', palette: 'terminal here (a shell in the session\'s folder, under the chat)', run: () => { const comp = activeComposer(); if (comp) toggleShellDrawer(comp.form); } },
-  { id: 'ptt', group: 'sessions', keys: '⌥Space (hold)', label: 'push-to-talk: dictate while held, release to stop (also: hold the 🎤 button)', scope: 'composer' },
-  { id: 'slash', group: 'sessions', combo: '/', label: 'slash commands (/model, /trust, …)', scope: 'plain', when: () => state.view !== 'wall' || !!state.focus, run: () => { focusComposer(); const ta = document.activeElement; if (ta && ta.tagName === 'TEXTAREA') { ta.value = '/'; ta.dispatchEvent(new Event('input')); } } },
-  { id: 'send', group: 'sessions', keys: '↩', label: 'send', scope: 'composer' },
-  { id: 'newline', group: 'sessions', keys: '⇧↩', label: 'newline', scope: 'composer' },
-  { id: 'interrupt', group: 'sessions', keys: 'esc', label: 'interrupt the running turn (while typing)', scope: 'composer' },
-  { id: 'history', group: 'sessions', keys: '↑ / ↓', label: 'prompt history', scope: 'composer' },
-  { id: 'files', group: 'sessions', keys: '@', label: 'reference a project file', scope: 'composer' },
-  { id: 'paste', group: 'sessions', keys: '⌘V', label: 'paste never submits; big pastes become chips', scope: 'composer' },
-  // panes
-  { id: 'split', group: 'panes', combo: 'mod+\\', label: 'add a pane (up to 3)', scope: 'app', palette: 'split: add a pane', run: () => { toChat(); splitAdd(null); } },
-  { id: 'pane1', group: 'panes', keys: '⌘1 / 2 / 3', label: 'focus chat pane 1 / 2 / 3', scope: 'app', test: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && ['1', '2', '3'].includes(e.key), when: () => state.view === 'chat', run: (e) => splitFocus(Number(e.key) - 1) },
-  { id: 'close', group: 'panes', combo: 'mod+shift+w', label: 'close pane', scope: 'app', when: () => state.view === 'chat', run: () => splitClose(state.layout.focus) },
-  { id: 'zoom', group: 'panes', combo: 'mod+shift+enter', label: 'pop out the pane / back to the grid', scope: 'app', palette: 'pop out / restore pane', run: () => { toChat(); toggleZoom(); } },
-  { id: 'find', group: 'panes', combo: 'mod+f', label: 'find in this session', scope: 'app', when: () => state.view === 'chat', run: () => { const p = chatPane(); if (p) openFind(p); } },
-  { id: 'find-close', group: 'panes', combo: 'Escape', label: 'close find', scope: 'plain-esc', when: () => { const p = state.view === 'chat' && chatPane(); return !!(p && p._find); }, run: () => closeFind(chatPane()) },
-  { id: 'select', group: 'panes', combo: 'mod+a', label: 'select the whole transcript', scope: 'app', when: () => !!focusedLog(), noField: true, run: () => { const r = document.createRange(); r.selectNodeContents(focusedLog()); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); } },
-  { id: 'copy', group: 'panes', keys: '⌘C', label: 'copy the selection as clean text', scope: 'native' },
-  { id: 'drag-pane', group: 'panes', keys: 'drag title bar', label: 'reorder wall panes', scope: 'mouse' },
-  { id: 'drag-chat', group: 'panes', keys: 'drag a chat', label: 'from the sidebar onto a pane', scope: 'mouse' },
-  // review
-  { id: 'inbox', group: 'review', combo: 'a', label: 'approval inbox', scope: 'plain', palette: 'approval inbox', run: () => openInbox() },
-  { id: 'inbox2', group: 'review', combo: 'i', label: 'approval inbox', scope: 'plain', hidden: true, run: () => openInbox() },
-  { id: 'approve', group: 'review', combo: 'y', label: 'approve the focused pane\'s request', scope: 'plain', when: () => { const f = focusedSession(); return !!(f && f.pending_approval); }, run: () => { const f = focusedSession(); approve(f.id, f.pending_approval, true, true); } },
-  { id: 'decline', group: 'review', combo: 'N', label: 'decline the focused pane\'s request', scope: 'plain', when: () => { const f = focusedSession(); return !!(f && f.pending_approval); }, run: () => { const f = focusedSession(); approve(f.id, f.pending_approval, false, true); } },
-  { id: 'inbox-move', group: 'review', keys: '↑ / ↓ · j / k', label: 'move in the inbox', scope: 'inbox' },
-  { id: 'inbox-yn', group: 'review', keys: 'y / n', label: 'approve / decline in the inbox (the next item is selected)', scope: 'inbox' },
-  { id: 'inbox-open', group: 'review', keys: '↩', label: 'open the selected item (question, changes, error details)', scope: 'inbox' },
-  { id: 'inbox-all', group: 'review', keys: 'a', label: 'approve everything in the inbox', scope: 'inbox' },
-  { id: 'undo', group: 'review', keys: '↶ on a message', label: 'undo to here (files + conversation)', scope: 'mouse' },
-  { id: 'changes', group: 'review', keys: 'changes', label: 'accept / reject / edit each hunk, then approve', scope: 'mouse' },
-  // queue
-  { id: 'queue-add', group: 'queue', keys: '+ task', label: 'queue a follow-up on a session', scope: 'mouse' },
-  { id: 'dialog-submit', group: 'navigation', keys: '⌘↩', label: 'submit a multi-line dialog', scope: 'dialog' },
+  // keys
+  { id: 'palette', combo: 'mod+k', label: 'command palette', scope: 'global', run: () => (state.dialog ? closeDialog() : openPalette()) },
+  { id: 'settings', combo: 'mod+,', label: 'settings', scope: 'app', palette: 'settings', run: () => settingsDialog() },
+  { id: 'find', combo: 'mod+f', label: 'find in this session', scope: 'app', palette: 'find in this session', when: () => state.view === 'chat', run: () => { const p = chatPane(); if (p) openFind(p); } },
+  { id: 'find-close', combo: 'Escape', label: 'close find', scope: 'plain-esc', hidden: true, when: () => { const p = state.view === 'chat' && chatPane(); return !!(p && p._find); }, run: () => closeFind(chatPane()) },
+  { id: 'escape', combo: 'Escape', label: 'close a dialog · back to the grid', scope: 'plain', when: () => !!state.focus, run: () => focusPane(null) },
+  { id: 'select', combo: 'mod+a', label: 'select the whole transcript (in a text field: select all)', scope: 'app', when: () => !!focusedLog(), noField: true, run: () => { const r = document.createRange(); r.selectNodeContents(focusedLog()); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); } },
+  { id: 'copy', keys: '⌘C · ⌘X · ⌘V', label: 'copy (a transcript selection copies as clean text), cut, paste', scope: 'native' },
+  { id: 'send', keys: '↩', label: 'send the message', scope: 'composer' },
+  { id: 'newline', keys: '⇧↩', label: 'newline', scope: 'composer' },
+  { id: 'interrupt', keys: 'esc', label: 'interrupt the running turn (while typing)', scope: 'composer' },
+  { id: 'history', keys: '↑ / ↓', label: 'prompt history', scope: 'composer' },
+  { id: 'dialog-submit', keys: '⌘↩', label: 'submit a multi-line dialog', scope: 'composer' },
+  // palette only
+  { id: 'v-sessions', palette: 'sessions', run: () => openSessions() },
+  { id: 'v-stats', palette: 'stats', run: () => setView('stats') },
+  { id: 'v-fun', palette: 'just for fun', run: () => setView('fun') },
+  { id: 'v-mine', palette: 'just for fun: the token mine', run: () => funSelect('mine') },
+  { id: 'v-2048', palette: 'just for fun: 2048', run: () => funSelect('2048') },
+  { id: 'v-mahjong', palette: 'just for fun: mahjong', run: () => funSelect('mahjong') },
+  { id: 'l-grid', palette: 'sessions: grid', run: () => setLayout('grid') },
+  { id: 'l-1', palette: 'sessions: 1 pane', run: () => setLayout('1') },
+  { id: 'l-2', palette: 'sessions: 2 panes', run: () => setLayout('2') },
+  { id: 'l-3', palette: 'sessions: 3 panes', run: () => setLayout('3') },
+  { id: 'about', palette: 'about kcoder', run: () => aboutDialog() },
+  { id: 'fullscreen', palette: 'full screen', run: () => toggleFullscreen() },
+  { id: 'search', palette: 'search across sessions', run: () => { toChat(); const si = $('#search'); si.focus(); si.select(); } },
+  { id: 'new', palette: 'new session', run: () => openNewSession() },
+  { id: 'waiting', palette: 'next item waiting on you', run: () => cycleWaiting() },
+  { id: 'view', palette: 'pane view: chat / terminal', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
+  { id: 'archive-idle', palette: 'archive idle chats', run: () => archiveIdle() },
+  { id: 'voice', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { const comp = activeComposer(); if (comp) toggleVoice(comp); } },
+  { id: 'shellhere', palette: 'terminal here (a shell in the session\'s folder, under the chat)', run: () => { const comp = activeComposer(); if (comp) toggleShellDrawer(comp.form); } },
+  { id: 'split', palette: 'split: add a pane', run: () => { toChat(); splitAdd(null); } },
+  { id: 'zoom', palette: 'pop out / restore pane', run: () => { toChat(); toggleZoom(); } },
+  { id: 'inbox', palette: 'approval inbox', run: () => openInbox() },
 ];
-const KEY_GROUPS = ['panes', 'sessions', 'review', 'queue', 'navigation'];
 function activeComposer() { focusComposer(); const f = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.composer') : null; const form = f || $('.pane.focused .composer') || $('.composer'); return form && form._comp ? form._comp : null; }
-// push-to-talk: hold ⌥Space (release either key to stop); repeats are ignored so holding never restarts it
-document.addEventListener('keydown', (e) => {
-  if (!(e.altKey && e.code === 'Space') || e.metaKey || e.ctrlKey || e.repeat || state.dialog) return;
-  e.preventDefault(); if (!speechSupported()) return;
-  const comp = activeComposer(); if (!comp || voiceActive(comp)) return;
-  comp._ptt = true; startVoice(comp);
-}, true);
-document.addEventListener('keyup', (e) => {
-  if (e.code !== 'Space' && e.key !== 'Alt') return;
-  const comp = voiceComp || (($('.composer:focus-within') || {})._comp); if (!comp || !comp._ptt) return;
-  comp._ptt = false; stopVoice(comp);
-}, true);
 function parseCombo(c) {
   const parts = c.split('+'); const key = parts.pop();
   return { key, mod: parts.includes('mod'), shift: parts.includes('shift'), alt: parts.includes('alt'), ctrl: parts.includes('ctrl'), plain: !parts.length };
@@ -2961,13 +2904,13 @@ document.addEventListener('keydown', (e) => {
   if (state.dialog === 'inbox') { inboxKey(e); return; }
   if (state.dialog && e.key === 'Escape') { closeDialog(); return; }
   for (const sc of SHORTCUTS) {
-    if (!sc.run) continue;
+    if (!sc.run || !sc.combo) continue;
     if (sc.scope === 'global') { /* always */ }
     else if (sc.scope === 'app') { if (state.dialog) continue; }
     else if (sc.scope === 'plain' || sc.scope === 'plain-esc') { if (state.dialog || inField) continue; }
     else continue;
     if (sc.noField && inField) continue;
-    if (!(sc.test ? sc.test(e) : comboMatches(sc.combo, e))) continue;
+    if (!comboMatches(sc.combo, e)) continue;
     if (sc.when && !sc.when()) continue;
     e.preventDefault();
     sc.run(e);

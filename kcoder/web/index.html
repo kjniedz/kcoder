@@ -21,18 +21,18 @@
 </head>
 <body>
 <header id="header">
-  <div id="ridge" class="ridge" aria-hidden="true" hidden><svg class="ridgeline" viewBox="0 0 1000 16" preserveAspectRatio="none"><path class="rock" d="M0 16 L0 11 L35 7 L70 10 L110 4 L150 9 L190 6 L240 11 L285 5 L330 9 L370 3 L420 8 L470 5 L520 10 L560 6 L610 11 L650 4 L700 9 L740 6 L790 10 L830 3 L880 8 L930 5 L970 9 L1000 7 L1000 16 Z"></path><path class="cap" d="M0 11 L35 7 L70 10 L110 4 L150 9 L190 6 L240 11 L285 5 L330 9 L370 3 L420 8 L470 5 L520 10 L560 6 L610 11 L650 4 L700 9 L740 6 L790 10 L830 3 L880 8 L930 5 L970 9 L1000 7"></path></svg><div class="flakes"></div><span class="moon"></span><span class="btcline" hidden></span></div>
+  <div id="ridge" class="ridge" aria-hidden="true" hidden><svg class="ridgeline" viewBox="0 0 1000 16" preserveAspectRatio="none"><path class="rock" d="M0 16 L0 11 L35 7 L70 10 L110 4 L150 9 L190 6 L240 11 L285 5 L330 9 L370 3 L420 8 L470 5 L520 10 L560 6 L610 11 L650 4 L700 9 L740 6 L790 10 L830 3 L880 8 L930 5 L970 9 L1000 7 L1000 16 Z"></path><path class="cap" d="M0 11 L35 7 L70 10 L110 4 L150 9 L190 6 L240 11 L285 5 L330 9 L370 3 L420 8 L470 5 L520 10 L560 6 L610 11 L650 4 L700 9 L740 6 L790 10 L830 3 L880 8 L930 5 L970 9 L1000 7"></path></svg><div class="flakes"></div><span class="moon"></span></div>
   <button id="brand" class="brand" title="About kcoder"><pre id="banner" class="banner compact" aria-label="KCODER"></pre><span class="wordmark">kcoder</span></button>
   <nav class="views" role="tablist">
-    <button data-view="wall" title="Sessions: the grid, or 1 to 3 panes  (alt+1)">sessions</button>
-    <button data-view="stats" title="Stats  (alt+2)">stats</button>
-    <button data-view="fun" title="Just for fun: the token mine and the arcade  (alt+3)">fun</button>
+    <button data-view="wall" title="Sessions: the grid, or 1 to 3 panes">sessions</button>
+    <button data-view="stats" title="Stats">stats</button>
+    <button data-view="fun" title="Just for fun: the token mine and the arcade">fun</button>
   </nav>
   <span id="cond-tag" class="cond-tag" hidden></span>
   <input id="omni" class="omni" type="search" placeholder="Search or run a command  ⌘K" autocomplete="off" title="Search sessions or run a command  (⌘K)">
   <div class="tools">
-    <button id="btn-inbox" title="Inbox: approvals and sessions waiting on you  (a)">inbox <span id="inbox-count" class="count" hidden></span></button>
-    <button id="btn-new" title="New session  (n)">+ new</button>
+    <button id="btn-inbox" title="Inbox: approvals and sessions waiting on you">inbox <span id="inbox-count" class="count" hidden></span></button>
+    <button id="btn-new" title="New session">+ new</button>
   </div>
 </header>
 
@@ -60,7 +60,7 @@
   <section id="view-chat" class="view chatview" hidden>
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-top">
-        <input id="search" type="search" placeholder="search chats…  (⌘⇧F)" autocomplete="off">
+        <input id="search" type="search" placeholder="search chats…" autocomplete="off">
         <button id="btn-new-chat" title="New chat in this project">+</button>
       </div>
       <div id="projects" class="projects"></div>
@@ -102,13 +102,13 @@
       <button class="picker" title="Pick a session for this pane">pick a session ▾</button>
       <span class="meta"></span>
       <span class="spacer"></span>
-      <button data-pane="view" class="view-toggle" title="Chat / terminal view  (v)">☰</button>
+      <button data-pane="view" class="view-toggle" title="Chat / terminal view">☰</button>
       <span class="ctx sec"></span>
       <select data-act="trust" class="sec" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select>
       <select data-act="model" class="sec" title="model"></select>
       <button data-act="interrupt" class="sec" title="Interrupt (Esc)">■</button>
-      <button data-pane="zoom" title="Pop out / back to grid (⌘⇧↩)">⤢</button>
-      <button data-pane="close" title="Close this pane (⌘⇧W); the last one goes back to the sessions grid">✕</button>
+      <button data-pane="zoom" title="Pop out / back to grid">⤢</button>
+      <button data-pane="close" title="Close this pane; the last one goes back to the sessions grid">✕</button>
       <button data-pane="menu" title="More">⋯</button>
     </div>
     <div class="cpane-find" hidden><input placeholder="find in this session…" autocomplete="off"><span class="count"></span><button data-find="prev" title="previous (⇧↩)">↑</button><button data-find="next" title="next (↩)">↓</button><button data-find="close" title="close (esc)">✕</button></div>
@@ -128,7 +128,7 @@
     <div class="composer-row">
       <span class="prompt-label">you&gt;</span>
       <textarea rows="1" placeholder="Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)"></textarea>
-      <button type="button" class="sh" title="Terminal here: a shell in this session's folder, docked under the chat  (⌘J toggles)">$</button>
+      <button type="button" class="sh" title="Terminal here: a shell in this session's folder, docked under the chat">$</button>
       <button type="submit" class="send" title="Send (Enter)">➤</button>
       <button type="button" class="stop" title="Interrupt (Esc)" hidden>■</button>
     </div>

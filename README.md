@@ -151,7 +151,7 @@ want built, and watch it work.
 `kcoder ui` opens it in a browser tab instead.
 
 **Header**, left to right: the KCODER banner (click it for About), the
-**sessions / tasks / stats / fun** tabs (alt+1/2/3/4), a **search or run a command**
+**sessions / stats / fun** tabs, a **search or run a command**
 field (the command palette, ⌘K), the **inbox** with a badge for everything
 waiting on you, and **+ new**. That is all the header ever holds. Everything
 informational sits in the one-line **status bar** at the bottom: daemon
@@ -163,17 +163,17 @@ place.
 
 The sessions tab shows every live session as a **grid** of panes, or **1, 2 or
 3 sessions side by side** with the project sidebar. The `grid / 1 / 2 / 3`
-picker above the sessions switches layouts (alt+g, ⌥⇧1/2/3). Drag a chat from
+picker above the sessions switches layouts (the palette does too). Drag a chat from
 the sidebar onto a pane, or click the pane's name to pick one. The layout is
 remembered.
 
 Every pane has its own input, model and trust pickers, and a **chat /
-terminal** toggle (v) that renders the same session as a plain transcript.
-The `$` button next to send (or ⌘J, or "terminal here" in the palette)
+terminal** toggle that renders the same session as a plain transcript.
+The `$` button next to send (or "terminal here" in the palette)
 docks a real **shell** under the chat, in the session's folder, in a grid
 pane or a chat-view pane alike: the daemon's own pty through xterm.js, so
-there is no Terminal window to open; ✕ or ⌘J again closes it. Voice input
-stays on ⌘⇧M (and ⌥Space push-to-talk) and in the palette.
+there is no Terminal window to open; ✕ or `$` again closes it. Voice input
+is the microphone button and "voice input" in the palette.
 Grid panes also cycle through a real **shell** (xterm.js in the session's
 folder) and the **live preview** of a web project. Broadcast (⇶, with 2 or 3
 panes) sends one prompt to every pane, handy for comparing models.
@@ -200,8 +200,9 @@ focused session, or click **archive N idle** at the bottom of the sidebar to
 clear every chat that is not running, pinned, in a pane or the current one;
 the palette offers the same per project. Right-click a chat to rename, pin,
 archive, export or delete it. Transcripts are real text: select across
-messages, ⌘C copies clean markdown, ⌘F finds in a session, ⌘⇧F searches all
-of them, and files dropped on a pane attach to the prompt.
+messages, ⌘C copies clean markdown, ⌘F finds in a session, the search field
+in the sidebar searches all of them, and files dropped on a pane attach to
+the prompt.
 
 **Achievements.** The stats page keeps a badge wall: tokens (First Chair
 10M up to Space Station 50B, Powder Day and Avalanche for a single day),
@@ -237,10 +238,13 @@ takes words, `"phrases"`, `repo:name`, `since:2026-10-01`, `until:…`,
 `date:yesterday` and `who:me`. Every hit opens the session at that message.
 `kcoder search <query> [--repo] [--since] [--who]` in a terminal.
 
-Keys: <kbd>n</kbd> new session, <kbd>a</kbd> inbox, <kbd>w</kbd> next item
-waiting on you, <kbd>1</kbd> to <kbd>9</kbd> focus a grid pane, <kbd>esc</kbd>
-back to the grid or interrupt the focused session, <kbd>⌘K</kbd> palette,
-<kbd>⌘,</kbd> settings, <kbd>⌘/</kbd> the full shortcut sheet.
+Keys, deliberately few: <kbd>⌘K</kbd> palette (everything else is in there:
+new session, inbox, next item waiting, layouts, the views, voice, terminal
+here, split, pop out), <kbd>⌘,</kbd> settings, <kbd>⌘F</kbd> find in a
+session, <kbd>⌘A</kbd> select the transcript, <kbd>esc</kbd> back to the grid
+or interrupt the focused session, <kbd>↩</kbd> send and <kbd>⇧↩</kbd> newline,
+<kbd>↑</kbd>/<kbd>↓</kbd> prompt history, and the browser's own copy, cut,
+paste and select all. The list sits under Settings.
 
 **Screenshots in a message.** Paste (⌘V) or drag images into any session
 composer or the task composer, several per message. Thumbnails appear
@@ -256,8 +260,8 @@ send asks first instead of failing quietly.
 
 **Voice input.** The microphone button in the composer dictates into the
 message; the words land in the input for you to edit, and nothing is ever
-sent by voice. Click to start and stop, hold the button to talk, hold
-<kbd>⌥Space</kbd> anywhere for push-to-talk, <kbd>⌘⇧M</kbd> toggles. In the
+sent by voice. Click to start and stop, hold the button to talk, or pick
+"voice input" in the palette. In the
 app window the Mac's on-device speech recognition does the work (the audio
 never leaves the machine; the first use asks for microphone and speech
 recognition permission), biased towards your repo and branch names and
@@ -328,20 +332,19 @@ surfaces, lines, code blocks and the banner gradient follow), the density
 accent with its live readings. All of the look is per browser. The day
 (weekday and date) sits at the right of the status bar.
 
-**Keyboard-only inbox.** Everything waiting on you is one list: approvals,
-questions, changes to review, errors. <kbd>w</kbd> shows the next item;
-<kbd>y</kbd> approves and <kbd>⇧N</kbd> declines the one on screen, and the
-next comes up by itself. In the inbox (<kbd>a</kbd>): <kbd>j</kbd>/<kbd>k</kbd>
-move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
-<kbd>↩</kbd> opens a question, the changes view or the error details,
-<kbd>a</kbd> approves everything.
+**The inbox.** Everything waiting on you is one list: approvals, questions,
+changes to review, errors. "Next item waiting on you" in the palette shows
+the next one; yes / no on a pane answers it and the next comes up by itself.
+In the inbox: <kbd>↑</kbd>/<kbd>↓</kbd> move, yes / no answer and the
+selection moves on, <kbd>↩</kbd> opens a question, the changes view or the
+error details, and an "approve all" button answers every approval at once.
 
 ### Inbox, stats, settings
 
-- **Inbox** (a): every pending tool approval and every session waiting for an
-  answer, from all sessions, in one list. <kbd>y</kbd> / <kbd>n</kbd> answer,
-  <kbd>a</kbd> approves all. Sessions in error show here too, with details.
-- **Stats** (alt+2): pick the period at the top (today, 7, 30 or 90 days, all
+- **Inbox**: every pending tool approval and every session waiting for an
+  answer, from all sessions, in one list. Yes / no answer, "approve all"
+  approves all. Sessions in error show here too, with details.
+- **Stats**: pick the period at the top (today, 7, 30 or 90 days, all
   time, or any single day from the date picker, the daily table or the
   calendar) and every number on the page follows it, with today, 7-day,
   30-day and all-time figures alongside: tokens, lines of code
@@ -362,7 +365,7 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   **just for fun** card lists the working verbs shown most this month, the
   period as something you can picture, the secret badges earned and a link
   to the latest Wrapped card and to the token mine.
-- **Fun** (alt+3): the **token mine**, a clicker. Click the KCODER banner for
+- **Fun**: the **token mine**, a clicker. Click the KCODER banner for
   tokens and spend them on agents that mine on their own (Haiku intern,
   Sonnet builder, Opus architect, a second pane, a worktree, a cron
   schedule, the task queue, the fleet) and on fifteen upgrades in two
@@ -489,9 +492,10 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
 - **Settings** (⌘,): sound, default trust, model routing, effort, review
   policy, auto-publish, daily spend cap, the weekly plan limit (token
   limit, reset day and hour, quota shift), plus links to your Claude plan,
-  providers, GitHub and phone approvals, updates, restart, shortcuts and
-  uninstall. About (banner click, or the macOS menu) shows the version and
-  credits, with buttons for settings, customize and the shortcuts.
+  providers, GitHub and phone approvals, the short list of keyboard
+  shortcuts, updates, restart and uninstall. About (banner click, or the
+  macOS menu) shows the version and credits, with buttons for settings and
+  customize.
 - **Customize** (the kcoder logo, then Customize): theme, style, background
   and accent colours, density, text font and size, and the conditions
   accent (below) with what each source last read.
@@ -500,13 +504,11 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   default; the name and lat, lon are under customize, never your location):
   when the last 24 h had an inch or more, a faint ridgeline appears under
   the header with a snow cap, light falling snow (more for a bigger dump)
-  and a tag like `8" fresh at Alta`. Bitcoin: a thin line under the header
-  tints green or red with the 24 h move, stronger the bigger it is, and a
-  5% day either way puts a `₿ +6.2%` badge on the ridgeline. The moon: on
+  and a tag like `8" fresh at Alta`. Bitcoin: a 5% day either way puts a
+  `₿ +6.2%` badge on the ridgeline. The moon: on
   full-moon nights, dark mode gets a small moon over the ridgeline and
   slightly cooler tones. One condition shows at a time, snow first, then a
-  big bitcoin day, then the moon; the thin bitcoin line is the only thing
-  that stays alongside. The daemon reads Open-Meteo and CoinGecko (Binance
+  big bitcoin day, then the moon. The daemon reads Open-Meteo and CoinGecko (Binance
   as the fallback; all free, no keys) every 30 minutes, through certifi's
   certificate bundle and, if that is refused, the system's own trust store
   through curl, so a Mac whose python.org Python has no certificates (the
@@ -519,8 +521,8 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
 
 ### Multi-monitor
 
-Open the app in several windows and press <kbd>p</kbd> on panes to pin them to
-that window; a window with pins shows only those sessions.
+Open the app in several windows and use the pin button on panes to pin them
+to that window; a window with pins shows only those sessions.
 `?pin=name1,name2&view=wall` in the URL does the same for bookmarks.
 
 ## Working safely
