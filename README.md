@@ -40,7 +40,7 @@ them in one window. Developed by Kyle Niedzwiecki.
 2. [First run](#first-run) (connect your Claude plan and GitHub)
 3. [The app](#the-app) (sessions, panes, inbox, tasks, stats, settings)
 4. [Working safely](#working-safely) (trust levels, review, checkpoints, secrets, plan-only billing)
-5. [Automation](#automation) (task queue, schedules, model routing, previews, phone approvals)
+5. [Automation](#automation) (model routing, previews, phone approvals)
 6. [The terminal client](#the-terminal-client)
 7. [Updates, uninstall, troubleshooting](#updates-uninstall-troubleshooting)
 8. [For developers](#for-developers)
@@ -328,16 +328,12 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
 <kbd>↩</kbd> opens a question, the changes view or the error details,
 <kbd>a</kbd> approves everything.
 
-### Inbox, tasks, stats, settings
+### Inbox, stats, settings
 
 - **Inbox** (a): every pending tool approval and every session waiting for an
   answer, from all sessions, in one list. <kbd>y</kbd> / <kbd>n</kbd> answer,
   <kbd>a</kbd> approves all. Sessions in error show here too, with details.
-- **Tasks** (alt+2): a fleet-wide queue. Add a task with its repo, model and
-  trust level and it starts as soon as a slot is free, in its own worktree.
-  Finished tasks land in **review**; nothing is pushed on its own. Schedules
-  live here too (see [Automation](#automation)).
-- **Stats** (alt+3): pick the period at the top (today, 7, 30 or 90 days, all
+- **Stats** (alt+2): pick the period at the top (today, 7, 30 or 90 days, all
   time, or any single day from the date picker, the daily table or the
   calendar) and every number on the page follows it, with today, 7-day,
   30-day and all-time figures alongside: tokens, lines of code
@@ -358,7 +354,7 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   **just for fun** card lists the working verbs shown most this month, the
   period as something you can picture, the secret badges earned and a link
   to the latest Wrapped card and to the token mine.
-- **Fun** (alt+4): the **token mine**, a clicker. Click the KCODER banner for
+- **Fun** (alt+3): the **token mine**, a clicker. Click the KCODER banner for
   tokens and spend them on agents that mine on their own (Haiku intern,
   Sonnet builder, Opus architect, a second pane, a worktree, a cron
   schedule, the task queue, the fleet) and on upgrades that multiply them
@@ -680,13 +676,11 @@ every rule it understood and what it does; the pane chip shows the count.
 
 ## Automation
 
-- **Task queue**: described above. `max_concurrent` caps how many sessions
-  run at once; drag to reorder, pause, cancel.
 - **Morning brief**: the first time you open kcoder each day it shows what
   every session did since yesterday (what you asked, its last reply, commits
   with files and lines, PR and checks, running jobs), what is waiting on you
   (approvals, questions, errors) and what is in review (changes, open PRs
-  with their checks), plus the task queue and your plan usage. Every item
+  with their checks), plus your plan usage. Every item
   opens the session. Any time: ⌘K → brief, or `kcoder brief` (`--since 72`
   for three days); **copy** gives it as markdown.
 - **Auto-fix on CI failure**: kcoder polls the checks of every open PR a
@@ -703,10 +697,6 @@ every rule it understood and what it does; the pane chip shows the count.
   issue chip; the PR it opens is titled after the issue, starts with
   `Closes #123`, and the issue gets a comment with the PR link, so GitHub
   closes it when the PR merges.
-- **Schedules** (tasks tab): recurring jobs per repo (hourly, daily, weekly)
-  feed the queue. A job missed while the Mac slept runs once on wake. A run
-  that changed nothing just logs; one that did opens a draft PR or lands in
-  review.
 - **Model routing**: a session or task on **auto** gets a cheaper model for
   small turns and a stronger one for large work (`sonnet` / `opus` on your
   plan). A turn is judged by its own prompt (length, several files, words

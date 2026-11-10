@@ -37,7 +37,7 @@ const state = {
   sessions: new Map(),     // sid -> snapshot (active)
   chats: [], projects: [], stats: {}, providers: null,
   events: new Map(),       // sid -> { list: [], live: '' , loaded: bool }
-  view: (localStorage.getItem('kcoder.view') || 'wall').replace('terminal', 'chat'),
+  view: (localStorage.getItem('kcoder.view') || 'wall').replace('terminal', 'chat').replace('tasks', 'wall'),   // the tasks tab is gone
   cpaneView: new Map(),    // sid -> 'chat' | 'term' (split panes; wall panes use paneView)
   verbs: new Map(),        // sid -> { verb, at, recent } for the working status line
   jobTails: new Map(),     // 'sid:jobid' -> last output of a background job
@@ -290,7 +290,6 @@ function onSessions(list, stats) {
   state.stats = stats || state.stats;
   for (const s of list) if (!state.events.has(s.id)) loadEvents(s.id, 80);
   renderHeader(); renderWall(); renderTitlebars(); renderSplitBars(); renderSidebar();
-  if (state.view === 'tasks') renderTasksView(false);
 }
 
 function statusChanged(s, prev) {
@@ -629,7 +628,7 @@ function buildTermHtml(store, sid, opts = {}) {
 // header
 // ----------------------------------------------------------------------
 const TAGLINES = ['ten agents, one keyboard.', 'ship it before the coffee cools.', 'parallel by default.', 'less typing, more shipping.', 'every session earns its keep.', 'small commits, big days.'];
-const ABOUT_LINES = ['keep ripping lines.', 'rip lines, ship lines.', 'first chair, last commit.', 'fresh tracks, clean diffs.', 'send it.', 'no friends on a powder day, plenty of agents.'];   // the about dialog's italic line
+const ABOUT_LINES = ['first chair, last commit.', 'fresh tracks, clean diffs.', 'send it.', 'no friends on a powder day, plenty of agents.'];   // the about dialog's italic line
 const tabOf = (v) => (v === 'chat' ? 'wall' : v);   // the sessions tab covers the grid and the 1-3 pane layouts
 
 function renderHeader() {
@@ -641,8 +640,6 @@ function renderHeader() {
   const needs = Math.max(n, st.waiting || 0);   // approvals + sessions waiting on an answer
   const c = $('#inbox-count'); c.hidden = !needs; c.textContent = needs;
   $('#btn-inbox').title = needs ? `${needs} waiting on you: approvals and questions  (a)` : 'Inbox: approvals and sessions waiting on you  (a)';
-  const tk = (st.tasks || {}).counts || {}; const openTasks = (tk.queued || 0) + (tk.running || 0);
-  const tc = $('#tasks-count'); if (tc) { tc.hidden = !openTasks; tc.textContent = openTasks; }
   for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === tabOf(state.view));
   renderSessionsBar();
   renderStatusBar();
@@ -706,7 +703,6 @@ function setView(v) {
   if (v === 'terminal') v = 'chat';
   state.view = v; localStorage.setItem('kcoder.view', v); syncUiState();
   if (v === 'wall' || v === 'chat') localStorage.setItem('kcoder.sessionsView', v);
-  if (v === 'tasks') setTimeout(() => renderTasksView(true), 0);
   renderViews();
   if (v === 'chat') { if (!focusedSid() && state.order[0]) { state.layout.panes[state.layout.focus] = state.order[0]; saveLayout(); } for (const sid of state.layout.panes) if (sid) loadEvents(sid, -1); syncSid(); }
   else if (v === 'stats') statsData = null;
@@ -2165,7 +2161,6 @@ async function briefDialog(opts = {}) {
       <div class="status"><span><b>${t.sessions}</b> session(s)</span><span><b>${t.turns}</b> turn(s)</span><span><b>${fmtTokens(t.tokens)}</b> tokens</span><span><b>${t.commits}</b> commit(s) · ${t.files} file(s) · <span class="add">+${t.added}</span> <span class="del">-${t.removed}</span></span>${t.cost ? `<span>${fmtUsd(t.cost)} on API keys</span>` : ''}${(b.plan || []).map((p) => `<span>${esc(p.label)} <b>${Math.round(p.utilization * 100)}%</b></span>`).join('')}</div>
       <div class="label-h">waiting on you · ${b.waiting.length}</div><div class="list">${b.waiting.map(item).join('') || '<div class="empty-row">nothing</div>'}</div>
       <div class="label-h">in review · ${b.review.length}</div><div class="list">${b.review.map(item).join('') || '<div class="empty-row">nothing</div>'}</div>
-      ${(b.tasks.queued || b.tasks.running || b.tasks.review || b.tasks.failed) ? `<div class="help plain">task queue: ${b.tasks.running} running · ${b.tasks.queued} queued · ${b.tasks.review} in review · ${b.tasks.failed} failed${b.tasks.paused ? ' · paused' : ''} <button data-tasks="1">open</button></div>` : ''}
       <div class="label-h">sessions · ${b.sessions.length}</div>${b.sessions.map(sess).join('') || '<div class="empty-row">no session was active</div>'}
     </div>`, 'brief');
   d.classList.add('wide');
@@ -2174,7 +2169,6 @@ async function briefDialog(opts = {}) {
     const bb = e.target.closest('[data-b]'); if (bb) { if (bb.dataset.b === 'copy') { try { await navigator.clipboard.writeText(r.markdown); toast('brief copied as markdown', 'ok'); } catch { toast('copy failed', 'err'); } } else { closeDialog(); briefDialog({ since: Date.now() / 1000 - Number(bb.dataset.b) * 3600 }); } return; }
     if (e.target.closest('[data-x]')) { closeDialog(); return; }
     const c = e.target.closest('[data-changes]'); if (c) { closeDialog(); changesDialog(c.dataset.changes); return; }
-    if (e.target.closest('[data-tasks]')) { closeDialog(); setView('tasks'); return; }
     const o = e.target.closest('[data-open]'); if (o) { closeDialog(); state.sid = o.dataset.open; if (state.view === 'chat') assignPane(state.layout.focus, o.dataset.open); else { if (state.view !== 'wall') setView('wall'); focusPane(o.dataset.open); } }
   });
 }
@@ -2546,79 +2540,6 @@ async function instructionsDialog(sid) {
   show();
 }
 
-// ---- task queue view ----
-let tasksData = null, tasksTimer = null, schedulesData = null; const tasksImages = [];   // images attached to the task being written (kept across re-renders)
-async function renderTasksView(force) {
-  if (state.view !== 'tasks') return;
-  if (!force && tasksTimer) return;
-  tasksTimer = setTimeout(() => (tasksTimer = null), 1500);
-  try { tasksData = await request('tasks', { action: 'list' }); if (!schedulesData || force) schedulesData = (await request('schedules', { action: 'list' })).schedules; } catch (e) { $('#tasks-body').innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; return; }
-  const body = $('#tasks-body'); const t = tasksData; const provs = state.providers || [];
-  const def = provs.find((p) => p.default && p.configured) || provs.find((p) => p.configured) || provs[0] || {};
-  const row = (x, drag) => { const s = state.sessions.get(x.sid) || state.chats.find((c) => c.id === x.sid); return `<div class="task ${esc(x.status)}" data-id="${esc(x.id)}" ${drag ? 'draggable="true"' : ''}>
-      ${drag ? '<span class="grip" title="drag to reorder">⋮⋮</span>' : '<span class="grip"></span>'}
-      <span class="st">${esc(x.status)}</span>
-      <div class="txt"><div class="t1">${x.issue ? `<a href="${esc(x.issue.url)}" target="_blank" rel="noopener" title="${esc(x.issue.url)}">#${esc(x.issue.number)}</a> ${esc(x.issue.title || '')}` : esc(x.text.length > 140 ? x.text.slice(0, 140) + '…' : x.text)}</div><div class="t2">${esc(shortHome(x.repo))} · ${esc(x.model || (x.provider || def.id || '') + ' default')} · trust ${esc(x.trust || state.config && state.config.default_trust || 'auto')}${s ? ' · session ' + esc(s.name) : ''}${x.error ? ' · ' + esc(x.error) : ''}</div></div>
-      <span class="when">${age(x.finished || x.started || x.created)} ago</span>
-      ${x.sid ? `<button data-t="open" title="open the session">open</button>` : ''}${x.status === 'review' && x.sid ? `<button data-t="review" class="primary" title="review the changes">⚑ review</button>` : ''}
-      ${x.status === 'queued' || x.status === 'running' ? `<button data-t="cancel" class="danger">cancel</button>` : `<button data-t="remove" title="remove from the list">✕</button>`}
-    </div>`; };
-  const by = (st) => t.tasks.filter((x) => x.status === st);
-  body.innerHTML = `
-    <div class="stats-head"><h2>task queue</h2><span class="help">${t.paused ? 'paused' : 'running'} · ${by('running').length} running · ${by('queued').length} queued · up to <input id="tq-max" type="number" min="1" max="20" value="${esc(t.max_concurrent || 3)}" style="width:48px"> at once</span><span class="spacer"></span>
-      <button data-tq="${t.paused ? 'resume' : 'pause'}">${t.paused ? '▶ resume queue' : '❚❚ pause queue'}</button><button data-tq="clear">clear finished</button></div>
-    <form class="task-add card" id="tq-form">
-      <div class="row"><label>repo / folder<input name="repo" list="tq-repos" placeholder="/path/to/project or owner/name" required autocomplete="off"><datalist id="tq-repos">${(state.projects || []).map((p) => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join('')}</datalist></label>
-        <label>provider<select name="provider">${provs.map((p) => `<option value="${esc(p.id)}" ${p.id === def.id ? 'selected' : ''} ${p.configured ? '' : 'disabled'}>${esc(p.label)}</option>`).join('')}</select></label>
-        <label>model<select name="model"><option value="">provider default</option>${(def.models || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
-        <label>trust<select name="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select></label></div>
-      <label>task<textarea name="text" placeholder="what should it do? It runs in its own worktree as soon as a slot is free, and lands in review when done. Paste a GitHub issue URL and the issue becomes the task (repo optional); the PR closes it. Paste or drop screenshots too." required></textarea></label>
-      <div class="attachments" id="tq-atts" hidden></div>
-      <div class="row"><span class="help">finished tasks wait in review; nothing is pushed on its own · ⌘V or drop images to attach them</span><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add to queue</button></div>
-    </form>
-    <h3>running</h3><div class="task-list">${by('running').map((x) => row(x, false)).join('') || '<div class="empty-row">nothing running</div>'}</div>
-    <h3>queued</h3><div class="task-list" id="tq-queued">${by('queued').map((x) => row(x, true)).join('') || '<div class="empty-row">queue is empty</div>'}</div>
-    <h3>finished</h3><div class="task-list">${t.tasks.filter((x) => !['running', 'queued'].includes(x.status)).reverse().map((x) => row(x, false)).join('') || '<div class="empty-row">none yet</div>'}</div>
-    ${schedulesHtml(schedulesData || [])}`;
-  const sform = $('#sc-form', body);
-  sform.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(sform); try { await request('schedules', { action: 'add', name: fd.get('name'), repo: fd.get('repo'), text: fd.get('text'), every: fd.get('every'), at: fd.get('at'), weekday: Number(fd.get('weekday')), pr: fd.get('pr') === 'on' }); toast('schedule added', 'ok'); schedulesData = null; renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
-  $('#sc-list', body).addEventListener('click', async (e) => { const b = e.target.closest('[data-s]'); if (!b) return; const id = b.closest('.task').dataset.sid; try { if (b.dataset.s === 'remove' && !(await confirmDialog('Remove this schedule?', ''))) return; await request('schedules', { action: b.dataset.s, id }); if (b.dataset.s === 'run') toast('queued a run', 'ok'); schedulesData = null; renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
-  const form = $('#tq-form', body);
-  // the task composer takes images like a session composer: a stand-in comp whose model is the picked one
-  const tcomp = { sid: null, form, ta: form.querySelector('[name=text]'), atts: $('#tq-atts', body), images: tasksImages, pastes: new Map() };
-  tcomp.ta.addEventListener('paste', (e) => { const imgs = Array.from(e.clipboardData.items || []).filter((i) => i.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); imgs.forEach((i) => addImage(tcomp, i.getAsFile())); } });
-  form.addEventListener('dragover', (e) => e.preventDefault());
-  form.addEventListener('drop', (e) => { const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/')); if (files.length) { e.preventDefault(); files.forEach((f) => addImage(tcomp, f)); } });
-  renderAtts(tcomp);
-  const taskModel = () => { const fd = new FormData(form); return { provider: fd.get('provider'), model: fd.get('model') || ((provs.find((x) => x.id === fd.get('provider')) || {}).default_model) }; };
-  form.querySelector('[name=provider]').addEventListener('change', (e) => { const p = provs.find((x) => x.id === e.target.value) || {}; form.querySelector('[name=model]').innerHTML = '<option value="">provider default</option>' + (p.models || []).map((m) => `<option>${esc(m)}</option>`).join(''); });
-  form.querySelector('[name=trust]').value = (state.config && state.config.default_trust) || 'auto';
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault(); const fd = new FormData(form);
-    let images = tasksImages;
-    if (images.length && !modelSeesImages(taskModel())) { const ok = await confirmDialog(`${taskModel().model} can't take images`, `${images.length} image${images.length === 1 ? '' : 's'} would be left out. Queue the text alone? Cancel to pick a model that takes images.`); if (!ok) return; images = []; }
-    try { await request('tasks', { action: 'add', text: fd.get('text'), repo: fd.get('repo'), provider: fd.get('provider'), model: fd.get('model') || null, trust: fd.get('trust'), images: images.map((im) => ({ name: im.name, data_url: im.data_url })) }); tasksImages.length = 0; toast('task queued', 'ok'); renderTasksView(true); } catch (err) { toast(err.message, 'err'); }
-  });
-  $('#tq-max', body).addEventListener('change', async (e) => { try { const r = await request('config', { max_concurrent: Number(e.target.value) }); state.config = r.config; toast('up to ' + r.config.max_concurrent + ' at once', 'ok'); } catch (err) { toast(err.message, 'err'); } });
-  body.onclick = async (e) => {
-    const q = e.target.closest('[data-tq]'); if (q) { try { await request('tasks', { action: q.dataset.tq }); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } return; }
-    const b = e.target.closest('[data-t]'); if (!b) return; const id = b.closest('.task').dataset.id; const task = t.tasks.find((x) => x.id === id) || {};
-    try {
-      if (b.dataset.t === 'cancel') { if (await confirmDialog('Cancel this task?', task.status === 'running' ? 'Its session is interrupted; the worktree stays for review.' : '')) await request('tasks', { action: 'cancel', id }); }
-      else if (b.dataset.t === 'remove') await request('tasks', { action: 'remove', id });
-      else if (b.dataset.t === 'open') { if (task.sid) { assignPane(state.layout.focus, task.sid); setView('chat'); } return; }
-      else if (b.dataset.t === 'review') { if (task.sid) changesDialog(task.sid); return; }
-      renderTasksView(true);
-    } catch (err) { toast(err.message, 'err'); }
-  };
-  // drag to reorder the queued tasks
-  const list = $('#tq-queued', body); let dragId = null;
-  list.addEventListener('dragstart', (e) => { const r = e.target.closest('.task'); if (!r) return; dragId = r.dataset.id; r.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
-  list.addEventListener('dragend', () => { dragId = null; for (const r of $$('.task', list)) r.classList.remove('dragging', 'drop-before', 'drop-after'); });
-  list.addEventListener('dragover', (e) => { const r = e.target.closest('.task'); if (!r || !dragId || r.dataset.id === dragId) return; e.preventDefault(); const rect = r.getBoundingClientRect(); const before = (e.clientY - rect.top) < rect.height / 2; r.classList.toggle('drop-before', before); r.classList.toggle('drop-after', !before); });
-  list.addEventListener('drop', async (e) => { const r = e.target.closest('.task'); if (!r || !dragId) return; e.preventDefault(); const before = r.classList.contains('drop-before'); const ids = $$('.task', list).map((x) => x.dataset.id).filter((x) => x !== dragId); const i = ids.indexOf(r.dataset.id); ids.splice(before ? i : i + 1, 0, dragId); dragId = null; try { await request('tasks', { action: 'reorder', ids }); renderTasksView(true); } catch (err) { toast(err.message, 'err'); } });
-}
-
 // ---- /model: every provider and its models in one list ----
 // on Kyle's Max plan Fable turns are billed as overage credits, not plan usage
 const claudeModelNote = (pid, m) => {
@@ -2695,21 +2616,6 @@ function renderPreviewPane(body, sid) {
     body._wired = true;
     body.addEventListener('click', (e) => { const b = e.target.closest('[data-pv]'); if (!b) return; const f = $('iframe', body), fr = $('.pv-frame', body); if (b.dataset.pv === 'reload') f.src = f.src; else fr.classList.toggle('mobile', b.dataset.pv === 'mobile'); });
   }
-}
-
-// ---- schedules (in the tasks tab) ----
-function schedulesHtml(list) {
-  const row = (s) => `<div class="task ${s.enabled ? 'queued' : 'cancelled'}" data-sid="${esc(s.id)}"><span class="grip"></span><span class="st">${s.enabled ? 'on' : 'off'}</span>
-    <div class="txt"><div class="t1"><b>${esc(s.name)}</b> · every ${esc(s.every)}${s.every !== 'hour' ? ' at ' + esc(s.at) : ' at :' + esc((s.at || '00:00').split(':')[1])}${s.every === 'week' ? ' on ' + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][s.weekday || 0] : ''}${s.pr ? ' · opens a draft PR when something changed' : ' · lands in review'}</div>
-    <div class="t2">${esc(s.text.slice(0, 120))} · ${esc(shortHome(s.repo))} · next ${esc(new Date((s.next_run || 0) * 1000).toLocaleString())}${s.last_result ? ' · last: ' + esc(s.last_result.text || '') : ''}</div></div>
-    <button data-s="run" title="run now">run</button><button data-s="${s.enabled ? 'disable' : 'enable'}">${s.enabled ? 'pause' : 'enable'}</button><button data-s="remove" class="danger">✕</button></div>`;
-  return `<h3>schedules</h3><form class="task-add card" id="sc-form">
-    <div class="row"><label>name<input name="name" placeholder="weekly dependency update" required></label><label>repo / folder<input name="repo" list="tq-repos" placeholder="/path or owner/name" required autocomplete="off"></label>
-      <label>every<select name="every"><option value="day">day</option><option value="week">week</option><option value="hour">hour</option></select></label><label>at<input name="at" type="time" value="09:00"></label>
-      <label>weekday (weekly)<select name="weekday">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d, i) => `<option value="${i}">${d}</option>`).join('')}</select></label></div>
-    <label>task<textarea name="text" placeholder="e.g. Update dependencies to their latest compatible versions and run the tests." required></textarea></label>
-    <div class="row"><label class="check"><input type="checkbox" name="pr" checked> open a draft PR when something changed (otherwise just log)</label><span class="spacer" style="flex:1"></span><button class="primary" type="submit">add schedule</button></div></form>
-    <div class="task-list" id="sc-list">${list.map(row).join('') || '<div class="empty-row">no schedules</div>'}</div>`;
 }
 
 // ---- phone approvals ----
@@ -2862,9 +2768,8 @@ const SHORTCUTS = [
   { id: 'sheet', group: 'navigation', combo: 'mod+/', label: 'keyboard shortcuts (this sheet)', scope: 'global', palette: 'keyboard shortcuts', run: () => (state.dialog === 'keys' ? closeDialog() : helpDialog()) },
   { id: 'sheet2', group: 'navigation', combo: '?', label: 'keyboard shortcuts (outside a text field)', scope: 'plain', run: () => helpDialog() },
   { id: 'v-sessions', group: 'navigation', combo: 'alt+1', label: 'sessions', scope: 'app', palette: 'sessions', run: () => openSessions() },
-  { id: 'v-tasks', group: 'navigation', combo: 'alt+2', label: 'task queue + schedules', scope: 'app', palette: 'task queue + schedules', run: () => setView('tasks') },
-  { id: 'v-stats', group: 'navigation', combo: 'alt+3', label: 'stats', scope: 'app', palette: 'stats', run: () => setView('stats') },
-  { id: 'v-fun', group: 'navigation', combo: 'alt+4', label: 'just for fun: the mine and the arcade', scope: 'app', palette: 'just for fun', run: () => setView('fun') },
+  { id: 'v-stats', group: 'navigation', combo: 'alt+2', label: 'stats', scope: 'app', palette: 'stats', run: () => setView('stats') },
+  { id: 'v-fun', group: 'navigation', combo: 'alt+3', label: 'just for fun: the mine and the arcade', scope: 'app', palette: 'just for fun', run: () => setView('fun') },
   { id: 'v-mine', group: 'navigation', label: 'just for fun: the token mine', scope: 'alias', palette: 'just for fun: the token mine', run: () => funSelect('mine') },
   { id: 'v-2048', group: 'navigation', label: 'just for fun: 2048', scope: 'alias', palette: 'just for fun: 2048', run: () => funSelect('2048') },
   { id: 'v-mahjong', group: 'navigation', label: 'just for fun: mahjong solitaire', scope: 'alias', palette: 'just for fun: mahjong', run: () => funSelect('mahjong') },
@@ -2919,8 +2824,6 @@ const SHORTCUTS = [
   { id: 'undo', group: 'review', keys: '↶ on a message', label: 'undo to here (files + conversation)', scope: 'mouse' },
   { id: 'changes', group: 'review', keys: 'changes', label: 'accept / reject / edit each hunk, then approve', scope: 'mouse' },
   // queue
-  { id: 'queue-view', group: 'queue', combo: 'alt+2', label: 'task queue + schedules', scope: 'alias' },
-  { id: 'queue-drag', group: 'queue', keys: 'drag a queued task', label: 'reorder the queue', scope: 'mouse' },
   { id: 'queue-add', group: 'queue', keys: '+ task', label: 'queue a follow-up on a session', scope: 'mouse' },
   { id: 'dialog-submit', group: 'navigation', keys: '⌘↩', label: 'submit a multi-line dialog', scope: 'dialog' },
 ];
