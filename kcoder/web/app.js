@@ -89,9 +89,11 @@ function applyTheme() {
 }
 function setTheme(c) { localStorage.setItem('kcoder.theme', c); applyTheme(); }
 // ---- look: the shape and the colours, chosen under customize (the kcoder logo). The style is classic (dense,
-// monospace, square) or rounded (Poppins, soft corners, roomier); the background and the accent are any colour,
+// monospace, square), rounded (Poppins, soft corners, roomier) or montserrat (Montserrat, a geometric sans with
+// crisp 6 px corners; code and the terminal stay monospace); the background and the accent are any colour,
 // and the surfaces, lines, code blocks and the gradient are derived from them so every theme stays readable.
-const LOOK_STYLES = [['classic', 'classic - dense, monospace, square corners'], ['rounded', 'rounded - Poppins, soft corners, roomier']];
+const LOOK_STYLES = [['classic', 'classic - dense, monospace, square corners'], ['rounded', 'rounded - Poppins, soft corners, roomier'], ['montserrat', 'montserrat - geometric sans, crisp corners']];
+const LOOK_FONTS = { rounded: ['poppins', 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap'], montserrat: ['montserrat', 'https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600&display=swap'] };
 const LOOK_BG = { dark: [['#0C0E12', 'kcoder'], ['#0F172A', 'slate'], ['#0B1A14', 'forest'], ['#1A0F1E', 'plum'], ['#1C1410', 'ember'], ['#000000', 'black']], light: [['#FFFFFF', 'kcoder'], ['#F4F6F8', 'fog'], ['#F7F3EA', 'paper'], ['#EEF5F0', 'mint'], ['#F6EEF5', 'lilac'], ['#FFF8E7', 'cream']] };
 const LOOK_ACCENT = [['#7FC5FF', 'kcoder blue'], ['#4ADE80', 'green'], ['#FB923C', 'orange'], ['#F472B6', 'pink'], ['#A78BFA', 'violet'], ['#FBBF24', 'amber'], ['#F87171', 'red'], ['#E5E7EB', 'silver']];
 function lookChoice() { return { style: localStorage.getItem('kcoder.style') || 'classic', bg: localStorage.getItem('kcoder.bg') || '', accent: localStorage.getItem('kcoder.accent') || '' }; }
@@ -101,7 +103,7 @@ const mixHex = (a, b, t) => rgbHex(hexRgb(a).map((v, i) => v + (hexRgb(b)[i] - v
 const LOOK_VARS = ['--bg', '--bg-2', '--bg-3', '--line', '--line-2', '--code-bg', '--bubble', '--accent', '--accent-text', '--accent-soft', '--focus', '--gradient'];
 function applyLook() {
   const L = lookChoice(); const root = document.documentElement; const st = root.style; const light = effectiveTheme() === 'light';
-  if (L.style === 'rounded') root.dataset.style = 'rounded'; else delete root.dataset.style;
+  if (L.style && L.style !== 'classic') root.dataset.style = L.style; else delete root.dataset.style;
   for (const v of LOOK_VARS) st.removeProperty(v);
   const fg = light ? '#0C0E12' : '#D9E2EC'; const base = light ? '#FFFFFF' : '#0C0E12';
   const bg = hexRgb(L.bg) ? rgbHex(hexRgb(L.bg)) : '', ac = hexRgb(L.accent) ? rgbHex(hexRgb(L.accent)) : '';
@@ -109,7 +111,7 @@ function applyLook() {
   if (ac) { const text = light ? mixHex(ac, '#000000', 0.45) : ac; const [r, g, b] = hexRgb(ac); st.setProperty('--accent', ac); st.setProperty('--accent-text', text); st.setProperty('--focus', text); st.setProperty('--accent-soft', `rgba(${r},${g},${b},${light ? 0.3 : 0.16})`); st.setProperty('--gradient', `linear-gradient(90deg, ${ac} 0%, ${mixHex(ac, bg || base, 0.3)} 60%, ${mixHex(ac, bg || base, 0.7)} 100%)`); }
   if (bg || ac) st.setProperty('--bubble', mixHex(bg || base, ac || '#7FC5FF', 0.12));
   const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = bg || base;
-  if (L.style === 'rounded' && !document.getElementById('poppins')) { const l = document.createElement('link'); l.id = 'poppins'; l.rel = 'stylesheet'; l.href = 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap'; document.head.appendChild(l); }   // offline, the stack falls through to the system sans
+  const wf = LOOK_FONTS[L.style]; if (wf && !document.getElementById(wf[0])) { const l = document.createElement('link'); l.id = wf[0]; l.rel = 'stylesheet'; l.href = wf[1]; document.head.appendChild(l); }   // offline, the stack falls through to the system sans
   for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
 }
 function setLook(k, v) { if (v) localStorage.setItem('kcoder.' + k, v); else localStorage.removeItem('kcoder.' + k); applyLook(); }

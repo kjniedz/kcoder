@@ -1003,3 +1003,15 @@ html[data-style="rounded"] .card { padding: 14px 16px; }
 html[data-style="rounded"] .composer textarea { border-radius: 14px; padding: 8px 12px; }
 html[data-style="rounded"] .msg-user .bubble { padding: 8px 14px; }
 html[data-style="rounded"] .dialog .body { line-height: 1.5; }
+
+/* ---- style: montserrat. A geometric sans for the interface, crisp 6 px corners, a touch of tracking on labels; code and the terminal stay monospace ---- */
+html[data-style="montserrat"] { --font: "Montserrat", "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif; }
+html[data-style="montserrat"] pre, html[data-style="montserrat"] code, html[data-style="montserrat"] kbd, html[data-style="montserrat"] .banner, html[data-style="montserrat"] .xterm, html[data-style="montserrat"] .shell-box, html[data-style="montserrat"] .diff, html[data-style="montserrat"] .omni, html[data-style="montserrat"] .composer textarea, html[data-style="montserrat"] .term-composer { font-family: var(--mono); }
+html[data-style="montserrat"] body { letter-spacing: .01em; }
+html[data-style="montserrat"] button, html[data-style="montserrat"] input, html[data-style="montserrat"] select, html[data-style="montserrat"] textarea, html[data-style="montserrat"] .views button, html[data-style="montserrat"] .statusbar .status-item, html[data-style="montserrat"] .toast, html[data-style="montserrat"] kbd, html[data-style="montserrat"] .chat-item, html[data-style="montserrat"] .hit, html[data-style="montserrat"] .mine-up, html[data-style="montserrat"] .cpane-find input { border-radius: 6px; }
+html[data-style="montserrat"] .pane, html[data-style="montserrat"] .cpane, html[data-style="montserrat"] .card, html[data-style="montserrat"] .dialog, html[data-style="montserrat"] .msg-user .bubble, html[data-style="montserrat"] .composer .menu, html[data-style="montserrat"] .project, html[data-style="montserrat"] .mine-unit, html[data-style="montserrat"] .empty { border-radius: 8px; }
+html[data-style="montserrat"] button { font-weight: 500; padding: 3px 10px; }
+html[data-style="montserrat"] h2, html[data-style="montserrat"] h3, html[data-style="montserrat"] .label-h, html[data-style="montserrat"] .card h3, html[data-style="montserrat"] .views button { font-weight: 600; letter-spacing: .04em; }
+html[data-style="montserrat"] .composer textarea { border-radius: 8px; padding: 7px 11px; }
+html[data-style="montserrat"] .msg-user .bubble { padding: 7px 12px; }
+html[data-style="montserrat"] .dialog .body { line-height: 1.5; }

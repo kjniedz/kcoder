@@ -325,7 +325,9 @@ latest" only shows once you have scrolled up and something new arrived.
 **Customize.** Click the kcoder logo, then Customize (or the command
 palette): the theme (dark, light, follow the system), the style (classic:
 dense, monospace, square corners; rounded: Poppins, soft corners and a
-little more room, with code and the terminal still monospace), the
+little more room; montserrat: Montserrat, a geometric sans with crisp
+corners and a little tracking on labels; in both, code and the terminal
+stay monospace), the
 background and the accent (six swatches each per theme, or any colour;
 surfaces, lines, code blocks and the banner gradient follow), the density
 (comfortable or compact), the text font and size, and the conditions
