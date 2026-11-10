@@ -280,8 +280,8 @@ logs; the deployment record and dashboard link for Cloudflare and Supabase,
 whose CLIs expose no build log) into that repo's session so the agent can
 fix it; the fix is committed, never deployed from there.
 
-**Session timeline.** The ⧗ button on a chat pane shows a scrubber under
-the header, one mark per turn: height is the turn's tokens, blue means it
+**Session timeline.** The timeline (from the pane's ⋯ menu, or the command
+palette) shows a scrubber under the header, one mark per turn: height is the turn's tokens, blue means it
 changed files, red means it hit an error; hover for tools, files, errors
 and tokens. Click a mark to jump the transcript there and open the diff of
 exactly that turn (the checkpoint before it against the one before the next
@@ -305,8 +305,10 @@ so every number can be compared.
 **Where we left off.** Opening a session that sat idle for a day, or any
 session after the app restarted, shows a small recap card at the top of its
 chat: a header line with how long ago the session was active and the branch
-state (uncommitted files, unpushed commits, the PR and its checks), then a
-few words on what was done and what is next, under sixty words. Clicking the
+state (uncommitted files, unpushed commits, the PR and its checks, for a
+session in a repo), then a few words on what was done and what is next,
+under sixty words; a research, writing or reading session gets the same
+recap of its sources and findings, not only code. Clicking the
 title folds the card to its header line, and it stays folded until clicked
 again. The recap is written by a cheap model (Haiku on your plan, no tools)
 and cached; it is only written again when the session has new activity. ✕
@@ -316,9 +318,15 @@ recap card appears, the composer grows or an image finishes loading, a chat
 that was at the bottom goes back to the bottom on its own, and "jump to
 latest" only shows once you have scrolled up and something new arrived.
 
-**Theme and density.** Settings (⌘,) has the theme (dark, light, follow the
-system) and a density switch: comfortable, or compact for tighter spacing
-with more on screen. Both are per browser, like the text font.
+**Customize.** Click the kcoder logo, then Customize (or the command
+palette): the theme (dark, light, follow the system), the style (classic:
+dense, monospace, square corners; rounded: Poppins, soft corners and a
+little more room, with code and the terminal still monospace), the
+background and the accent (six swatches each per theme, or any colour;
+surfaces, lines, code blocks and the banner gradient follow), the density
+(comfortable or compact), the text font and size, and the conditions
+accent with its live readings. All of the look is per browser. The day
+(weekday and date) sits at the right of the status bar.
 
 **Keyboard-only inbox.** Everything waiting on you is one list: approvals,
 questions, changes to review, errors. <kbd>w</kbd> shows the next item;
@@ -429,12 +437,10 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   Milestones come in families that always have a next chip (every
   thousandfold of tokens mined, releases, commits, turns, clicks, stars,
   sprints, streaks, perfect days, weeks, listings, shares, trades, the
-  share price since listing, the market cap and agents). The mine cannot be
-  beaten: past the open-source fork a new agent appears every time the last
-  one is hired (the second universe, the time loop, the Dyson sphere... and
-  round again with numerals), each 25 times the price and 12 times the rate
-  of the one before, and the total family runs on past a vigintillion
-  by powers of ten to the edge of what a number can hold. Every count
+  share price since listing, the market cap and agents). The mine can be
+  beaten: seventeen agents and fifteen upgrades, and hiring every agent
+  with every upgrade bought earns the "beat the mine" milestone (the total
+  family still runs on past a vigintillion by powers of ten). Every count
   shows its digits up to a trillion and reads as words from there (4.52
   quadrillion), so the bank never outgrows its card.
   The rank (token miner, foreman, pit boss, token baron... the multiverse,
@@ -480,15 +486,18 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   milestones count boards cleared (one to 250) and daily deals (one, a
   week, a month). Deals, boards cleared, best time and daily deals show on
   the stats page next to the mine.
-- **Settings** (⌘,): theme, text font and size, sound, default trust, model
-  routing, effort, review policy, auto-publish, daily spend cap, the weekly plan
-  limit (token limit, reset day and hour, quota shift), the conditions
-  accent (below), plus links to your Claude plan, providers, GitHub and
-  phone approvals, updates, restart, shortcuts and uninstall. About (banner
-  click, or the macOS menu) shows the version and credits.
+- **Settings** (⌘,): sound, default trust, model routing, effort, review
+  policy, auto-publish, daily spend cap, the weekly plan limit (token
+  limit, reset day and hour, quota shift), plus links to your Claude plan,
+  providers, GitHub and phone approvals, updates, restart, shortcuts and
+  uninstall. About (banner click, or the macOS menu) shows the version and
+  credits, with buttons for settings, customize and the shortcuts.
+- **Customize** (the kcoder logo, then Customize): theme, style, background
+  and accent colours, density, text font and size, and the conditions
+  accent (below) with what each source last read.
 - **Conditions**: an ambient accent on the header that reflects real
   conditions, never covering anything. Fresh snow at a fixed place (Alta by
-  default; the name and lat, lon are in settings, never your location):
+  default; the name and lat, lon are under customize, never your location):
   when the last 24 h had an inch or more, a faint ridgeline appears under
   the header with a snow cap, light falling snow (more for a bigger dump)
   and a tag like `8" fresh at Alta`. Bitcoin: a thin line under the header
@@ -498,7 +507,10 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   slightly cooler tones. One condition shows at a time, snow first, then a
   big bitcoin day, then the moon; the thin bitcoin line is the only thing
   that stays alongside. The daemon reads Open-Meteo and CoinGecko (Binance
-  as the fallback; all free, no keys) every 30 minutes; a failed read keeps
+  as the fallback; all free, no keys) every 30 minutes, through certifi's
+  certificate bundle and, if that is refused, the system's own trust store
+  through curl, so a Mac whose python.org Python has no certificates (the
+  "certificate verify failed" error) still gets its readings; a failed read keeps
   the last one, and a reading older than 12 hours counts as nothing, so an
   offline laptop fades back to the plain header by itself. One master
   toggle and one per condition; with reduced motion on, nothing moves (the
@@ -614,6 +626,16 @@ output back when it finishes, or, if it has moved on, a message with the
 result and the last lines of output when the job ends. `kcoder job ls / tail
 / wait / stop` work from the session's shell. Jobs do not survive a daemon
 restart; the pane marks them lost.
+
+**Connectors.** The Claude plan dialog (the Claude button in the status
+bar) lists every MCP server Claude Code knows, the claude.ai connectors
+(Google Drive, Gmail, Calendar, Linear...) and servers added by hand, each
+with its health: connected, needs sign-in on claude.ai, or failed. "Manage
+claude.ai connectors" opens claude.ai's Settings › Connectors, where a
+connector is turned on or signed in again; "Add a server by URL" adds an
+MCP server of your own (`claude mcp add --transport http`, user scope), and
+a server added that way has a remove button. A new session picks up the
+change; a running one keeps the connectors it started with.
 
 **Connector approvals.** Claude sessions can use the connectors on your
 claude.ai account (Gmail, Calendar, Drive, Linear and whatever else you have

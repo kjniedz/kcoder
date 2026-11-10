@@ -22,8 +22,12 @@ import json
 import logging
 import math
 import os
+import shutil
+import ssl
+import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -113,10 +117,32 @@ def _save(state: dict) -> None:
 
 # ---- sources ----
 
+def _ssl_context():
+    """The python.org Python on a Mac ships its own (often empty) trust
+    store, so plain urllib fails with "certificate verify failed" on a Mac
+    that has a security proxy or no `Install Certificates` run; certifi's
+    bundle (installed with kcoder's dependencies) is used when it is there."""
+    try:
+        import certifi  # noqa: PLC0415
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "kcoder (conditions)", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT, context=_ssl_context()) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(exc) or not shutil.which("curl"):
+            raise
+        # the system's own trust store, through curl (always on a Mac): the last resort when Python's bundle is refused
+        r = subprocess.run(["curl", "-fsSL", "--max-time", str(TIMEOUT), "-H", "User-Agent: kcoder (conditions)", "-H", "Accept: application/json", url],
+                           capture_output=True, text=True, timeout=TIMEOUT + 5)
+        if r.returncode != 0:
+            raise RuntimeError(f"curl failed ({r.returncode}): {(r.stderr or '').strip()[:100]}") from exc
+        return json.loads(r.stdout)
 
 
 def fetch_snow(place: dict) -> dict:

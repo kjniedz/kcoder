@@ -991,3 +991,22 @@ html[data-density="compact"] table td, html[data-density="compact"] table th { p
 .wrapped-card .ws { font-size: 11px; color: var(--fg-dim); }
 .wrapped-card .wfun { margin-top: 14px; color: var(--accent-text); font-size: 15px; font-weight: 700; }
 @media (max-width: 760px) { .wrapped-card .wgrid { grid-template-columns: repeat(2, 1fr); } }
+
+/* customize: colour swatches, the connectors list */
+.swatches { display: inline-flex; gap: 4px; margin-right: 6px; }
+.swatches .sw { width: 18px; height: 18px; padding: 0; border: 1px solid var(--line-2); border-radius: 50%; cursor: pointer; }
+.swatches .sw.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings .setting input[type="color"] { width: 34px; height: 22px; padding: 0 2px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--bg); cursor: pointer; }
+.conn-row { display: flex; align-items: center; gap: 8px; } .conn-row .pl { color: var(--fg); } .conn-row .help { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+
+/* the rounded style: Poppins for the interface (code and the terminal stay monospace), soft corners, a little more room */
+html[data-style="rounded"] { --font: "Poppins", "SF Pro Rounded", "Segoe UI Variable", system-ui, -apple-system, sans-serif; }
+html[data-style="rounded"] pre, html[data-style="rounded"] code, html[data-style="rounded"] kbd, html[data-style="rounded"] .banner, html[data-style="rounded"] .xterm, html[data-style="rounded"] .shell-box, html[data-style="rounded"] .diff, html[data-style="rounded"] .omni, html[data-style="rounded"] .composer textarea, html[data-style="rounded"] .term-composer { font-family: var(--mono); }
+html[data-style="rounded"] button, html[data-style="rounded"] input, html[data-style="rounded"] select, html[data-style="rounded"] textarea, html[data-style="rounded"] .views button, html[data-style="rounded"] .statusbar .status-item, html[data-style="rounded"] .toast, html[data-style="rounded"] kbd { border-radius: 10px; }
+html[data-style="rounded"] .pane, html[data-style="rounded"] .cpane, html[data-style="rounded"] .card, html[data-style="rounded"] .dialog, html[data-style="rounded"] .msg-user .bubble, html[data-style="rounded"] .composer .menu, html[data-style="rounded"] .project, html[data-style="rounded"] .card.achievements .next, html[data-style="rounded"] .mine-unit, html[data-style="rounded"] .empty { border-radius: 16px; }
+html[data-style="rounded"] .chat-item, html[data-style="rounded"] .hit, html[data-style="rounded"] .mine-up, html[data-style="rounded"] .keys-q, html[data-style="rounded"] .cpane-find input { border-radius: 10px; }
+html[data-style="rounded"] button { padding: 3px 12px; }
+html[data-style="rounded"] .card { padding: 14px 16px; }
+html[data-style="rounded"] .composer textarea { border-radius: 14px; padding: 8px 12px; }
+html[data-style="rounded"] .msg-user .bubble { padding: 8px 14px; }
+html[data-style="rounded"] .dialog .body { line-height: 1.5; }

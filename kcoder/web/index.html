@@ -86,6 +86,7 @@
   <span id="status-down" class="status-item warn" hidden></span>
   <span id="status-items" class="status-items"></span>
   <span class="spacer"></span>
+  <span id="status-day" class="status-item dim" title="today"></span>
   <span id="status-pet" class="status-item pet" hidden></span>
   <button id="btn-claude" class="status-item" title="Your Claude plan: connect, reconnect, limits">Claude</button>
   <button id="btn-version" class="status-item dim" title="Version · settings">kcoder</button>
@@ -106,10 +107,8 @@
       <select data-act="trust" class="sec" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select>
       <select data-act="model" class="sec" title="model"></select>
       <button data-act="interrupt" class="sec" title="Interrupt (Esc)">■</button>
-      <button data-pane="find" class="sec" title="Find in session (⌘F)">⌕</button>
-      <button data-pane="timeline" class="sec" title="Timeline: one mark per turn (tools, files, errors, tokens); click a mark for its diff">⧗</button>
       <button data-pane="zoom" title="Pop out / back to grid (⌘⇧↩)">⤢</button>
-      <button data-pane="close" title="Close pane (⌘⇧W)">✕</button>
+      <button data-pane="close" title="Close this pane (⌘⇧W); the last one goes back to the sessions grid">✕</button>
       <button data-pane="menu" title="More">⋯</button>
     </div>
     <div class="cpane-find" hidden><input placeholder="find in this session…" autocomplete="off"><span class="count"></span><button data-find="prev" title="previous (⇧↩)">↑</button><button data-find="next" title="next (↩)">↓</button><button data-find="close" title="close (esc)">✕</button></div>

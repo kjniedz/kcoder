@@ -2,7 +2,7 @@
 it after a day or an app restart.
 
 The model-written part (what was done, what is pending, open decisions) is
-written by a cheap model from the transcript tail and the session's
+written for any kind of session (coding, research, writing, reading) by a cheap model from the transcript tail and the session's
 commits, then cached in <session dir>/recap.json. It is only written again
 when the session has new activity (another turn or message); the branch
 state (uncommitted changes, unpushed commits, open PR) is read live from
@@ -25,13 +25,16 @@ MAX_EXCERPT = 14_000
 MAX_ITEM = 1_500
 
 RECAP_SYSTEM = (
-    "You write a very short 'where we left off' recap of a coding session for the person who ran it. "
+    "You write a very short 'where we left off' recap of a session for the person who ran it. "
+    "The session may be coding, but just as often it is research, writing, reading documents, "
+    "searching the web or working through files: describe whatever was actually done. "
     "Use only what is in the transcript and the facts given; never invent. Do not use any tools. "
     "Answer in markdown with exactly these two headings, each followed by 1 to 3 bullets of at most "
     "fifteen words (plain sentences, no sub-bullets, no preamble, no closing line):\n"
     "### Done\n### Next\n"
     "Under Next put what is still to do and any question the person still has to answer. "
-    "Name files, commands and branches exactly as they appear. Keep the whole recap under 60 words."
+    "Name files, commands, branches, sources, people and findings exactly as they appear. "
+    "Keep the whole recap under 60 words."
 )
 
 

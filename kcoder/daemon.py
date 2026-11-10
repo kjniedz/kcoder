@@ -1778,6 +1778,55 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             clear_plan_limits()
         return {"claude": await asyncio.get_running_loop().run_in_executor(None, setup.claude_status)}
 
+    if t == "connectors":
+        # the MCP servers Claude Code knows (claude.ai connectors and servers added by hand) and their health;
+        # add a server by URL or remove one; the claude.ai ones are managed on claude.ai (Settings > Connectors)
+        from .providers import claude_path, CLAUDE_BIN, _claude_env
+        action = str(req.get("action") or "list")
+        exe = claude_path() or CLAUDE_BIN
+        if not shutil.which(exe) and not os.path.exists(exe):
+            return {"connectors": [], "error": "Claude Code is not installed"}
+
+        def run(args, timeout=60):
+            try:
+                r = subprocess.run([exe, "mcp", *args], capture_output=True, text=True, timeout=timeout, env=_claude_env())
+                return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+            except subprocess.TimeoutExpired:
+                return 1, "timed out"
+
+        def listing():
+            code, out = run(["list"])
+            rows = []
+            for line in out.splitlines():
+                m = re.match(r"^(.+?): (\S+)(?: \((\w+)\))? - (.+)$", line.strip())
+                if not m:
+                    continue
+                name, target, kind, health = m.groups()
+                ok = "Connected" in health
+                rows.append({"name": name, "target": target, "kind": kind or ("http" if target.startswith("http") else "stdio"), "health": health.strip(" ✔✗✘!"),
+                             "ok": ok, "auth": "auth" in health.lower(), "claude_ai": name.startswith("claude.ai ")})
+            return rows, (out if code else "")
+
+        if action == "add":
+            name = re.sub(r"[^A-Za-z0-9._ -]", "", str(req.get("name") or "")).strip()[:60]
+            url = str(req.get("url") or "").strip()
+            if not name or not re.match(r"^https?://\S+$", url):
+                return {"error": "a name and an http(s) URL are needed"}
+            code, out = run(["add", "--transport", "http", "--scope", "user", name, url])
+            if code:
+                return {"error": out[-300:] or "claude mcp add failed"}
+        elif action == "remove":
+            name = str(req.get("name") or "").strip()
+            if not name or name.startswith("claude.ai "):
+                return {"error": "claude.ai connectors are removed on claude.ai, under Settings > Connectors"}
+            code, out = run(["remove", "--scope", "user", name])
+            if code:
+                code, out = run(["remove", name])
+            if code:
+                return {"error": out[-300:] or "claude mcp remove failed"}
+        rows, err = await asyncio.get_running_loop().run_in_executor(None, listing)
+        return {"connectors": rows, "error": err[-300:] if err and not rows else ""}
+
     if t == "quota":
         # the weekly plan limit meter in full (the daily series of the window included)
         loop = asyncio.get_running_loop()

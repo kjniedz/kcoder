@@ -84,10 +84,37 @@ function applyTheme() {
   if (c === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = c;
   $('#hljs-dark').disabled = eff === 'light'; $('#hljs-light').disabled = eff !== 'light';
   const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = eff === 'light' ? '#FFFFFF' : '#0C0E12';
-  for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
+  applyLook();   // the colours derive from the theme
   renderConditions();
 }
 function setTheme(c) { localStorage.setItem('kcoder.theme', c); applyTheme(); }
+// ---- look: the shape and the colours, chosen under customize (the kcoder logo). The style is classic (dense,
+// monospace, square) or rounded (Poppins, soft corners, roomier); the background and the accent are any colour,
+// and the surfaces, lines, code blocks and the gradient are derived from them so every theme stays readable.
+const LOOK_STYLES = [['classic', 'classic - dense, monospace, square corners'], ['rounded', 'rounded - Poppins, soft corners, roomier']];
+const LOOK_BG = { dark: [['#0C0E12', 'kcoder'], ['#0F172A', 'slate'], ['#0B1A14', 'forest'], ['#1A0F1E', 'plum'], ['#1C1410', 'ember'], ['#000000', 'black']], light: [['#FFFFFF', 'kcoder'], ['#F4F6F8', 'fog'], ['#F7F3EA', 'paper'], ['#EEF5F0', 'mint'], ['#F6EEF5', 'lilac'], ['#FFF8E7', 'cream']] };
+const LOOK_ACCENT = [['#7FC5FF', 'kcoder blue'], ['#4ADE80', 'green'], ['#FB923C', 'orange'], ['#F472B6', 'pink'], ['#A78BFA', 'violet'], ['#FBBF24', 'amber'], ['#F87171', 'red'], ['#E5E7EB', 'silver']];
+function lookChoice() { return { style: localStorage.getItem('kcoder.style') || 'classic', bg: localStorage.getItem('kcoder.bg') || '', accent: localStorage.getItem('kcoder.accent') || '' }; }
+function hexRgb(h) { const m = /^#?([0-9a-f]{6})$/i.exec(String(h || '').trim()); if (!m) return null; const n = parseInt(m[1], 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+const rgbHex = (c) => '#' + c.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('').toUpperCase();
+const mixHex = (a, b, t) => rgbHex(hexRgb(a).map((v, i) => v + (hexRgb(b)[i] - v) * t));
+const LOOK_VARS = ['--bg', '--bg-2', '--bg-3', '--line', '--line-2', '--code-bg', '--bubble', '--accent', '--accent-text', '--accent-soft', '--focus', '--gradient'];
+function applyLook() {
+  const L = lookChoice(); const root = document.documentElement; const st = root.style; const light = effectiveTheme() === 'light';
+  if (L.style === 'rounded') root.dataset.style = 'rounded'; else delete root.dataset.style;
+  for (const v of LOOK_VARS) st.removeProperty(v);
+  const fg = light ? '#0C0E12' : '#D9E2EC'; const base = light ? '#FFFFFF' : '#0C0E12';
+  const bg = hexRgb(L.bg) ? rgbHex(hexRgb(L.bg)) : '', ac = hexRgb(L.accent) ? rgbHex(hexRgb(L.accent)) : '';
+  if (bg) { st.setProperty('--bg', bg); st.setProperty('--bg-2', mixHex(bg, fg, light ? 0.03 : 0.04)); st.setProperty('--bg-3', mixHex(bg, fg, light ? 0.07 : 0.08)); st.setProperty('--line', mixHex(bg, fg, 0.14)); st.setProperty('--line-2', mixHex(bg, fg, 0.26)); st.setProperty('--code-bg', mixHex(bg, light ? '#FFFFFF' : '#000000', 0.3)); }
+  if (ac) { const text = light ? mixHex(ac, '#000000', 0.45) : ac; const [r, g, b] = hexRgb(ac); st.setProperty('--accent', ac); st.setProperty('--accent-text', text); st.setProperty('--focus', text); st.setProperty('--accent-soft', `rgba(${r},${g},${b},${light ? 0.3 : 0.16})`); st.setProperty('--gradient', `linear-gradient(90deg, ${ac} 0%, ${mixHex(ac, bg || base, 0.3)} 60%, ${mixHex(ac, bg || base, 0.7)} 100%)`); }
+  if (bg || ac) st.setProperty('--bubble', mixHex(bg || base, ac || '#7FC5FF', 0.12));
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = bg || base;
+  if (L.style === 'rounded' && !document.getElementById('poppins')) { const l = document.createElement('link'); l.id = 'poppins'; l.rel = 'stylesheet'; l.href = 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap'; document.head.appendChild(l); }   // offline, the stack falls through to the system sans
+  for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
+}
+function setLook(k, v) { if (v) localStorage.setItem('kcoder.' + k, v); else localStorage.removeItem('kcoder.' + k); applyLook(); }
+function renderDay() { const el = $('#status-day'); if (!el) return; const d = new Date(); el.textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); el.title = d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); }
+setInterval(renderDay, 60 * 1000);
 // ---- density: comfortable (default) or compact ----
 function densityChoice() { return localStorage.getItem('kcoder.density') || 'comfortable'; }
 function applyDensity() { const c = densityChoice(); if (c === 'compact') document.documentElement.dataset.density = 'compact'; else delete document.documentElement.dataset.density; for (const sh of state.shells.values()) { try { sh.fit.fit(); } catch {} } }
@@ -114,6 +141,7 @@ function xtermTheme() { return { background: cssVar('--code-bg'), foreground: cs
 applyTheme();
 applyFont();
 applyDensity();
+renderDay();
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice() === 'system') applyTheme(); });
 
 // ----------------------------------------------------------------------
@@ -1712,8 +1740,8 @@ async function slashCommand(sid, line) {
 // ----------------------------------------------------------------------
 const COND_STALE = 12 * 3600;
 function onConditions(msg) {
-  const prev = state.conditions; state.conditions = msg;
-  renderConditions();
+  state.conditions = msg;
+  renderConditions(); if (state._renderCondStatus) state._renderCondStatus();
 }
 function condReduced() { return matchMedia('(prefers-reduced-motion: reduce)').matches; }
 function condNight() { const h = new Date().getHours(); return h >= 18 || h < 6; }
@@ -2001,7 +2029,7 @@ function paletteItems() {
   items.push(
     ['brief: what every session did, what waits on you, what is in review', () => briefDialog()],
     ['search transcripts with filters (repo, date, who)', () => searchDialog($('#search').value.trim())],
-    ['settings', () => settingsDialog()], ['about kcoder', () => aboutDialog()], ['your Claude plan (connect, limits)', () => claudeDialog()],
+    ['settings', () => settingsDialog()], ['customize (theme, style, colours, conditions)', () => customizeDialog()], ['about kcoder', () => aboutDialog()], ['your Claude plan (connect, limits)', () => claudeDialog()],
     ['connect your AI (sign in to a provider)', () => setupDialog()], ['connect GitHub (commit identity)', () => setupDialog()], 
 ['toggle broadcast (send to all panes)', toggleBroadcast], 
     ['toggle sound', toggleSound], ['enable browser notifications', () => Notification.requestPermission().then((p) => toast('notifications: ' + p))],
@@ -2011,7 +2039,6 @@ function paletteItems() {
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
     ['text font and size (settings)', () => settingsDialog()],
     ['density: comfortable / compact', async () => { const v = await chooseDialog('Density', [['comfortable', 'comfortable (default)'], ['compact', 'compact - tighter spacing, more on screen']]); if (v) { setDensity(v); toast('density: ' + v, 'ok'); } }],
-    ['theme: dark / light / system', async () => { const v = await chooseDialog('Theme', [['dark', 'dark (default)'], ['light', 'light'], ['system', 'follow the system setting']]); if (v) { setTheme(v); toast('theme: ' + v, 'ok'); } }],
     ['phone approvals (pair, revoke, enable)', remoteDialog],
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
     ['set review policy (when the changes view must approve)', async () => { const v = await chooseDialog('Review required before…', [['push', 'push - PRs, pushes and merges need an approved review (default)'], ['commit', 'commit - every commit needs an approved review'], ['none', 'none - review is optional']]); if (v) { const r = await request('config', { review_required: v }); state.config = r.config; toast('review required before: ' + v, 'ok'); } }],
@@ -2233,9 +2260,73 @@ function aboutDialog() {
   const d = openDialog(`<div class="body"><img class="logo" src="icon-192.png" alt=""><pre class="banner" aria-label="KCODER">${esc(BANNER)}</pre>
     <div class="tagline">${esc(ABOUT_LINES[Math.floor(Math.random() * ABOUT_LINES.length)])}</div>
     <div class="credits">© Kyle Niedzwiecki<br><span class="ver">kcoder ${esc(v.running || '')}</span></div>
-    <div class="row"><button data-x="settings">Settings</button><button data-x="keys">Keyboard shortcuts</button><button class="primary" data-x="close">Close</button></div></div>`, 'about');
+    <div class="row"><button data-x="settings">Settings</button><button data-x="customize">Customize</button><button data-x="keys">Keyboard shortcuts</button><button class="primary" data-x="close">Close</button></div></div>`, 'about');
   d.classList.add('about');
-  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; closeDialog(); if (b.dataset.x === 'settings') settingsDialog(); else if (b.dataset.x === 'keys') helpDialog(); });
+  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; closeDialog(); if (b.dataset.x === 'settings') settingsDialog(); else if (b.dataset.x === 'customize') customizeDialog(); else if (b.dataset.x === 'keys') helpDialog(); });
+}
+
+// customize: the look (theme, style, colours, fonts, density) and the conditions, from the kcoder logo
+const settingChk = (id, on, label, help) => `<label class="setting"><span>${label}${help ? ` <span class="help">${help}</span>` : ''}</span><input type="checkbox" data-set="${id}"${on ? ' checked' : ''}></label>`;
+const settingSel = (id, val, label, opts) => `<label class="setting"><span>${label}</span><select data-set="${id}">${opts.map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
+function condStatusHtml() {
+  const C = state.conditions; if (!C) return '<div class="help plain">no reading yet: kcoderd reads the sources every 30 minutes</div>';
+  const src = (label, x, text) => `<div class="row"><span>${label}</span><span class="help plain">${x && x.at ? `${text} · read ${age(x.at)} ago` : 'not read yet'}${x && x.error ? ` · <span class="bad">last try failed: ${esc(x.error)}</span>` : ''}</span></div>`;
+  return src('bitcoin', C.btc, C.btc && C.btc.at ? `${C.btc.price ? fmtUsd(C.btc.price) + ' · ' : ''}${Number(C.btc.pct) > 0 ? '+' : ''}${Number(C.btc.pct || 0).toFixed(1)}% in 24 h` : '')
+    + src('snow', C.snow, C.snow && C.snow.at ? `${Math.round(Number(C.snow.inches || 0))}" in 24 h at ${esc(C.snow.place || 'the place')}` : '')
+    + `<div class="row"><span>moon</span><span class="help plain">${C.moon ? `${Math.round((C.moon.illumination || 0) * 100)}% lit${C.moon.near_full ? ' · near full' : ''}` : ''}</span></div>`;
+}
+async function customizeDialog() {
+  try { state.config = (await request('config')).config; } catch {}
+  const cfg = state.config || {}; const L = lookChoice(); const light = effectiveTheme() === 'light';
+  const chk = settingChk, sel = settingSel;
+  const sw = (k, list, cur) => `<span class="swatches">${list.map(([c, n]) => `<button class="sw${cur === c ? ' on' : ''}" data-sw="${k}:${c}" style="background:${c}" title="${n}"></button>`).join('')}</span>`;
+  const d = openDialog(`<h2>customize<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">
+    <div class="label-h">look</div>
+    ${sel('theme', themeChoice(), 'Theme', [['dark', 'dark'], ['light', 'light'], ['system', 'follow the system']])}
+    ${sel('style', L.style, 'Style', LOOK_STYLES)}
+    <label class="setting"><span>Background <span class="help">pick one or choose any colour; surfaces, lines and code blocks follow</span></span>${sw('bg', LOOK_BG[light ? 'light' : 'dark'], L.bg)}<input type="color" data-set="bg" value="${esc(L.bg || (light ? '#FFFFFF' : '#0C0E12'))}" title="any colour"><button data-x="reset-bg" title="back to the theme's own">reset</button></label>
+    <label class="setting"><span>Accent <span class="help">links, highlights, the banner and the focus ring</span></span>${sw('accent', LOOK_ACCENT, L.accent)}<input type="color" data-set="accent" value="${esc(L.accent || '#7FC5FF')}" title="any colour"><button data-x="reset-accent" title="back to kcoder blue">reset</button></label>
+    ${sel('density', densityChoice(), 'Density', [['comfortable', 'comfortable'], ['compact', 'compact - tighter spacing, more on screen']])}
+    ${(() => { const f = fontChoice(); const known = FONT_PRESETS.some(([k]) => k === f.family); return `<label class="setting"><span>Text font <span class="help">any font installed on this computer; the system monospace is used if it is missing</span></span><select data-set="font">${FONT_PRESETS.map(([k, l]) => `<option value="${esc(k)}"${k === f.family ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="__custom"${known ? '' : ' selected'}>other…</option></select></label>
+    <label class="setting" id="font-custom"${known ? ' hidden' : ''}><span>Font name <span class="help">exactly as it is installed, for example "Victor Mono"</span></span><input type="text" data-set="font_custom" value="${esc(known ? '' : f.family)}" placeholder="font family"></label>
+    <label class="setting"><span>Text size</span><select data-set="font_size">${FONT_SIZES.map((n) => `<option value="${n}"${n === f.size ? ' selected' : ''}>${n} px</option>`).join('')}</select></label>
+    <div class="sample" id="font-sample">kcoder> the quick brown fox jumps over the lazy dog  0O 1lI {} =&gt; -&gt;</div>`; })()}
+    <div class="label-h">conditions <span class="help">an ambient accent on the header from real conditions; the readings below say whether they are coming in</span></div>
+    <div id="cond-status">${condStatusHtml()}</div>
+    <div class="label-h">conditions</div>
+    ${(() => { const c = cfg.conditions || {}; const pl = c.place || {}; return `${chk('conditions_enabled', c.enabled !== false, 'Conditions in the header', 'an ambient accent on the header\'s ridgeline: fresh snow, bitcoin\'s day, the full moon; one at a time (snow first), refreshed every 30 minutes, kept while offline and gone after 12 hours; with reduced motion on, nothing moves')}
+    ${chk('conditions_snow', c.snow !== false, 'Fresh snow', 'light falling snow and a tag with the inches when the place below had snow in the last 24 h (Open-Meteo, no key; the place is fixed here, never your location)')}
+    <label class="setting"><span>Snow place <span class="help">the name in the tag</span></span><input type="text" data-set="conditions_place" value="${esc(pl.name || 'Alta')}" placeholder="Alta"></label>
+    <label class="setting"><span>Snow place lat, lon <span class="help">decimal degrees</span></span><input type="text" data-set="conditions_latlon" value="${esc(`${pl.lat ?? 40.5884}, ${pl.lon ?? -111.6386}`)}" placeholder="40.5884, -111.6386"></label>
+    ${chk('conditions_btc', c.btc !== false, 'Bitcoin', 'a thin line under the header, green or red with the 24 h move and stronger the bigger it is; a 5% day gets a badge on the ridgeline (CoinGecko, no key)')}
+    ${chk('conditions_moon', c.moon !== false, 'Full moon', 'in dark mode on full-moon nights: a small moon over the ridgeline and slightly cooler tones')}`; })()}
+  </div><div class="foot"><span class="help plain">The day shows at the right of the status bar.</span><span class="spacer" style="flex:1"></span><button class="primary" data-x="close">Done</button></div>`, 'customize');
+  d.classList.add('settings');
+  const refreshSw = () => { const L2 = lookChoice(); for (const b of $$('[data-sw]', d)) { const [k, c] = b.dataset.sw.split(':'); b.classList.toggle('on', L2[k] === c); } $('[data-set="bg"]', d).value = L2.bg || (effectiveTheme() === 'light' ? '#FFFFFF' : '#0C0E12'); $('[data-set="accent"]', d).value = L2.accent || '#7FC5FF'; };
+  const condRe = () => { const el = $('#cond-status', d); if (el) el.innerHTML = condStatusHtml(); };
+  const prevRender = state._renderCondStatus; state._renderCondStatus = condRe;
+  d.addEventListener('change', async (e) => {
+    const el = e.target.closest('[data-set]'); if (!el) return;
+    const k = el.dataset.set;
+    try {
+      if (k === 'theme') { setTheme(el.value); refreshSw(); toast('theme: ' + el.value, 'ok'); return; }
+      if (k === 'style') { setLook('style', el.value); toast('style: ' + el.value, 'ok'); return; }
+      if (k === 'bg' || k === 'accent') { setLook(k, el.value); refreshSw(); return; }
+      if (k === 'density') { setDensity(el.value); toast('density: ' + el.value, 'ok'); return; }
+      if (k === 'font') { const custom = el.value === '__custom'; $('#font-custom', d).hidden = !custom; if (custom) { $('[data-set="font_custom"]', d).focus(); return; } setFont(el.value, null); toast('font: ' + (el.value || 'system monospace'), 'ok'); return; }
+      if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
+      if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
+      if (k.startsWith('conditions_')) { const r = await request('config', { [k]: el.type === 'checkbox' ? el.checked : el.value }); state.config = r.config; toast('saved; kcoderd reads the sources again now', 'ok'); }
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  d.addEventListener('input', (e) => { const el = e.target.closest('input[type="color"][data-set]'); if (el) setLook(el.dataset.set, el.value); });
+  d.addEventListener('click', (e) => {
+    const swb = e.target.closest('[data-sw]'); if (swb) { const [k, c] = swb.dataset.sw.split(':'); setLook(k, c); refreshSw(); return; }
+    const b = e.target.closest('[data-x]'); if (!b) return;
+    if (b.dataset.x === 'reset-bg') { setLook('bg', ''); refreshSw(); return; }
+    if (b.dataset.x === 'reset-accent') { setLook('accent', ''); refreshSw(); return; }
+    state._renderCondStatus = prevRender; closeDialog();
+  });
 }
 
 async function settingsDialog() {
@@ -2244,12 +2335,7 @@ async function settingsDialog() {
   const chk = (id, on, label, help) => `<label class="setting"><span>${label}${help ? ` <span class="help">${help}</span>` : ''}</span><input type="checkbox" data-set="${id}"${on ? ' checked' : ''}></label>`;
   const sel = (id, val, label, opts) => `<label class="setting"><span>${label}</span><select data-set="${id}">${opts.map(([k, l]) => `<option value="${k}"${k === val ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
   const d = openDialog(`<h2>settings<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">
-    ${sel('theme', themeChoice(), 'Theme', [['dark', 'dark'], ['light', 'light'], ['system', 'follow the system']])}
-    ${sel('density', densityChoice(), 'Density', [['comfortable', 'comfortable'], ['compact', 'compact - tighter spacing, more on screen']])}
-    ${(() => { const f = fontChoice(); const known = FONT_PRESETS.some(([k]) => k === f.family); return `<label class="setting"><span>Text font <span class="help">any font installed on this computer; the system monospace is used if it is missing</span></span><select data-set="font">${FONT_PRESETS.map(([k, l]) => `<option value="${esc(k)}"${k === f.family ? ' selected' : ''}>${esc(l)}</option>`).join('')}<option value="__custom"${known ? '' : ' selected'}>other…</option></select></label>
-    <label class="setting" id="font-custom"${known ? ' hidden' : ''}><span>Font name <span class="help">exactly as it is installed, for example "Victor Mono"</span></span><input type="text" data-set="font_custom" value="${esc(known ? '' : f.family)}" placeholder="font family"></label>
-    <label class="setting"><span>Text size</span><select data-set="font_size">${FONT_SIZES.map((n) => `<option value="${n}"${n === f.size ? ' selected' : ''}>${n} px</option>`).join('')}</select></label>
-    <div class="sample" id="font-sample">kcoder> the quick brown fox jumps over the lazy dog  0O 1lI {} =&gt; -&gt;</div>`; })()}
+    <div class="row"><span class="help plain">The theme, the style, the colours, fonts and the conditions are under customize.</span><button data-x="customize">Customize</button></div>
     ${chk('sound', state.sound, 'Sound', 'a ping when a session needs you')}
     ${sel('default_trust', cfg.default_trust || 'auto', 'Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']])}
     ${chk('routing_enabled', !(cfg.routing && cfg.routing.enabled === false), 'Model routing', 'auto picks a cheap model for small turns, a strong one for large')}
@@ -2266,13 +2352,6 @@ async function settingsDialog() {
     ${sel('quota_reset_hour', String(q.reset_hour || 0), 'at (hour, local time)', Array.from({ length: 24 }, (_, h) => [String(h), `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`]))}
     ${chk('quota_shift', q.shift !== false, 'Quota shift', 'when the forecast says the weekly limit runs out before the reset, small turns in sessions on the plan default or pinned to the big model run on the cheaper tier (always shown in the status bar while active)')}`; })()}
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
-    <div class="label-h">conditions</div>
-    ${(() => { const c = cfg.conditions || {}; const pl = c.place || {}; return `${chk('conditions_enabled', c.enabled !== false, 'Conditions in the header', 'an ambient accent on the header\'s ridgeline: fresh snow, bitcoin\'s day, the full moon; one at a time (snow first), refreshed every 30 minutes, kept while offline and gone after 12 hours; with reduced motion on, nothing moves')}
-    ${chk('conditions_snow', c.snow !== false, 'Fresh snow', 'light falling snow and a tag with the inches when the place below had snow in the last 24 h (Open-Meteo, no key; the place is fixed here, never your location)')}
-    <label class="setting"><span>Snow place <span class="help">the name in the tag</span></span><input type="text" data-set="conditions_place" value="${esc(pl.name || 'Alta')}" placeholder="Alta"></label>
-    <label class="setting"><span>Snow place lat, lon <span class="help">decimal degrees</span></span><input type="text" data-set="conditions_latlon" value="${esc(`${pl.lat ?? 40.5884}, ${pl.lon ?? -111.6386}`)}" placeholder="40.5884, -111.6386"></label>
-    ${chk('conditions_btc', c.btc !== false, 'Bitcoin', 'a thin line under the header, green or red with the 24 h move and stronger the bigger it is; a 5% day gets a badge on the ridgeline (CoinGecko, no key)')}
-    ${chk('conditions_moon', c.moon !== false, 'Full moon', 'in dark mode on full-moon nights: a small moon over the ridgeline and slightly cooler tones')}`; })()}
     <div class="label-h">accounts</div>
     <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
     <div class="label-h">kcoder</div>
@@ -2283,11 +2362,6 @@ async function settingsDialog() {
     const el = e.target.closest('[data-set]'); if (!el) return;
     const k = el.dataset.set;
     try {
-      if (k === 'theme') { setTheme(el.value); toast('theme: ' + el.value, 'ok'); return; }
-      if (k === 'density') { setDensity(el.value); toast('density: ' + el.value, 'ok'); return; }
-      if (k === 'font') { const custom = el.value === '__custom'; $('#font-custom', d).hidden = !custom; if (custom) { $('[data-set="font_custom"]', d).focus(); return; } setFont(el.value, null); toast('font: ' + (el.value || 'system monospace'), 'ok'); return; }
-      if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
-      if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
       if (k === 'sound') { if (state.sound !== el.checked) toggleSound(); return; }
       const fields = k.startsWith('conditions_') ? { [k]: el.type === 'checkbox' ? el.checked : el.value } : k === 'routing_enabled' ? { routing_enabled: el.checked } : k === 'auto_publish' ? { auto_publish: el.checked } : k === 'connector_approvals' ? { connector_approvals: el.checked } : k === 'handoff' ? { handoff: el.checked } : k === 'ci_autofix' ? { ci_autofix: el.checked } : k === 'plan_price_usd' ? { plan_price_usd: Number(el.value) } : k === 'daily_cap_usd' ? { daily_cap_usd: Number(el.value) || 0 } : k === 'quota_shift' ? { quota_shift: el.checked } : k === 'quota_limit_tokens' ? { quota_limit_tokens: Number(el.value) || 0 } : k === 'quota_reset_weekday' || k === 'quota_reset_hour' ? { [k]: Number(el.value) } : { [k]: el.value };
       const r = await request('config', fields); state.config = r.config; toast('saved', 'ok');
@@ -2297,7 +2371,7 @@ async function settingsDialog() {
     const b = e.target.closest('[data-x]'); if (!b) return;
     const x = b.dataset.x; closeDialog();
     ({ claude: claudeDialog, setup: () => setupDialog(), remote: remoteDialog, notif: () => Notification.requestPermission().then((p) => toast('notifications: ' + p)),
-       update: checkUpdates, restart: restartDaemon, keys: helpDialog, about: aboutDialog, uninstall: uninstallDialog }[x] || (() => {}))();
+       update: checkUpdates, restart: restartDaemon, keys: helpDialog, about: aboutDialog, uninstall: uninstallDialog, customize: customizeDialog }[x] || (() => {}))();
   });
 }
 
@@ -2315,7 +2389,19 @@ async function claudeDialog() {
         ${(() => { const rows = Array.from(state.sessions.values()).filter((s) => s.plan_share && (s.plan_share.five_hour || s.plan_share.seven_day)).sort((a, b) => ((b.plan_share.five_hour || 0) + (b.plan_share.seven_day || 0)) - ((a.plan_share.five_hour || 0) + (a.plan_share.seven_day || 0))).slice(0, 8); return rows.length ? `<div class="label-h">share by session</div>${rows.map((s) => `<div class="row"><span class="sess">${esc(s.name)}</span><span class="help plain">${esc(planShareText(s))}</span></div>`).join('')}<div class="help plain">The increase in each limit seen during a session's turns. Sessions running at the same time share the credit, so treat it as a guide.</div>` : ''; })()}` : '<div class="help plain">How much of the 5-hour and weekly limits is used appears here after the first Claude turn.</div>'}
       ${lim.length ? `<div class="label-h">limits reached</div>${lim.map((l) => `<div class="row"><span>${esc(claudeLimitText(l))}</span></div>`).join('')}
         <div class="row"><button data-cl="clear">Clear: I reset my limit</button><span class="help plain">Only if you reset it on claude.ai. If it is still used up, the next turn stops again before spending anything.</span></div>` : ''}`;
+    body.insertAdjacentHTML('beforeend', `<div class="label-h">connectors</div><div id="cl-conn" class="help plain">checking…</div>
+      <div class="row"><button data-cl="manage">Manage claude.ai connectors</button><button data-cl="add">Add a server by URL</button><span class="help plain">Google Drive, Gmail, Linear and the rest are turned on at claude.ai (Settings › Connectors); a server of your own is added by its URL. A new session picks up the change; a running one keeps what it started with.</span></div>`);
     $('[data-cl="login"]', d).textContent = !c.installed ? 'Install Claude Code' : c.on_plan ? 'Reconnect Claude' : 'Connect my Claude plan';
+    loadConnectors();
+  };
+  const loadConnectors = async () => {
+    const el = $('#cl-conn', d); if (!el) return;
+    try {
+      const r = await request('connectors');
+      const rows = r.connectors || [];
+      el.innerHTML = rows.length ? rows.map((c) => `<div class="row conn-row"><span class="dot ${c.ok ? 'idle' : c.auth ? 'waiting' : 'error'}"></span><span class="pl">${esc(c.name)}</span><span class="help plain">${esc(c.target)}</span><b class="${c.ok ? 'ok' : 'warn'}">${c.ok ? 'connected' : c.auth ? 'needs sign-in on claude.ai' : esc(c.health || 'failed')}</b>${c.claude_ai ? '' : `<button class="link" data-rm="${esc(c.name)}" title="remove this server">remove</button>`}</div>`).join('')
+        : `<div class="help plain">${esc(r.error || 'no connectors yet: turn some on at claude.ai, or add a server by URL')}</div>`;
+    } catch (err) { el.textContent = err.message; }
   };
   state._renderClaude = render;
   render(await refreshClaude());
@@ -2323,10 +2409,19 @@ async function claudeDialog() {
   const stopPoll = () => { if (poll) { clearInterval(poll); poll = null; } };
   d.addEventListener('click', async (e) => {
     if (e.target.closest('[data-x]')) { stopPoll(); closeDialog(); return; }
+    const rm = e.target.closest('[data-rm]');
+    if (rm) { stopPoll(); if (!(await confirmDialog(`Remove ${rm.dataset.rm}?`, 'New sessions will not have it; a running one keeps it until it ends.'))) { claudeDialog(); return; } try { const r = await request('connectors', { action: 'remove', name: rm.dataset.rm }); if (r.error) throw new Error(r.error); toast('removed', 'ok'); } catch (err) { toast(err.message, 'err'); } claudeDialog(); return; }
     const b = e.target.closest('[data-cl]'); if (!b) return;
     status.textContent = '';
     try {
       if (b.dataset.cl === 'check') { status.textContent = 'checking…'; render(await refreshClaude()); status.textContent = ''; }
+      else if (b.dataset.cl === 'manage') { openExternal('https://claude.ai/settings/connectors'); status.textContent = 'turn the connector on at claude.ai, then "Check again" here'; }
+      else if (b.dataset.cl === 'add') {
+        stopPoll(); const name = await promptDialog('Add a connector', 'a name for it (letters, digits, spaces, dots, dashes)'); if (!name) { claudeDialog(); return; }
+        const url = await promptDialog('Server URL', 'the MCP server\'s http(s) address, for example https://mcp.example.com/mcp', 'https://'); if (!url) { claudeDialog(); return; }
+        const r = await request('connectors', { action: 'add', name: name.trim(), url: url.trim() });
+        if (r.error) throw new Error(r.error); toast(`added ${name.trim()}; new sessions can use it`, 'ok'); claudeDialog();
+      }
       else if (b.dataset.cl === 'clear') { render(await refreshClaude(true)); toast('limit cleared; the next turn checks it again', 'ok'); }
       else if (b.dataset.cl === 'login') {
         const c = state.claude || {};
@@ -2938,7 +3033,7 @@ function splitAdd(sid) {
   if (!sid) pickSession(state.layout.focus);
 }
 function splitClose(i) {
-  if (state.layout.panes.length <= 1) { toast('the last pane stays open', 'warn'); return; }
+  if (state.layout.panes.length <= 1) { setLayout('grid'); return; }   // the last pane: back to the sessions grid
   state.layout.panes.splice(i, 1); state.layout.focus = Math.min(state.layout.focus, state.layout.panes.length - 1); state.layout.zoom = null; saveLayout(); syncSid();
   renderSplit(); renderSidebar(); focusComposer();
 }
@@ -2998,12 +3093,10 @@ function renderCpaneBar(pane) {
     const ms = $('select[data-act="model"]', bar); if (ms.dataset.for !== sid + ':' + s.model + ':' + s.provider) { fillModelSelect(ms, s); ms.dataset.for = sid + ':' + s.model + ':' + s.provider; }
     $('button[data-act="interrupt"]', bar).disabled = !(s.status === 'working' || s.status === 'waiting');
   }
-  const tb = $('[data-pane="timeline"]', bar); if (tb) tb.classList.toggle('active', timelineOn());
   const tv = cpaneViewOf(sid) === 'term';
   const vt = $('[data-pane="view"]', bar); vt.textContent = tv ? '▤' : '☰'; vt.title = (tv ? 'terminal view · click for chat' : 'chat view · click for terminal') + '  (v)'; vt.classList.toggle('active', tv);
   $('[data-pane="zoom"]', bar).textContent = state.layout.zoom != null ? '⤡' : '⤢';
   $('[data-pane="zoom"]', bar).hidden = state.layout.panes.length <= 1 && state.layout.zoom == null;
-  $('[data-pane="close"]', bar).hidden = state.layout.panes.length <= 1;
 }
 
 function cpaneViewOf(sid) { return (sid && state.cpaneView.get(sid)) || 'chat'; }
@@ -3715,21 +3808,8 @@ const MINE_UNITS = [
   { id: 'agi', glyph: '∞', name: 'the AGI', desc: 'mines tokens about itself', cost: 5e18, rate: 4e13, need: 'agi' },
   { id: 'fork', glyph: 'Ψ', name: 'the open-source fork', desc: 'everyone works for free, somehow it ships', cost: 1e20, rate: 1.5e15, need: 'fork' },
 ];   // `need` names the star shop perk that makes the agent hireable
-// past the open-source fork the agents never run out: each one costs 25 times and mines 12 times the one before, and the
-// next shows up once the last is hired (the names cycle with a numeral), so there is always something to save for
-const MINE_X_UNITS = [['the second universe', '✧'], ['the time loop', '⟲'], ['the Dyson sphere', '◉'], ['the Boltzmann brain', '☁'], ['the omega point', 'Ω'], ['the tenth dimension', '⬡'], ['the simulation', '▦'], ['the reboot', '⟳']];
-const mineRoman = (n) => { const R = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']]; let out = ''; for (const [v, r] of R) while (n >= v) { out += r; n -= v; } return out; };
-function mineExtraUnits(g) {
-  const out = []; let prev = MINE_UNITS[MINE_UNITS.length - 1];
-  for (let i = 0; i < 400; i++) {
-    const [nm, glyph] = MINE_X_UNITS[i % MINE_X_UNITS.length]; const round = Math.floor(i / MINE_X_UNITS.length);
-    const u = { id: `x${i}`, glyph, name: round ? `${nm} ${mineRoman(round + 1)}` : nm, desc: 'past the fork: it mines in ways nobody has named yet', cost: prev.cost * 25, rate: prev.rate * 12, gen: true };
-    if (!Number.isFinite(u.cost)) break;
-    out.push(u); if (!((g.units[u.id] || 0) > 0)) break; prev = u;
-  }
-  return out;
-}
-const mineUnitsAll = (g) => ((g.units.fork || 0) >= 1 ? MINE_UNITS.concat(mineExtraUnits(g)) : MINE_UNITS);
+const mineUnitsAll = () => MINE_UNITS;   // seventeen agents, the open-source fork the last: the mine can be beaten
+const mineWon = (g) => MINE_UNITS.every((u) => (g.units[u.id] || 0) >= 1) && MINE_UPGRADES.every((up) => g.ups.includes(up.id));   // every agent hired and every upgrade bought
 const mineUpgradesAll = () => MINE_UPGRADES;
 const mineUpById = (g, id) => MINE_UPGRADES.find((x) => x.id === id) || null;
 const mineUpsMult = (g) => { let m = 1; for (const id of g.ups) { const up = mineUpById(g, id); if (up && up.mult) m *= up.mult; } return m; };   // what the agent upgrades owned multiply every agent by
@@ -3773,6 +3853,7 @@ const MINE_MILESTONES = [
   { id: 'oneofeach', name: 'the full stack', desc: 'one of every agent', test: (g) => mineUnitsOpen(g).every((u) => g.units[u.id]) },
   { id: 'fleet', name: 'admiral', desc: 'buy the fleet', test: (g) => (g.units.fleet || 0) >= 1 },
   { id: 'allups', name: 'maxed out', desc: 'all fifteen upgrades bought', test: (g) => MINE_UPGRADES.every((up) => g.ups.includes(up.id)) },
+  { id: 'won', name: 'beat the mine', desc: 'every one of the seventeen agents hired and all fifteen upgrades bought', test: (g) => mineWon(g) },
   { id: 'total1k', name: 'a thousand', desc: '1,000 tokens mined all time', test: (g) => g.total >= 1e3 },
   { id: 'total1m', name: 'a million', desc: '1,000,000 tokens mined all time', test: (g) => g.total >= 1e6 },
   { id: 'total1b', name: 'a billion', desc: '1,000,000,000 tokens mined all time', test: (g) => g.total >= 1e9 },
