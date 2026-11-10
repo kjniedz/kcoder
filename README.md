@@ -172,8 +172,16 @@ terminal** toggle that renders the same session as a plain transcript.
 The `$` button next to send (or "terminal here" in the palette)
 docks a real **shell** under the chat, in the session's folder, in a grid
 pane or a chat-view pane alike: the daemon's own pty through xterm.js, so
-there is no Terminal window to open; ✕ or `$` again closes it. Voice input
-is the microphone button and "voice input" in the palette.
+there is no Terminal window to open; ✕ or `$` again closes it. "Remote
+control" in the palette opens that shell and types `claude remote-control`
+in the session's folder (with any `ANTHROPIC_API_KEY` unset for that one
+command, since remote control needs the claude.ai login): Claude Code keeps an outbound connection to
+Anthropic (no port, no pairing), and the Mac shows up under Code in the
+Claude iPhone app and at claude.ai/code for the same account, where you
+can start sessions in that folder from anywhere. Those are Claude Code's
+own sessions, not kcoder panes, and they bill against the plan like any
+session. Voice input is the microphone button and "voice input" in the
+palette.
 Grid panes also cycle through a real **shell** (xterm.js in the session's
 folder) and the **live preview** of a web project. Broadcast (⇶, with 2 or 3
 panes) sends one prompt to every pane, handy for comparing models.

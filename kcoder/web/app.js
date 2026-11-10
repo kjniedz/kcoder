@@ -1790,6 +1790,17 @@ function toggleShellDrawer(el) {
   drawer.dataset.sid = sid; drawer.hidden = false;
   ensureShell(sid, $('.box', drawer));
 }
+function shellType(sid, line) {   // type a line into the session's shell once the pty is up (the drawer or the shell view opened it a moment ago)
+  const t0 = Date.now(); const tick = () => { const sh = state.shells.get(sid); if (sh && sh.open) { send('shell_input', { sid, data: btoa(unescape(encodeURIComponent(line + '\r'))) }); sh.term.focus(); return; } if (Date.now() - t0 < 8000) setTimeout(tick, 100); else toast('the shell did not open; type it yourself', 'err'); }; tick();
+}
+function remoteControl() {   // claude remote-control in this session's folder: the Mac shows up under Code in the Claude app and at claude.ai/code, for the same account
+  const comp = activeComposer(); const pane = comp && comp.form.closest('.pane, .cpane'); const sid = pane && pane.dataset.sid;
+  if (!sid) { toast('open a session first: remote control runs in its folder', 'err'); return; }
+  const drawer = $('.shell-drawer', pane); if (drawer && !(drawer.hidden === false && drawer.dataset.sid === sid) && !(pane.classList.contains('pane') && paneViewOf(sid) === 'shell')) toggleShellDrawer(comp.form);
+  const s = state.sessions.get(sid) || {}; const name = (s.title && s.title !== s.name ? s.title : s.name || 'kcoder').replace(/["\\$`]/g, '').slice(0, 60);
+  shellType(sid, `env -u ANTHROPIC_API_KEY claude remote-control --name "${name}"`);   // remote control needs the claude.ai login; a key in the daemon's env (the pty inherits it) would make claude refuse
+  toast('remote control: open the Claude app on your phone, Code, and pick this Mac', 'ok');
+}
 function closeShellDrawer(pane) {
   const drawer = $('.shell-drawer', pane); if (!drawer || drawer.hidden) return;
   closeShell(drawer.dataset.sid); drawer.hidden = true; drawer.innerHTML = ''; delete drawer.dataset.sid;
@@ -2876,6 +2887,7 @@ const SHORTCUTS = [
   { id: 'archive-idle', palette: 'archive idle chats', run: () => archiveIdle() },
   { id: 'voice', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { const comp = activeComposer(); if (comp) toggleVoice(comp); } },
   { id: 'shellhere', palette: 'terminal here (a shell in the session\'s folder, under the chat)', run: () => { const comp = activeComposer(); if (comp) toggleShellDrawer(comp.form); } },
+  { id: 'remote', palette: 'remote control (drive this folder from the Claude app on your phone)', run: remoteControl },
   { id: 'split', palette: 'split: add a pane', run: () => { toChat(); splitAdd(null); } },
   { id: 'zoom', palette: 'pop out / restore pane', run: () => { toChat(); toggleZoom(); } },
   { id: 'inbox', palette: 'approval inbox', run: () => openInbox() },
