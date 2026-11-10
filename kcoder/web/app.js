@@ -156,29 +156,55 @@ applyPhone();
 // ----------------------------------------------------------------------
 // connection
 // ----------------------------------------------------------------------
+// On a phone the page comes from the relay at /m/<install>/ (kcoder/phone.py, relay/): the live
+// connection goes through the relay to the Mac, and every frame is sealed with AES-GCM under the
+// key from the QR code (the URL fragment, which the relay never sees), so the relay carries bytes it
+// cannot read. The relay token, a hash of the key, is what lets the socket through.
+const RELAY = (() => { const m = location.pathname.match(/^(\/m\/([^/]+))\//); return m ? { base: m[1], install: m[2] } : null; })();
+const b64u = { enc: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), dec: (s) => { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); } };
+let phoneKey = null;
+async function phoneKeyImport() { const k = localStorage.getItem('kcoder.key'); if (!k) return null; if (!phoneKey) phoneKey = await crypto.subtle.importKey('raw', b64u.dec(k), 'AES-GCM', false, ['encrypt', 'decrypt']); return phoneKey; }
+async function relayToken() { const k = localStorage.getItem('kcoder.key'); if (!k) return ''; const raw = b64u.dec(k); const pre = new TextEncoder().encode('kcoder-relay-token'); const buf = new Uint8Array(pre.length + raw.length); buf.set(pre); buf.set(raw, pre.length); return b64u.enc(await crypto.subtle.digest('SHA-256', buf)); }
+async function seal(text) { const key = await phoneKeyImport(); const nonce = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, new TextEncoder().encode(text))); const out = new Uint8Array(12 + ct.length); out.set(nonce); out.set(ct, 12); return b64u.enc(out); }
+async function unseal(data) { const key = await phoneKeyImport(); const raw = b64u.dec(data); return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12) }, key, raw.slice(12))); }
 function readToken() {
   const m = location.hash.match(/token=([^&]+)/);
+  const k = location.hash.match(/key=([^&]+)/);
+  if (k) { localStorage.setItem('kcoder.key', decodeURIComponent(k[1])); phoneKey = null; }
   if (m) { localStorage.setItem('kcoder.token', decodeURIComponent(m[1])); history.replaceState(null, '', location.pathname + location.search); }
   return localStorage.getItem('kcoder.token');
 }
+// every frame to the daemon goes through here: plain on the Mac, sealed in order through the relay
+function wsSend(text) {
+  const ws = state.ws; if (!ws || ws.readyState !== 1) return;
+  if (!RELAY) { ws.send(text); return; }
+  state.txq = (state.txq || Promise.resolve()).then(() => seal(text)).then((d) => { if (ws.readyState === 1) ws.send(d); }).catch(() => {});
+}
 
-function connect() {
+async function connect() {
   state.token = readToken();
   if (!state.token) { tokenGate(); return; }
+  if (RELAY && !localStorage.getItem('kcoder.key')) { tokenGate('This phone is not paired with a Mac yet.'); return; }
   setConn('wait');
-  const ws = new WebSocket(`ws://${location.host}/ws`);
-  state.ws = ws;
+  let url = `ws://${location.host}/ws`;
+  if (RELAY) { try { await phoneKeyImport(); } catch (e) { tokenGate('The pairing key is not usable here: ' + e.message); return; } url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${RELAY.base}/ws?rt=${await relayToken()}`; }
+  const ws = new WebSocket(url);
+  state.ws = ws; state.txq = Promise.resolve(); state.rxq = Promise.resolve();
   ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'auth', token: state.token, id: 0 }));
+    wsSend(JSON.stringify({ type: 'auth', token: state.token, id: 0, via: RELAY ? 'phone' : undefined }));
   };
-  ws.onmessage = (e) => onFrame(JSON.parse(e.data));
+  ws.onmessage = (e) => {
+    if (!RELAY) { onFrame(JSON.parse(e.data)); return; }
+    state.rxq = state.rxq.then(() => unseal(e.data)).then((t) => { onFrame(JSON.parse(t)); }).catch((err) => { console.warn('frame', err); });   // unseal in order; onFrame is not awaited (it awaits replies of its own, which arrive through this chain)
+  };
   ws.onclose = (e) => {
-    state.connected = false; if (!state.downSince) state.downSince = Date.now(); setConn('off'); renderClaudeButton();
+    state.connected = false; if (!state.downSince) state.downSince = Date.now(); state.closeReason = e.code === 4404 ? 'offline' : e.code === 4401 ? 'key' : ''; setConn('off'); renderClaudeButton();
     for (const [, p] of state.pending) p.reject(new Error('disconnected'));
     state.pending.clear();
+    if (e.code === 4401 && RELAY) { localStorage.removeItem('kcoder.key'); tokenGate('The pairing changed on the Mac. Scan the QR code again (Settings › Phone on the Mac).'); return; }
     if (e.code === 4401) { localStorage.removeItem('kcoder.token'); tokenGate('That token was rejected.'); return; }
     maybeStartDaemon();
-    setTimeout(connect, 1500);
+    setTimeout(connect, RELAY ? 3000 : 1500);
   };
   ws.onerror = () => {};
 }
@@ -187,8 +213,8 @@ function setConn(s) {
   const el = $('#conn'); el.className = 'conn ' + (s === 'on' ? 'on' : s === 'wait' ? 'wait' : '');
   const native = !!(window.pywebview && window.pywebview.api);
   const downFor = state.downSince ? Date.now() - state.downSince : 0;
-  el.title = s === 'on' ? 'connected to kcoderd' : s === 'wait' && downFor < 4000 ? 'connecting to kcoderd…' : native ? 'kcoderd is not running - starting it…' : 'kcoderd is not running - run `kcoder app` (or `kcoder`) in a terminal';
-  const note = $('#status-down'); if (note) { note.hidden = s === 'on' || downFor < 4000; note.textContent = native ? 'kcoderd not running · starting it…' : 'kcoderd not running · run `kcoder app` in a terminal'; }
+  el.title = s === 'on' ? (RELAY ? 'connected to your Mac through the relay' : 'connected to kcoderd') : s === 'wait' && downFor < 4000 ? (RELAY ? 'connecting to your Mac…' : 'connecting to kcoderd…') : RELAY ? 'your Mac is offline, or kcoderd is not running there' : native ? 'kcoderd is not running - starting it…' : 'kcoderd is not running - run `kcoder app` (or `kcoder`) in a terminal';
+  const note = $('#status-down'); if (note) { note.hidden = s === 'on' || downFor < 4000; note.textContent = RELAY ? 'your Mac is offline · kcoderd keeps the relay connection while it runs' : native ? 'kcoderd not running · starting it…' : 'kcoderd not running · run `kcoder app` in a terminal'; }
   if (s === 'on') state.downSince = 0;
 }
 // The native window can start kcoderd itself (a browser tab cannot): after
@@ -206,7 +232,7 @@ function request(type, fields = {}) {
     if (!state.ws || state.ws.readyState !== 1) return reject(new Error('kcoderd is not running (the app reconnects as soon as it starts)'));
     const id = state.reqId++;
     state.pending.set(id, { resolve, reject: (e) => { if (/unknown request type/.test(e.message)) restartForMismatch('the running kcoderd does not know ' + type); reject(e); } });
-    state.ws.send(JSON.stringify({ type, id, ...fields }));
+    wsSend(JSON.stringify({ type, id, ...fields }));
   });
 }
 // app and daemon exchange versions on connect; when they differ (a new
@@ -227,7 +253,7 @@ function syncUiState() {
   clearTimeout(uiSyncTimer);
   uiSyncTimer = setTimeout(() => { if (state.connected) request('ui_state', { state: uiStateOut() }).catch(() => {}); }, 800);
 }
-function send(type, fields = {}) { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ type, ...fields })); }
+function send(type, fields = {}) { if (state.ws && state.ws.readyState === 1) wsSend(JSON.stringify({ type, ...fields })); }
 
 async function onFrame(msg) {
   if (msg.type === 'reply') {
@@ -706,6 +732,8 @@ function renderStatusBar() {
     `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'} today</button>`,
   ];
   const qm = quotaItemHtml(st.quota); if (qm) items.push(qm);
+  const ph = st.phone || {};
+  if (ph.enabled && !RELAY) items.push(`<button class="status-item${ph.connected ? '' : ' warn'}" data-phone="1" title="${ph.connected ? `the relay is connected · ${ph.phones || 0} phone${ph.phones === 1 ? '' : 's'} on now · click to pair or manage` : 'the relay is not connected · click for details'}">📱 ${ph.connected ? (ph.phones ? `${ph.phones} on` : 'ready') : 'off'}</button>`);
   const up = st.update || {};
   if (st.restarting) items.push(`<span class="status-item warn">restarting kcoderd…</span>`);
   else if (up.available) items.push(`<button class="status-item warn" data-upd="1" title="${esc((up.commits || []).join('\n'))}">${up.behind} new commit${up.behind === 1 ? '' : 's'}${up.failed ? ' · failed, rolled back' : ' · click to update'}</button>`);
@@ -2043,7 +2071,7 @@ function paletteItems() {
     ['unpin all sessions from this window', () => { state.pins = []; savePins(); renderHeader(); renderWall(); }],
     ['text font and size (settings)', () => settingsDialog()],
     ['density: comfortable / compact', async () => { const v = await chooseDialog('Density', [['comfortable', 'comfortable (default)'], ['compact', 'compact - tighter spacing, more on screen']]); if (v) { setDensity(v); toast('density: ' + v, 'ok'); } }],
-    ['phone approvals (pair, revoke, enable)', remoteDialog],
+    ['phone (pair a phone, notifications, the relay)', phoneDialog],
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
     ['set review policy (when the changes view must approve)', async () => { const v = await chooseDialog('Review required before…', [['push', 'push - PRs, pushes and merges need an approved review (default)'], ['commit', 'commit - every commit needs an approved review'], ['none', 'none - review is optional']]); if (v) { const r = await request('config', { review_required: v }); state.config = r.config; toast('review required before: ' + v, 'ok'); } }],
     ['check for new commits', checkUpdates], ['pull + rebuild + restart kcoderd', updateNow], ['restart kcoderd', restartDaemon],
@@ -2357,7 +2385,7 @@ async function settingsDialog() {
     ${chk('quota_shift', q.shift !== false, 'Quota shift', 'when the forecast says the weekly limit runs out before the reset, small turns in sessions on the plan default or pinned to the big model run on the cheaper tier (always shown in the status bar while active)')}`; })()}
     <label class="setting"><span>Daily spend cap (USD, 0 = none) <span class="help">sessions on paid API keys pause when today's spend reaches it</span></span><input type="number" min="0" step="1" data-set="daily_cap_usd" value="${Number((state.stats || {}).daily_cap_usd || 0)}"></label>
     <div class="label-h">accounts</div>
-    <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="remote">Phone approvals</button><button data-x="notif">Browser notifications</button></div>
+    <div class="links"><button data-x="claude">Claude plan</button><button data-x="setup">AI providers + GitHub</button><button data-x="phone">Phone</button><button data-x="notif">Browser notifications</button></div>
     <div class="label-h">keyboard</div>
     ${keysHtml()}
     <div class="label-h">kcoder</div>
@@ -2376,7 +2404,7 @@ async function settingsDialog() {
   d.addEventListener('click', (e) => {
     const b = e.target.closest('[data-x]'); if (!b) return;
     const x = b.dataset.x; closeDialog();
-    ({ claude: claudeDialog, setup: () => setupDialog(), remote: remoteDialog, notif: () => Notification.requestPermission().then((p) => toast('notifications: ' + p)),
+    ({ claude: claudeDialog, setup: () => setupDialog(), phone: phoneDialog, notif: () => Notification.requestPermission().then((p) => toast('notifications: ' + p)),
        update: checkUpdates, restart: restartDaemon, about: aboutDialog, uninstall: uninstallDialog, customize: customizeDialog }[x] || (() => {}))();
   });
 }
@@ -2719,31 +2747,70 @@ function renderPreviewPane(body, sid) {
   }
 }
 
-// ---- phone approvals ----
-async function remoteDialog() {
-  let r; try { r = await request('remote', { action: 'status' }); } catch (e) { toast(e.message, 'err'); return; }
-  const d = openDialog(`<h2>phone approvals<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body" id="rm-body"></div>`, 'remote');
-  const render = (res, pairing) => {
-    const st = res.remote || {};
-    $('#rm-body', d).innerHTML = `
-      <p class="help plain">Off by default. Your Mac never opens a port: kcoderd keeps one outbound connection to a relay you host (see <code>relay/README.md</code>). Paired phones get a push notification whenever a session waits for you and can approve or deny from a page that shows the command and a diff summary. Approvals expire after ${esc(res.ttl_minutes || 10)} minutes.</p>
-      ${st.enabled ? `<p>relay <code>${esc(st.relay)}</code> · ${st.connected ? '<b class="ok-t" style="color:var(--green)">connected</b>' : '<b style="color:var(--yellow)">not connected</b>'}${st.error ? ' · ' + esc(st.error) : ''}</p>
-        <div class="row"><button class="primary" data-x="pair">pair a phone</button><button data-x="disable" class="danger">disable + forget devices</button></div>
-        ${pairing ? `<div class="card" style="text-align:center"><div id="rm-qr"></div><p>scan on the phone, or open <code>${esc(pairing.url)}</code><br><span class="help">code ${esc(pairing.code)} · valid 5 minutes</span></p></div>` : ''}
-        <div class="label-h">paired devices</div>
-        ${(st.devices || []).length ? st.devices.map((v) => `<div class="row" style="align-items:center"><span><b>${esc(v.name)}</b> <span class="help">${v.push ? 'push on' : 'no push subscription'} · paired ${age(v.created)} ago</span></span><span class="spacer" style="flex:1"></span><button data-x="revoke" data-dev="${esc(v.id)}" class="danger">revoke</button></div>`).join('') : '<p class="help">none yet</p>'}`
-      : `<label>relay URL<input id="rm-relay" placeholder="https://kcoder-relay.you.workers.dev" value="${esc(st.relay || '')}"></label><div class="row"><button class="primary" data-x="enable">enable</button></div>`}`;
-    if (pairing && window.qrcode) { try { const q = qrcode(0, 'M'); q.addData(pairing.url); q.make(); $('#rm-qr', d).innerHTML = q.createSvgTag({ cellSize: 5, margin: 2 }); } catch (e) { $('#rm-qr', d).textContent = pairing.url; } }
+// ---- the phone: kcoder on a phone through a relay (kcoder/phone.py, relay/) ----
+async function phoneDialog() {
+  if (RELAY) return phoneHereDialog();
+  let r; try { r = await request('phone', { action: 'status' }); } catch (e) { toast(e.message, 'err'); return; }
+  const d = openDialog(`<h2>phone<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body" id="ph-body"></div>`, 'phone');
+  const render = (res) => {
+    const st = res.phone || {}; const url = res.pair_url;
+    $('#ph-body', d).innerHTML = `
+      <p class="help plain">kcoder on your phone, every session and all. Off by default. Your Mac opens no port: kcoderd keeps one outbound connection to a relay, the phone opens a page on the relay, and everything between them is sealed with a key that lives in the QR code and never reaches the relay. The phone needs nothing installed: scan, then add the page to the Home Screen.</p>
+      ${st.enabled ? `<p>relay <code>${esc(st.relay)}</code> · ${st.connected ? '<b style="color:var(--green)">connected</b>' : '<b style="color:var(--yellow)">not connected</b>'}${st.phones ? ` · ${st.phones} phone${st.phones === 1 ? '' : 's'} on now` : ''}${st.error ? ' · ' + esc(st.error) : ''}</p>
+        <div class="row"><button class="primary" data-x="pair">${url ? 'hide the QR code' : 'pair a phone'}</button><button data-x="test" title="a push notification to every phone that allowed them">test notification</button><span class="spacer" style="flex:1"></span><button data-x="rotate" class="danger" title="a new key: every phone has to scan again">new key</button><button data-x="disable" class="danger">turn off</button></div>
+        ${url ? `<div class="card" style="text-align:center"><div id="ph-qr"></div><p class="help">scan with the phone's camera, then Share › Add to Home Screen. The code holds the key: anyone who scans it can use your Mac as you, so show it to your own phone only.</p></div>` : ''}
+        <div class="label-h">phones with notifications on</div>
+        ${(st.devices || []).length ? st.devices.map((v) => `<div class="row" style="align-items:center"><span><b>${esc(v.name)}</b> <span class="help">${v.push ? 'push on' : 'no push'} · since ${age(v.created)} ago</span></span><span class="spacer" style="flex:1"></span><button data-x="revoke" data-dev="${esc(v.id)}" class="danger">forget</button></div>`).join('') : '<p class="help">none yet: on the phone, open Settings › Phone and allow notifications. A push arrives when a session asks for an approval or finishes while the app on this Mac is closed.</p>'}`
+      : `<label>relay URL <span class="help">the default is the relay Kyle hosts; or your own, deployed from relay/ in the kcoder repo</span><input id="ph-relay" placeholder="${esc(res.default_relay || '')}" value="${esc(st.relay || res.default_relay || '')}"></label><div class="row"><button class="primary" data-x="enable">turn on</button></div>`}`;
+    if (url && window.qrcode) { try { const q = qrcode(0, 'M'); q.addData(url); q.make(); $('#ph-qr', d).innerHTML = q.createSvgTag({ cellSize: 4, margin: 2 }); } catch (e) { $('#ph-qr', d).textContent = url; } }
   };
   render(r);
   d.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-x]'); if (!b) return;
     try {
       if (b.dataset.x === 'close') closeDialog();
-      else if (b.dataset.x === 'enable') { r = await request('remote', { action: 'enable', relay: $('#rm-relay', d).value.trim() }); toast('phone approvals enabled', 'ok'); render(r); }
-      else if (b.dataset.x === 'disable') { if (await confirmDialog('Disable phone approvals?', 'All paired devices are forgotten.')) { r = await request('remote', { action: 'disable' }); render(r); } }
-      else if (b.dataset.x === 'pair') { const p = await request('remote', { action: 'pair' }); render(p, p.pairing); }
-      else if (b.dataset.x === 'revoke') { r = await request('remote', { action: 'revoke', device: b.dataset.dev }); toast('device revoked', 'warn'); render(r); }
+      else if (b.dataset.x === 'enable') { r = await request('phone', { action: 'enable', relay: $('#ph-relay', d).value.trim() }); toast('the phone is on: scan the code', 'ok'); render(r); }
+      else if (b.dataset.x === 'disable') { if (await confirmDialog('Turn the phone off?', 'The Mac leaves the relay and every phone is forgotten.')) { r = await request('phone', { action: 'disable' }); render(r); } }
+      else if (b.dataset.x === 'pair') { if (r.pair_url) { r = { ...r, pair_url: null }; render(r); } else { r = await request('phone', { action: 'pair' }); render(r); } }
+      else if (b.dataset.x === 'rotate') { if (await confirmDialog('Make a new key?', 'Every phone paired so far is cut off until it scans the new code.')) { r = await request('phone', { action: 'rotate' }); toast('new key: scan again on every phone', 'warn'); render(r); } }
+      else if (b.dataset.x === 'revoke') { r = await request('phone', { action: 'revoke', device: b.dataset.dev }); toast('phone forgotten', 'warn'); render(r); }
+      else if (b.dataset.x === 'test') { const t = await request('phone', { action: 'test' }); toast(t.pushed ? `sent to ${t.pushed} phone${t.pushed === 1 ? '' : 's'}` : 'no phone has notifications on yet', t.pushed ? 'ok' : 'warn'); }
+    } catch (err) { toast(err.message, 'err'); }
+  });
+}
+// on the phone itself: notifications on or off, and forgetting the Mac
+async function phoneHereDialog() {
+  const d = openDialog(`<h2>this phone<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body" id="ph-body"></div>`, 'phone');
+  const dev = () => { let id = localStorage.getItem('kcoder.device'); if (!id) { id = b64u.enc(crypto.getRandomValues(new Uint8Array(9))).replace(/[-_]/g, 'x'); localStorage.setItem('kcoder.device', id); } return id; };
+  const render = async () => {
+    const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    let sub = null; try { const reg = await navigator.serviceWorker.getRegistration(RELAY.base + '/'); sub = reg ? await reg.pushManager.getSubscription() : null; } catch {}
+    $('#ph-body', d).innerHTML = `
+      <p>paired with <b>${esc(location.host)}</b> · ${state.connected ? '<b style="color:var(--green)">connected to your Mac</b>' : '<b style="color:var(--yellow)">your Mac is offline</b>'}</p>
+      <p class="help plain">Everything between this phone and the Mac is sealed with the key from the QR code; the relay only carries it.</p>
+      <div class="label-h">notifications</div>
+      <p class="help plain">${sub ? 'on: a push arrives when a session asks for an approval or finishes while the app on the Mac is closed.' : standalone ? 'off. Allow them and a push arrives when a session waits on you.' : 'iPhone delivers push only to a page added to the Home Screen: Share › Add to Home Screen, then open kcoder from there and allow notifications.'}</p>
+      <div class="row">${sub ? '<button data-x="unsub">turn notifications off</button>' : `<button class="primary" data-x="sub"${'Notification' in window && 'serviceWorker' in navigator ? '' : ' disabled'}>allow notifications</button>`}</div>
+      <div class="label-h">this phone</div>
+      <div class="row"><button data-x="forget" class="danger">forget this Mac</button><span class="help">clears the key and the token here; the Mac keeps running</span></div>`;
+  };
+  await render();
+  d.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-x]'); if (!b) return;
+    try {
+      if (b.dataset.x === 'close') closeDialog();
+      else if (b.dataset.x === 'sub') {
+        const reg = await navigator.serviceWorker.register(RELAY.base + '/sw.js', { scope: RELAY.base + '/' });
+        const perm = await Notification.requestPermission(); if (perm !== 'granted') { toast('notifications were not allowed', 'warn'); return; }
+        const v = await (await fetch('/vapid')).json(); if (!v.public) { toast('the relay has no push keys (VAPID_PUBLIC)', 'err'); return; }
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u.dec(v.public) });
+        const name = (navigator.userAgentData && navigator.userAgentData.platform) || (/iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad/.test(navigator.userAgent) ? 'iPad' : /Android/.test(navigator.userAgent) ? 'Android' : 'phone');
+        const r = await fetch(`/v1/installs/${RELAY.install}/devices`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Relay-Token': await relayToken() }, body: JSON.stringify({ id: dev(), name, subscription: sub.toJSON() }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
+        toast('notifications on', 'ok'); await render();
+      }
+      else if (b.dataset.x === 'unsub') { const reg = await navigator.serviceWorker.getRegistration(RELAY.base + '/'); const sub = reg && await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); toast('notifications off', 'warn'); await render(); }
+      else if (b.dataset.x === 'forget') { if (await confirmDialog('Forget this Mac?', 'The key and the token leave this phone. Scan the QR code to pair again.')) { localStorage.removeItem('kcoder.key'); localStorage.removeItem('kcoder.token'); location.reload(); } }
     } catch (err) { toast(err.message, 'err'); }
   });
 }
@@ -2789,6 +2856,7 @@ function uninstallDialog() {
 }
 
 function tokenGate(msg) {
+  if (RELAY) { $('#main').innerHTML = `<div class="token-gate"><p>${esc(msg || 'This phone is not paired with a Mac yet.')}</p><p>On the Mac, open kcoder, press ⌘K, pick <b>phone</b>, and scan the QR code with this phone. The code carries the key that seals everything between this phone and the Mac; the relay never sees it.</p></div>`; return; }
   $('#main').innerHTML = `<div class="token-gate"><p>${esc(msg || 'This page needs the daemon token.')}</p><p>Run <code>kcoder ui</code> in a terminal - it opens this page with the token attached - or paste the contents of <code>~/.local/share/kcoder/token</code>:</p><input id="tok" placeholder="token"><button class="primary" id="tok-go">connect</button></div>`;
   const go = () => { const v = $('#tok').value.trim(); if (v) { localStorage.setItem('kcoder.token', v); location.reload(); } };
   $('#tok-go').onclick = go; $('#tok').onkeydown = (e) => { if (e.key === 'Enter') go(); };
@@ -2946,6 +3014,7 @@ for (const b of $$('.views button')) b.addEventListener('click', () => (b.datase
 $('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
 $('#btn-search').addEventListener('click', () => openPalette());
+$('#status-items').addEventListener('click', (e) => { if (e.target.closest('[data-phone]')) phoneDialog(); });
 $('#brand').addEventListener('click', () => aboutDialog());
 // the search field is the command palette's front door: focusing it opens the palette with whatever was typed
 $('#omni').addEventListener('focus', () => { const o = $('#omni'); const q = o.value; o.value = ''; o.blur(); if (!state.dialog) openPalette(q); });

@@ -14,5 +14,6 @@ tag = "v1"
 new_sqlite_classes = ["Install"]
 
 [vars]
-VAPID_SUBJECT = "mailto:kcoder@example.com"
-# VAPID_PUBLIC (base64url, 65-byte uncompressed P-256 point) goes here; VAPID_PRIVATE is a secret
+VAPID_SUBJECT = "mailto:45904241+kjniedz@users.noreply.github.com"
+# the push public key (base64url, 65-byte uncompressed P-256 point); VAPID_PRIVATE is a secret (wrangler secret put)
+VAPID_PUBLIC = "BFy3YMmUDoPoRzjlNT0kiGKcC_Mg_oeqURDUy-6ahQqCt2ffYs4mC1jNZD-ySs7oMVkU7coLJk0H41UYxoMEZdo"

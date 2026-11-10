@@ -40,7 +40,7 @@ them in one window. Developed by Kyle Niedzwiecki.
 2. [First run](#first-run) (connect your Claude plan and GitHub)
 3. [The app](#the-app) (sessions, panes, inbox, tasks, stats, settings)
 4. [Working safely](#working-safely) (trust levels, review, checkpoints, secrets, plan-only billing)
-5. [Automation](#automation) (model routing, previews, phone approvals)
+5. [Automation](#automation) (model routing, previews, the phone)
 6. [The terminal client](#the-terminal-client)
 7. [Updates, uninstall, troubleshooting](#updates-uninstall-troubleshooting)
 8. [For developers](#for-developers)
@@ -281,9 +281,7 @@ app window the Mac's on-device speech recognition does the work (the audio
 never leaves the machine; the first use asks for microphone and speech
 recognition permission), biased towards your repo and branch names and
 common dev terms. In a browser tab the Web Speech API is used instead. On
-the phone approval page a tap on "say yes or no" listens for yes / approve
-/ allow or no / deny / decline and answers the request (the relay needs a
-redeploy once).
+the phone the same microphone button works in the browser.
 
 **Deploy status per repo.** A repo with a wrangler.toml / .json / .jsonc,
 a railway.json / .toml or a supabase/config.toml gets a deploy chip in its
@@ -513,7 +511,7 @@ error details, and an "approve all" button answers every approval at once.
 - **Settings** (⌘,): sound, default trust, model routing, effort, review
   policy, auto-publish, daily spend cap, the weekly plan limit (token
   limit, reset day and hour, quota shift), plus links to your Claude plan,
-  providers, GitHub and phone approvals, the short list of keyboard
+  providers, GitHub and the phone, the short list of keyboard
   shortcuts, updates, restart and uninstall. About (banner click, or the
   macOS menu) shows the version and credits, with buttons for settings and
   customize.
@@ -754,10 +752,22 @@ every rule it understood and what it does; the pane chip shows the count.
 - **Live preview**: for web projects the pane's ▶ view starts the dev server
   inside the session's worktree on its own port and shows it in the pane;
   PRs of web projects get desktop and mobile screenshots.
-- **Phone approvals**: opt-in. Your Mac opens no port; `kcoderd` keeps one
-  outbound connection to a small relay you host (`relay/`, a Cloudflare
-  Worker with Web Push). Pair a phone by scanning a QR code; approvals expire
-  after ten minutes; revoking a device is one click.
+- **The phone**: kcoder itself on your phone, every session and all, with
+  nothing to install there. Opt-in (Settings › Phone, or "phone" in the
+  palette). Your Mac opens no port: `kcoderd` keeps one outbound websocket
+  (the tunnel) to a relay (`relay/`, a Cloudflare Worker; the default is the
+  one Kyle hosts, or deploy your own), and the phone opens the relay's
+  `/m/<install>/` page, which is kcoder's own web app served through that
+  tunnel, in the phone layout. Pairing is a QR code whose URL fragment
+  carries the daemon token and a 256-bit key; every frame between the phone
+  and the Mac is sealed with AES-GCM under that key, and the relay only ever
+  sees the key's hash (the relay token a phone shows to be let through), so
+  it carries bytes it cannot read. "New key" cuts every phone off until it
+  scans again; "turn off" leaves the relay. On the phone, Settings › Phone
+  allows push notifications (on iPhone after Share › Add to Home Screen):
+  a push arrives when a session asks for an approval or finishes while the
+  app on the Mac is closed, and tapping it opens the inbox or the session.
+  The status bar on the Mac shows 📱 with how many phones are on.
 - **Daily spend cap**: sessions on paid API keys pause when today's spend
   reaches it. **Automatic handoff**: when a prompt reaches `compact_at`
   tokens (150k) the session writes a handoff summary (goal, what changed
@@ -902,7 +912,7 @@ The smoke test also runs in GitHub Actions on Windows and Linux
 | `kcoder/stats.py`, `kcoder/pricing.py` | Usage history, commit tracking, the stats view's numbers, API-equivalent estimates. |
 | `kcoder/updater.py`, `kcoder/setup.py`, `kcoder/app.py` | Git-based updates with rollback; first-run setup; the native window, Start Menu and macOS bundle. |
 | `kcoder/web/` | The browser app (vanilla JS; marked, highlight.js, xterm.js vendored). |
-| `relay/` | The phone-approval relay (Cloudflare Worker). |
+| `relay/`, `kcoder/phone.py` | The phone relay (a Cloudflare Worker) and the daemon's tunnel to it. |
 
 Daemon data lives in `~/.local/share/kcoder/` (`KCODER_DATA_DIR` overrides),
 config in `~/.config/kcoder/config.json`, the port defaults to `47321`

@@ -1,5 +1,8 @@
-// kcoder approval relay. See README.md. One Durable Object per kcoder install
-// holds its devices, pairing codes, open requests and the daemon's event stream.
+// kcoder phone relay. See README.md. One Durable Object per kcoder install holds the daemon's
+// tunnel (one outbound websocket from the Mac), the phones' websockets, the push subscriptions and
+// the version of the web app the Mac serves. The relay carries sealed bytes: every app frame between
+// a phone and its Mac is encrypted with a key the relay never sees (it rides in the QR code's URL
+// fragment); the relay only sees which install they belong to.
 import { b64u, sendPush } from "./push.js";
 import { ICON_32, ICON_180, ICON_192, ICON_512 } from "./icons.js";
 const png = (b64) => new Response(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
@@ -7,34 +10,22 @@ const png = (b64) => new Response(Uint8Array.from(atob(b64), (c) => c.charCodeAt
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extra } });
 const err = (msg, status) => json({ error: msg }, status);
 const rnd = (n) => b64u.enc(crypto.getRandomValues(new Uint8Array(n)));
-const code = () => { const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let s = ""; for (const b of crypto.getRandomValues(new Uint8Array(8))) s += a[b % a.length]; return s.slice(0, 4) + "-" + s.slice(4); };
-const html = (body, title = "kcoder") => new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0C0E12"><title>${title}</title><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="kcoder"><style>
-body{margin:0;background:#0C0E12;color:#D9E2EC;font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}main{max-width:640px;margin:0 auto;padding:18px}h1{color:#7FC5FF;font-size:18px;margin:0 0 12px}
-.card{background:#151D25;border:1px solid #2E4559;border-radius:10px;padding:14px;margin:12px 0}code,pre{background:#0C0E12;border:1px solid #2E4559;border-radius:6px;padding:8px;display:block;white-space:pre-wrap;word-break:break-word;font-size:13px;max-height:40vh;overflow:auto}
-button{font:inherit;padding:14px 18px;border-radius:10px;border:1px solid #2E4559;background:#151D25;color:#D9E2EC;width:100%;margin:6px 0;font-size:17px}button.ok{background:#1f6f45;border-color:#2f9f65}button.no{background:#7a2b2b;border-color:#a33}input{font:inherit;width:100%;box-sizing:border-box;padding:12px;border-radius:8px;border:1px solid #2E4559;background:#0C0E12;color:#D9E2EC}
-.dim{color:#8597AB;font-size:13px}.ok-t{color:#7ee787}.err{color:#ff7b72}.small{font-size:12px}
-</style></head><body><main>${body}</main></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY" } });
-
-const SW = `self.addEventListener('push', (e) => { const d = e.data ? e.data.json() : {}; e.waitUntil(self.registration.showNotification(d.title || 'kcoder', { body: d.body || '', tag: d.request_id || 'kcoder', data: d, requireInteraction: true, actions: [] })); });
-self.addEventListener('notificationclick', (e) => { e.notification.close(); const u = (e.notification.data && e.notification.data.url) || '/app'; e.waitUntil(clients.openWindow(u)); });
-self.addEventListener('install', () => self.skipWaiting()); self.addEventListener('activate', (e) => e.waitUntil(clients.claim()));`;
-
-const PAGE_JS = `
-const dev = JSON.parse(localStorage.getItem('kcoder.device') || 'null');
-async function api(method, path, body) { const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json', ...(dev ? { 'X-Device-Token': dev.token } : {}) }, body: body ? JSON.stringify(body) : undefined }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }
-async function subscribePush(vapid) { if (!('serviceWorker' in navigator) || !('PushManager' in window)) return 'push not supported in this browser'; const reg = await navigator.serviceWorker.register('/sw.js'); const perm = await Notification.requestPermission(); if (perm !== 'granted') return 'notifications not allowed'; const k = vapid.replace(/-/g, '+').replace(/_/g, '/'); const raw = Uint8Array.from(atob(k + '='.repeat((4 - k.length % 4) % 4)), c => c.charCodeAt(0)); const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw }); await api('POST', '/v1/installs/' + dev.install + '/devices/' + dev.id + '/subscription', { subscription: sub.toJSON() }); return 'ok'; }
-`;
+const HTTP_TIMEOUT = 25000;
+const PAGE_HEAD = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0C0E12"><title>kcoder</title><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><style>
+body{margin:0;background:#0C0E12;color:#D9E2EC;font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;display:flex;min-height:100vh;align-items:center;justify-content:center}main{max-width:420px;padding:24px;text-align:center}h1{color:#7FC5FF;font-size:18px;margin:0 0 12px}.dim{color:#8597AB;font-size:13px}button{font:inherit;padding:10px 18px;border-radius:8px;border:1px solid #2E4559;background:#151D25;color:#D9E2EC;margin-top:14px}
+</style></head><body><main>`;
+const page = (body, status = 200) => new Response(PAGE_HEAD + body + "</main></body></html>", { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY" } });
+const offline = (name) => page(`<h1>${name ? esc(name) : "your Mac"} is offline</h1><p class="dim">kcoderd keeps the connection to this relay while it runs. Start kcoder on the Mac (or wake it up) and this page reconnects on its own.</p><button onclick="location.reload()">try again</button><script>setTimeout(() => location.reload(), 8000)</script>`, 503);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const p = url.pathname;
     const seg = p.split("/").filter(Boolean);
-    if (p === "/sw.js") return new Response(SW, { headers: { "Content-Type": "application/javascript", "Cache-Control": "no-store" } });
-    if (p === "/manifest.webmanifest") return json({ name: "kcoder approvals", short_name: "kcoder", start_url: "/app", display: "standalone", background_color: "#0C0E12", theme_color: "#0C0E12", icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] }, 200, { "Content-Type": "application/manifest+json" });
+    if (p === "/apple-touch-icon.png") return png(ICON_180);
     if (p === "/icon-192.png") return png(ICON_192);
     if (p === "/icon-512.png") return png(ICON_512);
-    if (p === "/apple-touch-icon.png") return png(ICON_180);
     if (p === "/favicon-32.png" || p === "/favicon.ico") return png(ICON_32);
     if (p === "/" || p === "/health") return json({ ok: true, service: "kcoder-relay" });
     if (p === "/vapid") return json({ public: env.VAPID_PUBLIC || null });
@@ -44,58 +35,24 @@ export default {
       await stub.fetch("https://do/_init", { method: "POST", body: JSON.stringify({ id, token, name: (await req.json().catch(() => ({}))).name || "" }) });
       return json({ install_id: id, install_token: token });
     }
-    // daemon + device API on one install
-    if (seg[0] === "v1" && seg[1] === "installs" && seg[2]) {
-      const stub = env.INSTALLS.get(env.INSTALLS.idFromName(seg[2]));
-      return stub.fetch(req);
+    // the daemon's API and the phones' API on one install
+    if (seg[0] === "v1" && seg[1] === "installs" && seg[2]) return env.INSTALLS.get(env.INSTALLS.idFromName(seg[2])).fetch(req);
+    // the app itself, through the Mac: /m/<install>/ is kcoder's own web app served over the tunnel
+    if (seg[0] === "m" && seg[1]) {
+      if (seg.length === 2 && !p.endsWith("/")) return Response.redirect(url.origin + p + "/" + url.search + url.hash, 302);
+      return env.INSTALLS.get(env.INSTALLS.idFromName(seg[1])).fetch(req);
     }
-    if (seg[0] === "pair" && seg[1] && seg[2]) return html(pairPage(seg[1], seg[2], env.VAPID_PUBLIC || ""), "pair with kcoder");
-    if (seg[0] === "r" && seg[1] && seg[2]) return html(requestPage(seg[1], seg[2]), "kcoder approval");
-    if (p === "/app") return html(appPage(), "kcoder approvals");
     return err("not found", 404);
   },
 };
 
-function pairPage(install, code, vapid) {
-  return `<h1>pair this phone with kcoder</h1><div class="card"><p>Code <b>${code}</b>. Give this device a name, then allow notifications.</p><input id="name" placeholder="my phone" autocomplete="off"><button class="ok" id="go">pair</button><p id="msg" class="dim"></p></div>
-<script>${PAGE_JS}
-document.getElementById('go').onclick = async () => { const m = document.getElementById('msg'); try { const r = await api('POST', '/v1/installs/${install}/pair/${code}', { name: document.getElementById('name').value || 'phone' }); localStorage.setItem('kcoder.device', JSON.stringify({ id: r.device_id, token: r.device_token, install: '${install}' })); m.textContent = 'paired as ' + r.name + '. Setting up notifications…'; location.reload(); } catch (e) { m.textContent = e.message; m.className = 'err'; } };
-if (dev && dev.install === '${install}') { document.querySelector('.card').innerHTML = '<p class="ok-t">this phone is paired.</p><p id="msg" class="dim">enabling notifications…</p><button id="app">open approvals</button>'; document.getElementById('app').onclick = () => location.href = '/app'; subscribePush('${vapid}').then((s) => { document.getElementById('msg').textContent = s === 'ok' ? 'notifications on. On iPhone, add this page to the Home Screen to receive them.' : s; }); }
-</script>`;
-}
-
-function requestPage(install, rid) {
-  return `<h1>kcoder wants to run</h1><div class="card" id="box"><p class="dim">loading…</p></div>
-<script>${PAGE_JS}
-const box = document.getElementById('box');
-async function load() { if (!dev) { box.innerHTML = '<p class="err">this phone is not paired. Scan the QR code in kcoder first.</p>'; return; } try { const r = await api('GET', '/v1/installs/${install}/requests/${rid}'); render(r); } catch (e) { box.innerHTML = '<p class="err">' + e.message + '</p>'; } }
-function render(r) { const left = Math.max(0, Math.round((r.expires_at * 1000 - Date.now()) / 1000)); box.innerHTML = '<p><b>' + esc(r.session) + '</b> · ' + esc(r.title) + '</p><code>' + esc(r.command || '') + '</code>' + (r.diff ? '<p class="dim small">changes so far</p><pre>' + esc(r.diff) + '</pre>' : '') + (r.status !== 'pending' ? '<p class="dim">already ' + esc(r.status) + '</p>' : left <= 0 ? '<p class="err">expired</p>' : '<button class="ok" id="ok">approve</button><button class="no" id="no">deny</button> + '<p id="voice" class="dim small" onclick="voice()" style="cursor:pointer;margin-top:10px">🎤 say yes or no</p>'<p class="dim">expires in ' + left + 's</p>'); const ok = document.getElementById('ok'), no = document.getElementById('no'); if (ok) ok.onclick = () => decide(true); if (no) no.onclick = () => decide(false); }
-async function decide(approved) { if (window._rec) { try { window._rec.stop(); } catch (e) {} } try { const r = await api('POST', '/v1/installs/${install}/requests/${rid}/decision', { approved }); box.innerHTML = '<p class="ok-t">' + (approved ? 'approved' : 'denied') + ' · sent to your Mac</p>'; } catch (e) { box.innerHTML = '<p class="err">' + e.message + '</p>'; } }
-// voice: say "yes" / "approve" / "allow" or "no" / "deny" / "decline"
-function voice() { const SR = window.SpeechRecognition || window.webkitSpeechRecognition; const el = document.getElementById('voice'); if (!SR) { el.textContent = 'voice is not available in this browser'; return; }
-  if (window._rec) { window._rec.stop(); return; }
-  const rec = new SR(); rec.lang = navigator.language || 'en-US'; rec.interimResults = false; rec.continuous = false; window._rec = rec; el.textContent = 'listening… say yes or no'; el.classList.add('on');
-  rec.onresult = (e) => { const t = Array.from(e.results).map((r) => r[0].transcript).join(' ').toLowerCase(); el.textContent = 'heard: ' + t; if (/\b(yes|yeah|yep|approve|approved|allow|ok|okay|go ahead)\b/.test(t)) decide(true); else if (/\b(no|nope|deny|denied|decline|declined|stop|don't|do not)\b/.test(t)) decide(false); else el.textContent = 'heard "' + t + '" - say yes or no'; };
-  rec.onerror = (e) => { el.textContent = e.error === 'not-allowed' ? 'microphone access was refused' : 'voice: ' + e.error; };
-  rec.onend = () => { window._rec = null; el.classList.remove('on'); if (el.textContent.startsWith('listening')) el.textContent = '🎤 say yes or no'; };
-  try { rec.start(); } catch (e) { el.textContent = 'voice could not start'; window._rec = null; } }
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-load();
-</script>`;
-}
-
-function appPage() {
-  return `<h1>kcoder approvals</h1><div class="card" id="box"><p class="dim">loading…</p></div>
-<script>${PAGE_JS}
-const box = document.getElementById('box');
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
-async function load() { if (!dev) { box.innerHTML = '<p class="err">this phone is not paired. Scan the QR code in kcoder (⌘K → phone approvals).</p>'; return; } try { const r = await api('GET', '/v1/installs/' + dev.install + '/requests'); box.innerHTML = r.requests.length ? r.requests.map((q) => '<p><a style="color:#7FC5FF" href="/r/' + dev.install + '/' + q.id + '"><b>' + esc(q.session) + '</b> · ' + esc(q.title) + '</a><br><span class="dim small">' + esc(q.command || '').slice(0, 120) + '</span></p>').join('') : '<p class="dim">nothing waiting for you.</p>'; } catch (e) { box.innerHTML = '<p class="err">' + e.message + '</p>'; } }
-load(); setInterval(load, 5000);
-</script>`;
-}
-
 export class Install {
-  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.streams = new Set(); }
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.pending = new Map(); this.parts = new Map(); }
+
+  daemon() { const l = this.ctx.getWebSockets("daemon"); return l.length ? l[l.length - 1] : null; }
+  phones() { return this.ctx.getWebSockets("phone"); }
+  phoneByCh(ch) { for (const ws of this.phones()) { const a = ws.deserializeAttachment(); if (a && a.ch === ch) return ws; } return null; }
+  toDaemon(obj) { const d = this.daemon(); if (!d) return false; try { d.send(JSON.stringify(obj)); return true; } catch { return false; } }
 
   async fetch(req) {
     const url = new URL(req.url);
@@ -106,104 +63,132 @@ export class Install {
       await this.ctx.storage.put("meta", { id: d.id, token: d.token, name: d.name, created: Date.now() });
       return json({ ok: true });
     }
-    if (!meta) return err("unknown install", 404);
+    if (!meta) return seg[0] === "m" ? page("<h1>unknown install</h1><p class=dim>this link belongs to no Mac on this relay. Pair again from kcoder's phone dialog.</p>", 404) : err("unknown install", 404);
+    const rt = await this.ctx.storage.get("rt");
+
+    // ---- the app, for phones: /m/<id>/ws is the live connection, anything else a file from the Mac
+    if (seg[0] === "m") {
+      const rest = "/" + seg.slice(2).join("/");
+      if (rest === "/ws") {
+        if (req.headers.get("Upgrade") !== "websocket") return err("websocket only", 400);
+        if (!rt || url.searchParams.get("rt") !== rt) return err("this phone is not paired with this Mac (scan the QR code again)", 401);
+        const pair = new WebSocketPair(); const [client, server] = Object.values(pair);
+        const ch = rnd(6);
+        this.ctx.acceptWebSocket(server, ["phone"]);
+        server.serializeAttachment({ ch, since: Date.now() });
+        if (!this.toDaemon({ op: "open", ch })) { server.close(4404, "your Mac is offline"); }
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (req.method !== "GET") return err("not found", 404);
+      if (!this.daemon()) return offline(meta.name);
+      const path = rest + (url.search || "");
+      const version = (await this.ctx.storage.get("version")) || "0";
+      const cacheable = !rest.startsWith("/uploads/") && rest !== "/" && !rest.endsWith(".html") && !rest.endsWith("sw.js");
+      const cacheKey = new Request(`${url.origin}/_cache/${meta.id}/${version}${rest}`);
+      let cache = null;
+      try { cache = caches.default; } catch { cache = null; }
+      if (cacheable && cache) { const hit = await cache.match(cacheKey); if (hit) return hit; }
+      const r = await this.tunnelHttp(path);
+      if (!r) return offline(meta.name);
+      const headers = { "Content-Type": r.ctype || "application/octet-stream", "Cache-Control": cacheable ? "public, max-age=3600" : "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer" };
+      if (rest === "/" || rest.endsWith(".html")) headers["Content-Security-Policy"] = "frame-ancestors 'none'";
+      const resp = new Response(r.body, { status: r.status || 200, headers });
+      if (cacheable && cache && r.status === 200) { try { await cache.put(cacheKey, resp.clone()); } catch {} }
+      return resp;
+    }
+
     const rest = seg.slice(3);     // after v1/installs/:id
     const bearer = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
     const isDaemon = bearer && bearer === meta.token;
-    const devToken = req.headers.get("X-Device-Token") || "";
-    const device = devToken ? await this.deviceByToken(devToken) : null;
+    const phoneOk = rt && req.headers.get("X-Relay-Token") === rt;
 
-    // ---- phone: pairing (no auth)
-    if (rest[0] === "pair" && rest[1] && req.method === "POST") {
-      const key = `pairing:${rest[1]}`;
-      const pr = await this.ctx.storage.get(key);
-      if (!pr || pr.expires < Date.now()) return err("pairing code expired or unknown", 410);
-      await this.ctx.storage.delete(key);
-      const body = await req.json().catch(() => ({}));
-      const dev = { id: rnd(9).replace(/[-_]/g, "x"), token: rnd(32), name: String(body.name || "phone").slice(0, 60), created: Date.now(), subscription: null };
-      await this.ctx.storage.put(`device:${dev.id}`, dev);
-      return json({ device_id: dev.id, device_token: dev.token, name: dev.name, install_id: meta.id });
-    }
-    // ---- phone: subscription, requests, decisions
-    if (rest[0] === "devices" && rest[1] && rest[2] === "subscription" && req.method === "POST") {
-      if (!device || device.id !== rest[1]) return err("unknown device", 401);
+    // ---- phones: push subscriptions (a phone proves itself with the relay token derived from the pairing key)
+    if (rest[0] === "devices" && req.method === "POST" && !isDaemon) {
+      if (!phoneOk) return err("this phone is not paired with this Mac", 401);
       const b = await req.json().catch(() => ({}));
-      device.subscription = b.subscription || null; device.last_seen = Date.now();
-      await this.ctx.storage.put(`device:${device.id}`, device);
-      return json({ ok: true });
+      const id = String(b.id || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 24) || rnd(9).replace(/[-_]/g, "x");
+      const old = (await this.ctx.storage.get(`device:${id}`)) || { id, created: Date.now() };
+      const dev = { ...old, name: String(b.name || old.name || "phone").slice(0, 60), subscription: b.subscription || old.subscription || null, last_seen: Date.now() };
+      await this.ctx.storage.put(`device:${id}`, dev);
+      return json({ ok: true, id, push: !!dev.subscription, vapid: this.env.VAPID_PUBLIC || null });
     }
-    if (rest[0] === "requests" && !isDaemon) {
-      if (!device) return err("unknown device", 401);
-      if (!rest[1] && req.method === "GET") {
-        const all = await this.ctx.storage.list({ prefix: "request:" });
-        const now = Date.now() / 1000;
-        return json({ requests: [...all.values()].filter((r) => r.status === "pending" && r.expires_at > now).map(this.publicRequest) });
-      }
-      const r = await this.ctx.storage.get(`request:${rest[1]}`);
-      if (!r) return err("no such request", 404);
-      if (req.method === "GET") return json(this.publicRequest(r));
-      if (rest[2] === "decision" && req.method === "POST") {
-        if (r.status !== "pending") return err(`already ${r.status}`, 409);
-        if (r.expires_at < Date.now() / 1000) { r.status = "expired"; await this.ctx.storage.put(`request:${r.id}`, r); return err("this request has expired", 410); }
-        const b = await req.json().catch(() => ({}));
-        r.status = b.approved ? "approved" : "denied"; r.decided_by = device.name; r.decided_at = Date.now() / 1000;
-        await this.ctx.storage.put(`request:${r.id}`, r);
-        this.broadcast({ type: "decision", request_id: r.id, approved: !!b.approved, device: { id: device.id, name: device.name } });
-        return json({ ok: true, status: r.status });
-      }
-      return err("not found", 404);
-    }
-    // ---- daemon
+    // ---- the daemon
     if (!isDaemon) return err("unauthorized", 401);
-    if (rest.length === 0 && req.method === "DELETE") { await this.ctx.storage.deleteAll(); for (const s of this.streams) { try { s.close(); } catch {} } return json({ ok: true }); }
-    if (rest[0] === "pairings" && req.method === "POST") {
-      const c = code();
-      await this.ctx.storage.put(`pairing:${c}`, { expires: Date.now() + 5 * 60 * 1000 });
-      return json({ code: c, expires: Date.now() / 1000 + 300, path: `/pair/${meta.id}/${c}` });
+    if (rest[0] === "tunnel") {
+      if (req.headers.get("Upgrade") !== "websocket") return err("websocket only", 400);
+      for (const old of this.ctx.getWebSockets("daemon")) { try { old.close(4409, "replaced by a newer connection"); } catch {} }
+      const pair = new WebSocketPair(); const [client, server] = Object.values(pair);
+      this.ctx.acceptWebSocket(server, ["daemon"]);
+      server.serializeAttachment({ daemon: true, since: Date.now() });
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    if (rest.length === 0 && req.method === "DELETE") { await this.ctx.storage.deleteAll(); for (const ws of [...this.phones(), ...this.ctx.getWebSockets("daemon")]) { try { ws.close(4410, "this Mac left the relay"); } catch {} } return json({ ok: true }); }
+    if (rest[0] === "key" && req.method === "POST") {   // a new pairing key: its relay token replaces the old one, so every phone paired before has to scan again
+      const b = await req.json().catch(() => ({}));
+      if (!b.rt || String(b.rt).length < 20) return err("bad relay token", 400);
+      await this.ctx.storage.put("rt", String(b.rt));
+      if (b.version) await this.ctx.storage.put("version", String(b.version));
+      for (const ws of this.phones()) { try { ws.close(4401, "the pairing key changed: scan the QR code again"); } catch {} }
+      const all = await this.ctx.storage.list({ prefix: "device:" });
+      for (const k of all.keys()) await this.ctx.storage.delete(k);
+      return json({ ok: true });
     }
     if (rest[0] === "devices" && req.method === "GET") {
       const all = await this.ctx.storage.list({ prefix: "device:" });
       return json({ devices: [...all.values()].map((d) => ({ id: d.id, name: d.name, created: d.created / 1000, push: !!d.subscription, last_seen: (d.last_seen || 0) / 1000 })) });
     }
     if (rest[0] === "devices" && rest[1] && req.method === "DELETE") { await this.ctx.storage.delete(`device:${rest[1]}`); return json({ ok: true }); }
-    if (rest[0] === "requests" && req.method === "POST") {
-      const b = await req.json().catch(() => null);
-      if (!b || !b.id) return err("bad request", 400);
-      const r = { id: String(b.id), session: String(b.session || ""), title: String(b.title || "approve?").slice(0, 200), command: String(b.command || "").slice(0, 4000),
-                  diff: String(b.diff || "").slice(0, 6000), expires_at: Number(b.expires_at) || Date.now() / 1000 + 600, status: "pending", created: Date.now() / 1000 };
-      await this.ctx.storage.put(`request:${r.id}`, r);
-      await this.ctx.storage.setAlarm(Date.now() + 60 * 60 * 1000);
-      const pushed = await this.push({ title: `kcoder: ${r.session}`, body: (r.command || r.title).slice(0, 140), request_id: r.id, url: `/r/${meta.id}/${r.id}` });
+    if (rest[0] === "status" && req.method === "GET") {
+      const all = await this.ctx.storage.list({ prefix: "device:" });
+      return json({ tunnel: !!this.daemon(), phones: this.phones().length, devices: [...all.values()].map((d) => ({ id: d.id, name: d.name, created: d.created / 1000, push: !!d.subscription, last_seen: (d.last_seen || 0) / 1000 })), paired: !!rt, version: (await this.ctx.storage.get("version")) || null });
+    }
+    if (rest[0] === "push" && req.method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const pushed = await this.push({ title: String(b.title || "kcoder").slice(0, 120), body: String(b.body || "").slice(0, 240), tag: String(b.tag || "kcoder").slice(0, 60), url: `/m/${meta.id}/${String(b.url || "").replace(/^\/+/, "")}` });
       return json({ ok: true, pushed });
-    }
-    if (rest[0] === "requests" && rest[1] && rest[2] === "resolve" && req.method === "POST") {
-      const r = await this.ctx.storage.get(`request:${rest[1]}`);
-      if (r && r.status === "pending") { r.status = (await req.json().catch(() => ({}))).outcome || "resolved"; await this.ctx.storage.put(`request:${r.id}`, r); }
-      return json({ ok: true });
-    }
-    if (rest[0] === "events" && req.method === "GET") {
-      const { readable, writable } = new TransformStream();
-      const w = writable.getWriter();
-      this.streams.add(w);
-      w.write(new TextEncoder().encode(`: connected\n\n`));
-      const ping = setInterval(() => { w.write(new TextEncoder().encode(`: ping\n\n`)).catch(() => { clearInterval(ping); this.streams.delete(w); }); }, 25000);
-      return new Response(readable, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" } });
     }
     return err("not found", 404);
   }
 
-  publicRequest(r) { return { id: r.id, session: r.session, title: r.title, command: r.command, diff: r.diff, expires_at: r.expires_at, status: r.status }; }
-
-  async deviceByToken(token) {
-    const all = await this.ctx.storage.list({ prefix: "device:" });
-    for (const d of all.values()) if (d.token === token) return d;
-    return null;
+  // ---- a file from the Mac: ask over the tunnel, assemble the chunks, time out if the Mac goes quiet
+  tunnelHttp(path) {
+    return new Promise((resolve) => {
+      const id = rnd(8);
+      const timer = setTimeout(() => { this.pending.delete(id); this.parts.delete(id); resolve(null); }, HTTP_TIMEOUT);
+      this.pending.set(id, { resolve, timer });
+      if (!this.toDaemon({ op: "http", id, path })) { clearTimeout(timer); this.pending.delete(id); resolve(null); }
+    });
   }
 
-  broadcast(ev) {
-    const data = new TextEncoder().encode(`data: ${JSON.stringify(ev)}\n\n`);
-    for (const w of [...this.streams]) w.write(data).catch(() => this.streams.delete(w));
+  async webSocketMessage(ws, msg) {
+    const a = ws.deserializeAttachment() || {};
+    if (a.daemon) {
+      let m; try { m = JSON.parse(typeof msg === "string" ? msg : new TextDecoder().decode(msg)); } catch { return; }
+      if (m.op === "hello") { if (m.version) await this.ctx.storage.put("version", String(m.version)); for (const p of this.phones()) { const pa = p.deserializeAttachment(); if (pa && pa.ch) this.toDaemon({ op: "open", ch: pa.ch }); } return; }   // phones that waited through a reconnect get their channels back
+      if (m.op === "msg") { const p = this.phoneByCh(m.ch); if (p) { try { p.send(m.data); } catch {} } else this.toDaemon({ op: "close", ch: m.ch }); return; }
+      if (m.op === "close") { const p = this.phoneByCh(m.ch); if (p) { try { p.close(m.code || 1000, m.reason || ""); } catch {} } return; }
+      if (m.op === "http") {
+        const pend = this.pending.get(m.id); if (!pend) return;
+        const parts = this.parts.get(m.id) || []; parts.push(m.body || ""); this.parts.set(m.id, parts);
+        if (m.more) return;
+        clearTimeout(pend.timer); this.pending.delete(m.id); this.parts.delete(m.id);
+        pend.resolve({ status: m.status, ctype: m.ctype, body: b64u.dec(parts.join("")) });
+        return;
+      }
+      if (m.op === "ping") { try { ws.send(JSON.stringify({ op: "pong" })); } catch {} }
+      return;
+    }
+    if (a.ch) {   // a phone's sealed frame goes to the Mac as is
+      if (!this.toDaemon({ op: "msg", ch: a.ch, data: typeof msg === "string" ? msg : b64u.enc(msg) })) { try { ws.close(4404, "your Mac is offline"); } catch {} }
+    }
   }
+
+  async webSocketClose(ws, code, reason) {
+    const a = ws.deserializeAttachment() || {};
+    if (a.daemon) { for (const p of this.phones()) { try { p.close(4404, "your Mac went offline"); } catch {} } for (const [, pend] of this.pending) { clearTimeout(pend.timer); pend.resolve(null); } this.pending.clear(); this.parts.clear(); }
+    else if (a.ch) this.toDaemon({ op: "close", ch: a.ch });
+  }
+  async webSocketError(ws, e) { return this.webSocketClose(ws, 1011, String(e)); }
 
   async push(payload) {
     if (!this.env.VAPID_PRIVATE || !this.env.VAPID_PUBLIC) return 0;
@@ -217,11 +202,5 @@ export class Install {
       } catch (e) { /* one bad device must not block the rest */ }
     }
     return n;
-  }
-
-  async alarm() {   // drop requests that expired more than an hour ago
-    const all = await this.ctx.storage.list({ prefix: "request:" });
-    const now = Date.now() / 1000;
-    for (const [k, r] of all) if (r.expires_at < now - 3600) await this.ctx.storage.delete(k);
   }
 }

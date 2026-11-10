@@ -27,6 +27,7 @@ import asyncio
 import base64
 import collections
 import datetime as dt
+import hashlib
 import http
 import json
 import logging
@@ -42,6 +43,7 @@ import sys
 import threading
 import time
 import uuid
+from types import SimpleNamespace
 
 from websockets.asyncio.server import serve, unix_serve
 from websockets.datastructures import Headers
@@ -51,7 +53,7 @@ from . import __version__, auth, chatlog, compat, conditions, config, identity, 
 from . import checkpoints, hooks, review, routing
 from . import pr as prmod
 from . import preview as previewmod
-from . import remote as remotemod
+from . import phone as phonemod
 from . import schedules as schedmod
 from . import secrets as secretsmod
 from . import tasks as tasksmod
@@ -226,6 +228,7 @@ class Client:
         self.ws = ws
         self.subs: set = set()
         self.all = False
+        self.phone = False      # connected through the phone relay
         self.queue: asyncio.Queue = asyncio.Queue()
 
     def wants(self, sid: str) -> bool:
@@ -247,7 +250,7 @@ class Manager:
         self.restarting = False
         self.tasks = tasksmod.TaskQueue()
         self.schedules = schedmod.Schedules()
-        self.remote = remotemod.Remote(self._remote_decision_threadsafe, log.info)
+        self.phone: phonemod.Phone | None = None   # set in main once the token and the listener exist
 
     # -- lifecycle -----------------------------------------------------
 
@@ -255,8 +258,6 @@ class Manager:
         paths.ensure_data_dir()
         self.cfg = config.load()
         self._load_today()
-        if self.remote.enabled():
-            self.remote.start()
         for sid in sorted(os.listdir(paths.SESSIONS_DIR)):
             sdir = session_dir(sid)
             meta_path = os.path.join(sdir, "meta.json")
@@ -395,6 +396,7 @@ class Manager:
             "idle": by_status.get("idle", 0),
             "error": by_status.get("error", 0),
             "pending_approvals": pending,
+            "phone": {"enabled": bool(self.phone and self.phone.enabled()), "connected": bool(self.phone and self.phone.connected), "phones": self.phone.phones if self.phone else 0},
             "today": dict(self.today),
             **self._header_stats(),
             "daily_cap_usd": self.daily_cap(),
@@ -579,8 +581,6 @@ class Manager:
                 session.meta["tool_grants"] = grants[-20:]
         self._record(session, {"t": "approval_result", "ts": time.time(), "id": pr["rid"], "approved": bool(approved)})
         self._record(session, {"t": "system", "ts": time.time(), "text": (f"connector: {pr['description'][:120]} " if verb == "connector" else f"review: {verb} ") + ('approved' if approved else 'declined') + (f" ({reason})" if reason else "")})
-        if self.remote.enabled():
-            self.loop.run_in_executor(None, self.remote.resolve, pr["rid"], "approved" if approved else "denied")
         fut = pr.get("future")
         if fut is not None and not fut.done():
             fut.set_result({"approved": bool(approved), "reason": reason})
@@ -698,30 +698,16 @@ class Manager:
 
     # -- remote approvals ------------------------------------------------
 
-    def _remote_decision_threadsafe(self, request_id: str, approved: bool, device: dict) -> None:
-        self.loop.call_soon_threadsafe(self._remote_decision, request_id, approved, device)
+    def local_clients(self) -> int:
+        """Apps connected on this machine (not through the phone relay)."""
+        return sum(1 for c in self.clients if not c.phone)
 
-    def _remote_decision(self, request_id: str, approved: bool, device: dict) -> None:
-        for session in self.sessions.values():
-            if session.engine.pending_approval() == request_id:
-                if session.engine.approve(request_id, approved):
-                    self._record(session, {"t": "system", "ts": time.time(),
-                                           "text": f"{'approved' if approved else 'denied'} from phone {device.get('name') or ''}".strip()})
-                return
-        log.info("remote decision for %s arrived too late or for an unknown request", request_id)
-
-    def _remote_notify(self, session: Session, event: dict) -> None:
-        """Runs in a worker thread: tell the relay about a pending approval."""
-        try:
-            ttl = float((self.cfg.get("remote") or {}).get("ttl_minutes") or 10) * 60
-            diff = ""
-            info = session.meta.get("worktree")
-            if info and wt.is_attached(info):
-                diff = subprocess.run(["git", "-C", info["path"], "diff", "--stat", "HEAD"], capture_output=True, text=True, timeout=10).stdout[-1500:]
-            self.remote.post_request({"id": event["id"], "session": session.meta["name"], "title": f"wants to run {event.get('name')}",
-                                      "command": event.get("description") or "", "diff": diff, "expires_at": time.time() + ttl})
-        except Exception as exc:  # noqa: BLE001
-            log.warning("remote notify failed: %s", exc)
+    def phone_push(self, title: str, body: str, url: str = "", tag: str = "kcoder") -> None:
+        """A push notification to the paired phones, when the Mac's own app is not open: with
+        kcoder open on the desk the toast and the inbox already say it; away, the phone should."""
+        if self.phone is None or not self.phone.enabled() or self.local_clients():
+            return
+        self.loop.run_in_executor(None, self.phone.push, title, body[:240], url, tag)
 
     def notify(self, title: str, body: str, sid: str | None = None) -> None:
         """Desktop notification + a toast in every connected app."""
@@ -735,7 +721,8 @@ class Manager:
         for session in self.sessions.values():
             if session.preview is not None:
                 session.preview.stop()
-        self.remote.stop()
+        if self.phone is not None:
+            self.phone.stop()
         busy = [s for s in self.sessions.values() if s.engine.busy]
         for session in busy:
             # come back paused, with the turn's text ready to resend
@@ -1309,10 +1296,8 @@ class Manager:
         elif t == "fallback":
             session.meta["fallback"] = None if event.get("restored") else {
                 "provider": event.get("provider"), "model": event.get("model"), "since": event.get("since"), "reason": event.get("reason")}
-        elif t == "approval_request" and self.remote.enabled():
-            self.loop.run_in_executor(None, self._remote_notify, session, event)
-        elif t == "approval_result" and self.remote.enabled():
-            self.loop.run_in_executor(None, self.remote.resolve, event.get("id"), "approved" if event.get("approved") else "denied")
+        elif t == "approval_request":
+            self.phone_push(f"{session.meta['name']} asks to run {event.get('name') or 'a tool'}", event.get("description") or "", "?open=inbox", f"approval:{event.get('id')}")
         elif t == "turn_start":
             session.meta["last_model"] = event.get("model")
             if event.get("shifted_from"):
@@ -1330,6 +1315,7 @@ class Manager:
             session.meta.pop("turn_pid", None)
             session.meta.setdefault("usage", {}).setdefault("turns", 0)
             session.meta["usage"]["turns"] += 1
+            self.phone_push(f"{session.meta['name']} finished", (session.meta.get("title") or "the turn is done")[:200], f"?sid={session.id}&focus=1", f"done:{session.id}")
             if hasattr(session.engine.backend, "session_id"):
                 session.meta["claude_session"] = session.engine.backend.session_id
             session.save_messages()
@@ -2150,24 +2136,31 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             raise RequestError(f"unknown schedules action: {action}")
         return {"schedules": list(S.items)}
 
-    if t == "remote":
+    if t in ("phone", "remote"):
         action = req.get("action") or "status"
-        R = manager.remote
+        P = manager.phone
+        if P is None:
+            raise RequestError("the phone is not available yet")
         loop = asyncio.get_running_loop()
         try:
             if action == "enable":
-                st = await loop.run_in_executor(None, R.enable, str(req.get("relay") or ""))
-                return {"remote": st}
+                st = await loop.run_in_executor(None, P.enable, str(req.get("relay") or ""))
+                return {"phone": st, "pair_url": P.pair_url()}
             if action == "disable":
-                await loop.run_in_executor(None, R.disable)
-                return {"remote": R.status()}
+                await loop.run_in_executor(None, P.disable)
+                return {"phone": P.status()}
+            if action == "rotate":
+                st = await loop.run_in_executor(None, P.rotate)
+                return {"phone": st, "pair_url": P.pair_url()}
             if action == "pair":
-                return {"pairing": await loop.run_in_executor(None, R.pair), "remote": R.status()}
+                return {"phone": await loop.run_in_executor(None, P.status), "pair_url": P.pair_url()}
             if action == "revoke":
-                await loop.run_in_executor(None, R.revoke, str(req.get("device") or ""))
-            return {"remote": await loop.run_in_executor(None, R.status),
-                    "ttl_minutes": (manager.cfg.get("remote") or {}).get("ttl_minutes", 10)}
-        except remotemod.RemoteError as exc:
+                await loop.run_in_executor(None, P.revoke, str(req.get("device") or ""))
+            if action == "test":
+                n = await loop.run_in_executor(None, P.push, "kcoder", "a test notification from your Mac", "", "test")
+                return {"pushed": n, "phone": await loop.run_in_executor(None, P.status)}
+            return {"phone": await loop.run_in_executor(None, P.status), "default_relay": phonemod.DEFAULT_RELAY}
+        except phonemod.PhoneError as exc:
             raise RequestError(str(exc))
 
     if t == "tasks":
@@ -2513,8 +2506,7 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         manager._record(session, ev)
         manager.broadcast_sessions()
         manager.notify(f"{session.meta['name']} asks to {'use a connector' if kind == 'connector' else kind}", desc[:200], session.id)
-        if manager.remote.enabled():
-            manager.loop.run_in_executor(None, manager._remote_notify, session, ev)
+        manager.phone_push(f"{session.meta['name']} asks to {'use a connector' if kind == 'connector' else kind}", desc, "?open=inbox", f"approval:{rid}")
         try:
             result = await asyncio.wait_for(asyncio.shield(fut), timeout=max(1, min(int(req.get("wait") or 90), 600)))
         except asyncio.TimeoutError:
@@ -2865,6 +2857,39 @@ def _serve_static(request, token: str | None = None):
     return _response(200, "OK", body, ctype)
 
 
+def _web_hash() -> str:
+    """A short hash of the web app's files (names, sizes, mtimes): the relay caches them under it."""
+    h = hashlib.sha1()
+    for root, _dirs, files in os.walk(WEB_DIR):
+        for name in sorted(files):
+            full = os.path.join(root, name)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            h.update(f"{os.path.relpath(full, WEB_DIR)}:{st.st_size}:{int(st.st_mtime)}\n".encode())
+    return h.hexdigest()[:10]
+
+
+def _phone_file(path: str, token: str) -> tuple:
+    """A web app file for a phone, through the tunnel: the same files the loopback listener serves."""
+    r = _serve_static(SimpleNamespace(path=path), token)
+    return r.status_code, r.headers.get("Content-Type") or "application/octet-stream", bytes(r.body or b"")
+
+
+def _phone_local_connect(host: str, port: int):
+    """A fresh connection to this daemon's own listener for one phone: the user-only socket where
+    there is one, loopback TCP otherwise. The phone's auth frame carries the token like any client's."""
+    from websockets.asyncio.client import connect, unix_connect
+    sock_path = paths.SOCKET_PATH if hasattr(socket, "AF_UNIX") and not compat.WINDOWS else None
+
+    async def open_local():
+        if sock_path and os.path.exists(sock_path):
+            return await unix_connect(sock_path, uri="ws://localhost/ws", max_size=64 * 1024 * 1024)
+        return await connect(f"ws://127.0.0.1:{port}/ws", max_size=64 * 1024 * 1024)
+    return open_local
+
+
 def allowed_hosts(port: int) -> set:
     return {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
 
@@ -2924,6 +2949,7 @@ async def _handle(ws, manager: Manager, token: str) -> None:
         return
 
     client = Client(ws)
+    client.phone = hello.get("via") == "phone"
     manager.clients.add(client)
     sender = asyncio.create_task(_client_sender(client))
     await ws.send(json.dumps({"type": "reply", "id": hello.get("id"), "ok": True, "version": __version__,
@@ -3032,6 +3058,10 @@ async def _serve(host: str, port: int) -> None:
     manager = Manager(loop)
     manager.load_from_disk()
     manager.start_backfill()
+    manager.phone = phonemod.Phone(loop, token, _phone_local_connect(host, port), lambda path: _phone_file(path, token), version=f"{__version__}+{_web_hash()}")
+    manager.phone.on_phones = lambda n: manager.loop.call_soon_threadsafe(manager.broadcast_sessions)
+    if manager.phone.enabled():
+        manager.phone.start()
 
     stop = manager.stop
     for sig in (signal.SIGINT, signal.SIGTERM):
