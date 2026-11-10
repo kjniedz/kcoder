@@ -412,7 +412,9 @@ error details, and an "approve all" button answers every approval at once.
   (gold, neon, matrix, amber, monochrome and rainbow banner skins, naming
   your agents, confetti when a session commits, a status bar pet with a
   cat, a dog, a bear, a duck, a dragon and the table flipper, and pirate,
-  Victorian or Minecraft working verbs); what is owned folds into one line.
+  Victorian or Minecraft working verbs). The shop is a grid of tiles, each
+  the name and the price (and the level for a perk with levels) with what it
+  does as the tooltip and in the confirm; what is owned folds into one line.
   With a thousand stars held you can **go public** as KCDR: every star held
   becomes shares with a 25% first-day pop (more with a secondary offering),
   and from then on the exchange card runs a market. Shares have a price in

@@ -4422,9 +4422,10 @@ function renderFunView() {
           <div class="mine-rel" data-m="rel"></div><div class="mine-runs" data-m="runs"></div></div></div>
         <div class="col"><div class="card mine-market"><h3>the exchange <span class="dim" data-m="mkt-h"></span></h3><div id="mine-market"></div></div>
           <div class="card"><h3>milestones <span class="dim" data-m="achn"></span></h3><div class="mine-ach" id="mine-ach"></div><div class="mine-ach-info" id="mine-ach-info">click a milestone to see what it takes</div></div></div>
-        <div class="card mine-shop"><h3>the star shop <span class="dim" data-m="shopn"></span></h3><div class="ds">a star buys a permanent perk for the mine or a change to kcoder itself. the star goes for good, and its 10% with it; the rank keeps counting every star you ever earned.</div>
-          <div class="mine-shop-groups"><div><h3>perks for the mine</h3><div class="mine-ups" id="mine-shop-perk"></div></div>
-          <div><h3>customize kcoder</h3><div class="mine-ups" id="mine-shop-kcoder"></div><h3>priced in shares <span class="dim" data-m="sharesn"></span></h3><div class="mine-ups" id="mine-shop-shares"></div></div></div>
+        <div class="card mine-shop"><h3>the star shop <span class="dim" data-m="shopn"></span></h3><div class="ds">a star goes for good, and its 10% with it; the rank keeps counting every star you ever earned. hover a perk for what it does.</div>
+          <h3>perks for the mine</h3><div class="mine-tiles" id="mine-shop-perk"></div>
+          <h3>customize kcoder</h3><div class="mine-tiles" id="mine-shop-kcoder"></div>
+          <h3>priced in shares <span class="dim" data-m="sharesn"></span></h3><div class="mine-tiles" id="mine-shop-shares"></div>
           <div class="mine-setup" id="mine-setup"></div></div>
       </div></div>`;
     box.dataset.built = '1';
@@ -4533,7 +4534,7 @@ function mineRefresh() {
   const sprintOpen = sp.goals.find((x) => !x.done); const shopKey = `${g.stars}|${g.shares}|${g.ipo}|${g.rounds}|${g.starsEver}|${sprintOpen ? sprintOpen.id : ''}|${JSON.stringify(g.shop)}|${g.keepUp}|${JSON.stringify(g.cos)}|${g.ups.includes(g.keepUp)}`; const shopEl = $('#mine-shop-perk');
   if (shopEl.dataset.key !== shopKey) {
     shopEl.dataset.key = shopKey;
-    const row = (it) => { const lvl = mineLevel(g, it.id), max = it.max || 1, cost = mineShopCost(it, lvl, g); return `<div class="mine-up one" title="${esc(it.desc)}"><div><b>${esc(it.name)}</b>${max === Infinity ? (lvl ? ` <span class="dim">level ${fmtInt(lvl)}</span>` : '') : max > 1 ? ` <span class="dim">${lvl} of ${max}</span>` : ''}<span class="ds">${esc(it.desc)}</span></div><button data-star="${it.id}" ${cost == null || mineWallet(g, it) < cost ? 'disabled' : ''}>${cost == null ? 'nothing open today' : mineCurName(it, cost)}</button></div>`; };   // one line a row; the full blurb is the tooltip and the confirm
+    const row = (it) => { const lvl = mineLevel(g, it.id), max = it.max || 1, cost = mineShopCost(it, lvl, g); return `<button class="mine-tile" data-star="${it.id}" title="${esc(it.desc)}${cost == null ? '' : ` · ${mineCurName(it, cost)}`}" ${cost == null || mineWallet(g, it) < cost ? 'disabled' : ''}><b>${esc(it.name)}</b><span>${max === Infinity ? (lvl ? `<i>lvl ${fmtInt(lvl)}</i>` : '') : max > 1 ? `<i>${lvl}/${max}</i>` : ''}${cost == null ? 'none open' : `${fmtInt(cost)} ${it.cur === 'shares' ? 'sh' : '★'}`}</span></button>`; };   // a tile is the buy button: the name and the price, the blurb as the tooltip and in the confirm
     const open = (it) => !it.need || mineHas(g, it.need); const done = (it) => mineLevel(g, it.id) >= (it.max || 1);
     const group = (name) => { const items = MINE_SHOP.filter((it) => it.group === name && open(it)); const owned = items.filter(done); return (owned.length ? `<div class="mine-owned"><span class="dim">owned</span>${owned.map((it) => esc(it.name)).join(' · ')}</div>` : '') + items.filter((it) => !done(it)).map(row).join(''); };   // what is owned folds into one line so the rows left are the ones still to buy
     shopEl.innerHTML = group('perk');

@@ -693,10 +693,15 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .mine-grid { display: grid; grid-template-columns: 5fr 4fr 4fr; gap: 12px; align-items: start; }
 .mine-grid > * { min-width: 0; } .mine-grid .col { display: flex; flex-direction: column; gap: 12px; }
 .mine-grid > .mine-shop { grid-column: 1 / -1; }
-.mine-shop-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; align-items: start; }
-@media (min-width: 1600px) { .mine { max-width: 1960px; } .mine-grid { grid-template-columns: 5fr 4fr 4fr 5fr; } .mine-grid > .mine-shop { grid-column: auto; } .mine-shop-groups { display: block; } }
+.mine-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px; }
+.mine-tile { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; padding: 3px 8px; font-size: 11px; text-transform: none; letter-spacing: 0; text-align: left; }
+.mine-tile b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.mine-tile span { flex: none; color: var(--accent-text); } .mine-tile span i { font-style: normal; color: var(--fg-mute); margin-right: 5px; } .mine-tile:disabled { opacity: .45; cursor: default; } .mine-tile:disabled span { color: var(--fg-mute); }
+.mine-tiles > .dim, .mine-tiles > .mine-owned { grid-column: 1 / -1; }
+.mine-shop > h3:not(:first-child) { margin-top: 8px; }
+@media (min-width: 1600px) { .mine { max-width: 1960px; } .mine-grid { grid-template-columns: 5fr 4fr 4fr 5fr; } .mine-grid > .mine-shop { grid-column: auto; } }
 @media (max-width: 1250px) { .mine-grid { grid-template-columns: 3fr 2fr; } .mine-grid > :nth-child(3) { grid-column: 1 / -1; } }
-@media (max-width: 900px) { .mine-grid { grid-template-columns: 1fr; } .mine-grid > :nth-child(3) { grid-column: auto; } .mine-shop-groups { display: block; } }
+@media (max-width: 900px) { .mine-grid { grid-template-columns: 1fr; } .mine-grid > :nth-child(3) { grid-column: auto; } }
 .mine-unit { display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; align-items: center; padding: 5px 0; border-top: 1px solid var(--line); }
 .mine-unit:first-child { border-top: none; padding-top: 2px; }
 .mine-unit .nm { font-weight: 600; } .mine-unit .nm b { color: var(--accent-text); margin-left: 6px; } .mine-unit .nm span { color: var(--fg-mute); font-weight: 400; margin-left: 6px; }
@@ -711,8 +716,6 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .mine-up > div:first-child { flex: 1; min-width: 0; }
 .mine-up .ds { color: var(--fg-mute); font-size: 11px; } .mine-up [data-m="eta"]:not(:empty) { display: block; color: var(--fg-dim); }
 .mine-up button { white-space: nowrap; }
-.mine-up.one > div:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .mine-up.one .ds { margin-left: 6px; } .mine-up.one button { padding: 0 8px; font-size: 11px; }
-.mine-shop .mine-ups { gap: 3px; }
 .mine-up button:disabled { opacity: .45; cursor: default; }
 .mine .card h3:not(:first-child) { margin-top: 12px; }
 .mine .card h3 { display: flex; align-items: center; gap: 8px; }
@@ -724,7 +727,7 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .mine-unit .rn { cursor: pointer; border-bottom: 1px dashed var(--line-2); } .mine-unit .rn:hover { color: var(--accent-text); border-bottom-color: var(--accent); }
 .mine-shop > .ds { color: var(--fg-mute); font-size: 11px; margin: -4px 0 4px; }
 .mine-up .owned, .mine-sprint .owned { color: var(--green); font-size: 11px; white-space: nowrap; }
-.mine-owned { font-size: 11px; color: var(--fg-mute); margin: 0 0 6px; line-height: 1.6; } .mine-owned .dim { text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-right: 6px; }
+.mine-owned { font-size: 11px; color: var(--fg-mute); margin: 0 0 2px; line-height: 1.6; } .mine-owned .dim { text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-right: 6px; }
 .mine-sprint { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-top: 1px solid var(--line); } .mine-sprint:first-child { border-top: none; padding-top: 2px; }
 .mine-sprint > div:first-child { flex: 1; min-width: 0; } .mine-sprint .ds { color: var(--fg-mute); font-size: 11px; } .mine-sprint.on b { color: var(--green); }
 .mine-sprint .bar { width: 90px; height: 6px; background: var(--bg-3); border-radius: 3px; overflow: hidden; flex: none; } .mine-sprint .bar i { display: block; height: 100%; background: var(--accent); }
