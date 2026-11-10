@@ -437,8 +437,10 @@ error details, and an "approve all" button answers every approval at once.
   their square root rather than in full; the rank, the milestones, the
   real-work counters and everything from the shop stay. A later listing
   turns the stars held into more shares at the market's price, with the pop
-  again on the stars earned on that listing. The releases card keeps a
-  clock on the current run, your best time, and the last six runs.
+  again on the stars earned on that listing. The ledger card is a grid of
+  twelve figures (stars, rank, releases, the run, tokens, clicks, the best
+  combo, real turns and commits, surprises) with the release button, and
+  keeps the last six runs under it.
   Milestones come in families that always have a next chip (every
   thousandfold of tokens mined, releases, commits, turns, clicks, stars,
   sprints, streaks, perfect days, weeks, listings, shares, trades, the

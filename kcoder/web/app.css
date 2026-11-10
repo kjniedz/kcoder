@@ -676,7 +676,11 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .mine-ticker .dim { text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-right: 8px; }
 .mine-gold { position: fixed; z-index: 3; cursor: pointer; background: var(--bg-2); border: 1px solid var(--yellow); color: var(--yellow); border-radius: 20px; padding: 6px 14px; font-weight: 600; font-size: 12.5px; box-shadow: 0 0 16px rgba(251, 191, 36, .35); animation: minegold 1.1s ease-in-out infinite alternate; user-select: none; -webkit-user-select: none; }
 @keyframes minegold { from { transform: scale(1); } to { transform: scale(1.1); } }
-.mine-rel { margin-top: 6px; } .mine-rel .ds { color: var(--fg-mute); font-size: 11px; margin-top: 3px; }
+.mine-ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 14px; }
+.mine-ledger > div { min-width: 0; } .mine-ledger span { display: block; color: var(--fg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.mine-ledger b { display: block; font-size: 13px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; line-height: 1.3; }
+.mine-ledger i { display: block; font-style: normal; color: var(--fg-mute); font-size: 10.5px; }
+.mine-rel { margin-top: 10px; } .mine-rel .ds { color: var(--fg-mute); font-size: 11px; margin-top: 3px; }
 .mine-ach { display: flex; flex-wrap: wrap; gap: 4px 5px; }
 .mine-ach span { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line-2); color: var(--fg-mute); cursor: pointer; }
 .mine-ach span:hover { border-color: var(--fg-dim); color: var(--fg); }
