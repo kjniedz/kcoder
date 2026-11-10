@@ -1022,3 +1022,55 @@ html[data-style="montserrat"] h2, html[data-style="montserrat"] h3, html[data-st
 html[data-style="montserrat"] .composer textarea { border-radius: 8px; padding: 7px 11px; }
 html[data-style="montserrat"] .msg-user .bubble { padding: 7px 12px; }
 html[data-style="montserrat"] .dialog .body { line-height: 1.5; }
+
+/* ---- the phone layout (html[data-phone], under 640 px): one column, one session at a time, big enough to tap ---- */
+.phone-only { display: none; }
+.pane-title .back { display: none; }
+html[data-phone] { height: 100%; }
+html[data-phone] body { height: 100dvh; font-size: 13.5px; }
+html[data-phone] #header { gap: 6px; padding: 4px 8px; padding-top: calc(4px + env(safe-area-inset-top)); min-height: 44px; }
+html[data-phone] .brand { padding: 0; } html[data-phone] .wordmark { font-size: 13px; }
+html[data-phone] .tools { gap: 4px; } html[data-phone] #btn-new { white-space: nowrap; }
+html[data-phone] .banner.compact { display: none; } html[data-phone] .wordmark { display: inline; }
+html[data-phone] .omni, html[data-phone] #cond-tag { display: none; }
+html[data-phone] .phone-only { display: inline-block; }
+html[data-phone] #btn-search { margin-left: auto; font-size: 15px; line-height: 1; padding: 3px 7px; }
+html[data-phone] .views button { padding: 4px 7px; font-size: 12px; }
+html[data-phone] .tools button { padding: 4px 7px; font-size: 12px; }
+html[data-phone] .sessions-bar { padding: 3px 8px; }
+html[data-phone] .layout-picker, html[data-phone] #btn-broadcast, html[data-phone] #sessions-hint { display: none; }
+html[data-phone] .sessions-bar { display: none !important; }
+html[data-phone] .wall { grid-template-columns: 1fr !important; grid-auto-rows: 150px; gap: 6px; padding: 6px; }
+html[data-phone] .wall:not(.focus) .pane { cursor: pointer; }
+html[data-phone] .wall:not(.focus) .pane .composer-slot, html[data-phone] .wall:not(.focus) .pane .pane-actions, html[data-phone] .wall:not(.focus) .pane .approval-bar { display: none !important; }
+html[data-phone] .wall.focus { padding: 0; }
+html[data-phone] .wall.focus .pane.focused { border: none; border-radius: 0; }
+html[data-phone] .wall.focus .pane.focused .back { display: inline; font-size: 22px; line-height: 1; padding: 0 4px 2px 0; color: var(--accent-text); }
+html[data-phone] .wall.focus .pane.focused .num, html[data-phone] .window-pin { display: none; }
+html[data-phone] .pane-title { font-size: 13px; padding: 7px 10px; gap: 6px; min-height: 36px; box-sizing: border-box; }
+html[data-phone] .pane-title .view-toggle { margin-left: auto; padding: 2px 6px; }
+html[data-phone] .pane-body { padding: 6px 10px; font-size: 13px; }
+html[data-phone] .pane.focused .pane-body { font-size: var(--font-size, 14px); }
+html[data-phone] .pane-actions button, html[data-phone] .approval-bar button, html[data-phone] .pane-status button { min-height: 30px; font-size: 13px; padding: 2px 10px; }
+html[data-phone] .composer { padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
+html[data-phone] .composer textarea, html[data-phone] input, html[data-phone] select, html[data-phone] textarea { font-size: 16px; }
+html[data-phone] .composer .send, html[data-phone] .composer .stop { min-height: 32px; padding: 2px 12px; }
+html[data-phone] .chatview .sidebar { display: none; }
+html[data-phone] .split { padding: 0; gap: 0; flex-direction: column; }
+html[data-phone] .cpane { border: none; border-radius: 0; }
+html[data-phone] .cpane-bar select { max-width: 90px; }
+html[data-phone] .chat-log, html[data-phone] .cpane .chat-log { padding: 8px 10px; }
+html[data-phone] .overlay { padding: 0; align-items: stretch; }
+html[data-phone] .dialog { width: 100vw; max-width: none; max-height: none; height: 100%; border-radius: 0; border: none; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
+html[data-phone] .dialog h2 { position: sticky; top: 0; z-index: 2; }
+html[data-phone] .statusbar { overflow-x: auto; padding-bottom: env(safe-area-inset-bottom); min-height: 26px; }
+html[data-phone] .statusbar .status-item.quota .dim, html[data-phone] .statusbar .status-item.quota .hit, html[data-phone] .statusbar .status-item.quota .shift, html[data-phone] #status-pet { display: none; }
+html[data-phone] .toasts { left: 12px; right: 12px; bottom: calc(30px + env(safe-area-inset-bottom)); }
+html[data-phone] .toast { width: auto; max-width: none; }
+html[data-phone] .fun-tabs { overflow-x: auto; white-space: nowrap; }
+html[data-phone] .stats-body, html[data-phone] .fun-body { padding: 8px; }
+html[data-phone] .summary { grid-template-columns: 1fr 1fr; }
+html[data-phone] .mine-grid { grid-template-columns: 1fr; }
+html[data-phone] .mine-ledger { grid-template-columns: 1fr 1fr; }
+html[data-phone] .help-grid.keys { display: none; }
+html[data-phone] .wall-empty p:last-child kbd { display: none; }

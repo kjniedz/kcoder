@@ -145,6 +145,13 @@ applyFont();
 applyDensity();
 renderDay();
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (themeChoice() === 'system') applyTheme(); });
+// the phone layout: under 640 px the app runs one column (the sessions grid as a list, a tapped session
+// full screen with a back arrow, the composer above the keyboard, dialogs edge to edge); CSS keys on data-phone
+const PHONE_MQ = matchMedia('(max-width: 640px)');
+function isPhone() { return PHONE_MQ.matches; }
+function applyPhone() { document.documentElement.toggleAttribute('data-phone', isPhone()); if (isPhone() && state.view === 'chat') setView('wall'); }
+PHONE_MQ.addEventListener('change', () => { applyPhone(); renderAll(); });
+applyPhone();
 
 // ----------------------------------------------------------------------
 // connection
@@ -748,7 +755,7 @@ function renderViews() {
 function openSessions() { if (state.view === 'wall' || state.view === 'chat') return; setView(localStorage.getItem('kcoder.sessionsView') === 'chat' ? 'chat' : 'wall'); }
 function setLayout(which) {
   if (which === 'grid') { if (state.view !== 'wall') setView('wall'); else renderSessionsBar(); return; }
-  const n = Math.max(1, Math.min(3, Number(which) || 1));
+  const n = isPhone() ? 1 : Math.max(1, Math.min(3, Number(which) || 1));
   const L = state.layout;
   if (!Array.isArray(L.panes) || !L.panes.length) L.panes = [null];
   while (L.panes.length < n) L.panes.push(null);
@@ -794,7 +801,7 @@ function renderWall() {
 }
 
 function paneSkeleton() {
-  return `<div class="pane-title"><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell"></span></div>
+  return `<div class="pane-title"><span class="back" title="back to sessions">‹</span><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell"></span></div>
   <div class="pane-body"></div>
   <div class="shell-drawer" hidden></div>
   <div class="approval-bar" hidden></div>
@@ -865,7 +872,7 @@ function renderPaneChrome(pane, s, num) {
   if (!slot.hidden && !slot.firstChild) mountComposer(slot, s.id, paneViewOf(s.id) === 'term');
   else if (!slot.hidden) updateComposerState(slot, s.id);
   pane.classList.toggle('compact', !focused);
-  const ta = $('.composer textarea', slot); if (ta) ta.placeholder = focused ? 'Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)' : 'Message ' + s.name + '…';
+  const ta = $('.composer textarea', slot); if (ta) ta.placeholder = focused && !isPhone() ? 'Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)' : 'Message ' + s.name + '…';
 }
 
 function fillModelSelect(sel, s) {
@@ -1016,6 +1023,7 @@ function patchTool(log, store, sid, k, cid) {
 
 function wirePane(pane, sid) {
   $('.pane-title', pane).addEventListener('click', (e) => {
+    if (e.target.classList.contains('back')) { focusPane(null); return; }
     if (e.target.classList.contains('window-pin')) { togglePin(sid); return; }
     if (e.target.classList.contains('view-toggle')) { cyclePaneView(sid); return; }
     if (e.target.closest('a')) return;
@@ -1026,6 +1034,7 @@ function wirePane(pane, sid) {
     const b = e.target.closest('[data-act]');
     if (b) { handleAction(b, sid); e.stopPropagation(); return; }
     if (e.target.dataset.copy) { copyCode(e.target); return; }
+    if (isPhone() && !pane.classList.contains('focused') && !e.target.closest('.pane-title, .composer, a, button, textarea, input, select')) { focusPane(sid); return; }
     if (!pane.classList.contains('focused')) state.sid = sid;
   });
   pane.addEventListener('dblclick', (e) => { if (e.target.closest('.pane-body') && !pane.classList.contains('focused')) focusPane(sid); });
@@ -2936,6 +2945,7 @@ document.addEventListener('keydown', (e) => {
 for (const b of $$('.views button')) b.addEventListener('click', () => (b.dataset.view === 'wall' ? openSessions() : setView(b.dataset.view)));
 $('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
+$('#btn-search').addEventListener('click', () => openPalette());
 $('#brand').addEventListener('click', () => aboutDialog());
 // the search field is the command palette's front door: focusing it opens the palette with whatever was typed
 $('#omni').addEventListener('focus', () => { const o = $('#omni'); const q = o.value; o.value = ''; o.blur(); if (!state.dialog) openPalette(q); });
