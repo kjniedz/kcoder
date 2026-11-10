@@ -3689,31 +3689,31 @@ async function exportStatsCsv() {
 // localStorage (kcoder.mine) and is mirrored into the daemon's ui_state so the app window and a
 // browser tab share one mine; the mine keeps going up to eight hours while away.
 const MINE_WORDS = ['million', 'billion', 'trillion', 'quadrillion', 'quintillion', 'sextillion', 'septillion', 'octillion', 'nonillion', 'decillion', 'undecillion', 'duodecillion', 'tredecillion', 'quattuordecillion', 'quindecillion', 'sexdecillion', 'septendecillion', 'octodecillion', 'novemdecillion', 'vigintillion'];
-const fmtFull = (n) => fmtInt(Math.floor(Number(n) || 0));   // the bank and the totals: every digit, with separators
 const fmtMine = (n) => {   // prices and rates: full up to a million, then "4.5 billion"
   n = Number(n) || 0; if (n < 1000) return Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10); if (n < 1e6) return fmtInt(Math.round(n));
   let v = n, i = -2; while (v >= 1000 && i < MINE_WORDS.length - 1) { v /= 1000; i++; }   // two divisions reach a million, the first word
   if (v >= 1000) return n.toExponential(2).replace('e+', 'e');   // past a vigintillion the words run out
   return `${v < 10 ? v.toFixed(2) : v < 100 ? v.toFixed(1) : fmtInt(Math.round(v))} ${MINE_WORDS[i]}`;
 };
+const fmtFull = (n) => { n = Math.floor(Number(n) || 0); return n < 1e12 ? fmtInt(n) : fmtMine(n); };   // the bank and the totals: every digit up to a trillion, then "4.52 quadrillion" so the number never outgrows the card
 const MINE_UNITS = [
-  { id: 'intern', glyph: '·', name: 'Haiku intern', desc: 'fetches tokens one at a time, very fast, slightly wrong', cost: 15, rate: 0.1, tiers: ['prompt caching', 'extended thinking', 'a second opinion', 'the batch API'] },
-  { id: 'builder', glyph: '▪', name: 'Sonnet builder', desc: 'ships the feature while you are still reading the plan', cost: 100, rate: 1, tiers: ['plan mode', 'MCP tools', 'hooks', 'parallel tool calls'] },
-  { id: 'architect', glyph: '◆', name: 'Opus architect', desc: 'thinks for a while, then everything works', cost: 1100, rate: 8, tiers: ['1M context', 'a good CLAUDE.md', 'ultrareview', 'ultraplan'] },
-  { id: 'pane', glyph: '▯', name: 'second pane', desc: 'two sessions side by side, one keyboard', cost: 12000, rate: 47, tiers: ['third pane', 'broadcast', 'a bigger monitor', 'a wall of monitors'] },
-  { id: 'worktree', glyph: '⑂', name: 'worktree', desc: 'a branch of its own so nobody steps on anybody', cost: 130000, rate: 260, tiers: ['review gate', 'auto-merge', 'stacked branches', 'a monorepo'] },
-  { id: 'cron', glyph: '◷', name: 'cron schedule', desc: 'runs at 6 AM whether you are up or not', cost: 1.4e6, rate: 1400, tiers: ['morning brief', 'nightly dependency bumps', 'weekend releases', 'every minute'] },
-  { id: 'queue', glyph: '≣', name: 'task queue', desc: 'the whole backlog, one slot at a time', cost: 2e7, rate: 7800, tiers: ['trust: auto', 'more slots', 'a priority lane', 'auto-scaling'] },
-  { id: 'fleet', glyph: '⚑', name: 'the fleet', desc: 'ten agents, one keyboard', cost: 3.3e8, rate: 44000, tiers: ['Wrapped', 'paid for itself', 'a second fleet', 'an armada'] },
-  { id: 'daemon', glyph: '⚙', name: 'the daemon', desc: 'kcoderd itself, mining between restarts', cost: 5.1e9, rate: 2.6e5, tiers: ['launch agent', 'self-update', 'a second daemon', 'a daemon per machine'], need: 'daemon' },
-  { id: 'mythos', glyph: '✶', name: 'Mythos', desc: 'the one above Opus; it mines in ways nobody can explain', cost: 7.5e10, rate: 1.6e6, tiers: ['an approved organisation', 'the long context', 'the overnight run', 'a constellation'], need: 'mythos' },
-  { id: 'factory', glyph: '⌂', name: 'the software factory', desc: 'plans, builds, reviews and ships with nobody in the loop', cost: 1.2e12, rate: 1.2e7, tiers: ['a second line', 'robots', 'lights out', 'a second factory'], need: 'factory' },
-  { id: 'founder', glyph: '♛', name: 'the founder', desc: 'types with two fingers, ships anyway', cost: 2.5e13, rate: 1e8, tiers: ['coffee', 'a standing desk', 'noise-cancelling headphones', 'a co-founder'], need: 'founder' },
-  { id: 'board', glyph: '▣', name: 'the board', desc: 'meets quarterly, mines constantly', cost: 5e14, rate: 1e9, tiers: ['a quorum', 'an off-site', 'a proxy fight', 'unanimous'], need: 'board' },
-  { id: 'acquirer', glyph: '⇄', name: 'the acquirer', desc: 'bought the company for the tokens', cost: 1e16, rate: 3e10, tiers: ['due diligence', 'a term sheet', 'the earn-out', 'synergies'], need: 'acquirer' },
-  { id: 'regulator', glyph: '§', name: 'the regulator', desc: 'files a finding, keeps the fine', cost: 2e17, rate: 1e12, tiers: ['a filing', 'a consent decree', 'a loophole', 'regulatory capture'], need: 'regulator' },
-  { id: 'agi', glyph: '∞', name: 'the AGI', desc: 'mines tokens about itself', cost: 5e18, rate: 4e13, tiers: ['a benchmark', 'self-improvement', 'the alignment team', 'the takeoff'], need: 'agi' },
-  { id: 'fork', glyph: 'Ψ', name: 'the open-source fork', desc: 'everyone works for free, somehow it ships', cost: 1e20, rate: 1.5e15, tiers: ['a star on GitHub', 'a maintainer', 'the foundation', 'upstream'], need: 'fork' },
+  { id: 'intern', glyph: '·', name: 'Haiku intern', desc: 'fetches tokens one at a time, very fast, slightly wrong', cost: 15, rate: 0.1 },
+  { id: 'builder', glyph: '▪', name: 'Sonnet builder', desc: 'ships the feature while you are still reading the plan', cost: 100, rate: 1 },
+  { id: 'architect', glyph: '◆', name: 'Opus architect', desc: 'thinks for a while, then everything works', cost: 1100, rate: 8 },
+  { id: 'pane', glyph: '▯', name: 'second pane', desc: 'two sessions side by side, one keyboard', cost: 12000, rate: 47 },
+  { id: 'worktree', glyph: '⑂', name: 'worktree', desc: 'a branch of its own so nobody steps on anybody', cost: 130000, rate: 260 },
+  { id: 'cron', glyph: '◷', name: 'cron schedule', desc: 'runs at 6 AM whether you are up or not', cost: 1.4e6, rate: 1400 },
+  { id: 'queue', glyph: '≣', name: 'task queue', desc: 'the whole backlog, one slot at a time', cost: 2e7, rate: 7800 },
+  { id: 'fleet', glyph: '⚑', name: 'the fleet', desc: 'ten agents, one keyboard', cost: 3.3e8, rate: 44000 },
+  { id: 'daemon', glyph: '⚙', name: 'the daemon', desc: 'kcoderd itself, mining between restarts', cost: 5.1e9, rate: 2.6e5, need: 'daemon' },
+  { id: 'mythos', glyph: '✶', name: 'Mythos', desc: 'the one above Opus; it mines in ways nobody can explain', cost: 7.5e10, rate: 1.6e6, need: 'mythos' },
+  { id: 'factory', glyph: '⌂', name: 'the software factory', desc: 'plans, builds, reviews and ships with nobody in the loop', cost: 1.2e12, rate: 1.2e7, need: 'factory' },
+  { id: 'founder', glyph: '♛', name: 'the founder', desc: 'types with two fingers, ships anyway', cost: 2.5e13, rate: 1e8, need: 'founder' },
+  { id: 'board', glyph: '▣', name: 'the board', desc: 'meets quarterly, mines constantly', cost: 5e14, rate: 1e9, need: 'board' },
+  { id: 'acquirer', glyph: '⇄', name: 'the acquirer', desc: 'bought the company for the tokens', cost: 1e16, rate: 3e10, need: 'acquirer' },
+  { id: 'regulator', glyph: '§', name: 'the regulator', desc: 'files a finding, keeps the fine', cost: 2e17, rate: 1e12, need: 'regulator' },
+  { id: 'agi', glyph: '∞', name: 'the AGI', desc: 'mines tokens about itself', cost: 5e18, rate: 4e13, need: 'agi' },
+  { id: 'fork', glyph: 'Ψ', name: 'the open-source fork', desc: 'everyone works for free, somehow it ships', cost: 1e20, rate: 1.5e15, need: 'fork' },
 ];   // `need` names the star shop perk that makes the agent hireable
 // past the open-source fork the agents never run out: each one costs 25 times and mines 12 times the one before, and the
 // next shows up once the last is hired (the names cycle with a numeral), so there is always something to save for
@@ -3723,50 +3723,33 @@ function mineExtraUnits(g) {
   const out = []; let prev = MINE_UNITS[MINE_UNITS.length - 1];
   for (let i = 0; i < 400; i++) {
     const [nm, glyph] = MINE_X_UNITS[i % MINE_X_UNITS.length]; const round = Math.floor(i / MINE_X_UNITS.length);
-    const u = { id: `x${i}`, glyph, name: round ? `${nm} ${mineRoman(round + 1)}` : nm, desc: 'past the fork: it mines in ways nobody has named yet', cost: prev.cost * 25, rate: prev.rate * 12, tiers: ['a theory', 'a proof', 'a paper', 'a prize'], gen: true };
+    const u = { id: `x${i}`, glyph, name: round ? `${nm} ${mineRoman(round + 1)}` : nm, desc: 'past the fork: it mines in ways nobody has named yet', cost: prev.cost * 25, rate: prev.rate * 12, gen: true };
     if (!Number.isFinite(u.cost)) break;
     out.push(u); if (!((g.units[u.id] || 0) > 0)) break; prev = u;
   }
   return out;
 }
 const mineUnitsAll = (g) => ((g.units.fork || 0) >= 1 ? MINE_UNITS.concat(mineExtraUnits(g)) : MINE_UNITS);
-const MINE_X_TIERS = ['beyond the singularity', 'the second singularity', 'the third singularity', 'the recursion', 'the recursion again', 'the stack overflow', 'the heat death', 'the big bounce'];
-function mineExtraTiers(u, owned) {   // past a thousand owned: a ×10 tier every hundred more, priced like ten more of the agent at that count, the next one showing once the last is in reach
-  const out = []; const upto = Math.max(1100, Math.floor(owned / 100) * 100 + 100);
-  for (let k = 1100, i = 0; k <= upto && i < 400; k += 100, i++) { const round = Math.floor(i / MINE_X_TIERS.length); const cost = u.cost * 10 * Math.pow(1.15, k); if (!Number.isFinite(cost)) break; out.push({ id: `${u.id}_t${k}`, name: `${MINE_X_TIERS[i % MINE_X_TIERS.length]}${round ? ' ' + mineRoman(round + 1) : ''} (${u.name})`, desc: `${u.name} mines 10 times as fast`, cost, unit: u.id, mult: 10, owned: k, gen: true }); }
-  return out;
-}
-function mineExtraClicks(g) {   // past a thousand hands: the next thousand-fold, ten thousand times the price, once the last is bought
-  const out = []; let cost = 1e24, need = 'hands';
-  for (let i = 2; i < 400; i++) { cost *= 1e4; if (!Number.isFinite(cost)) break; const id = `hands${i}`; out.push({ id, name: `a thousand hands ${mineRoman(i)}`, desc: 'clicks are worth a thousand times as much', cost, click: 1000, need, gen: true }); if (!g.ups.includes(id)) break; need = id; }
-  return g.ups.includes('hands') ? out : [];
-}
-let mineUpsCache = { key: '', list: [], byId: new Map() };
-function mineUpgradesAll(g) {   // every upgrade that exists for this mine: the static ones for the agents that are open, the generated tiers and clicks
-  const open = mineUnitsOpen(g); const key = `${open.map((u) => `${u.id}:${g.units[u.id] || 0}`).join(',')}|${g.ups.length}`;
-  if (mineUpsCache.key === key) return mineUpsCache.list;
-  const openIds = new Set(open.map((u) => u.id));
-  const list = MINE_UPGRADES.filter((up) => !up.unit || openIds.has(up.unit)).concat(mineExtraClicks(g));
-  for (const u of open) { if (u.gen) for (const [owned, x, mult, tname] of MINE_TIERS) list.push({ id: `${u.id}_${owned}`, name: tname ? `${tname} (${u.name})` : u.tiers[Math.min(3, MINE_TIERS.findIndex((t) => t[0] === owned))], desc: `${u.name} mines ${mult === 2 ? 'twice' : `${fmtInt(mult)} times`} as fast`, cost: u.cost * x, unit: u.id, mult, owned }); if ((g.units[u.id] || 0) >= 1000) list.push(...mineExtraTiers(u, g.units[u.id] || 0)); }
-  mineUpsCache = { key, list, byId: new Map(list.map((up) => [up.id, up])) }; return list;
-}
-const mineUpById = (g, id) => { mineUpgradesAll(g); return mineUpsCache.byId.get(id) || MINE_UPGRADES.find((x) => x.id === id) || null; };
-function mineUnitMults(g) { const m = {}; for (const id of g.ups) { const up = mineUpById(g, id); if (up && up.unit) m[up.unit] = (m[up.unit] || 1) * up.mult; } return m; }
-const MINE_TIERS = [[10, 10, 2], [25, 100, 2], [50, 1000, 2], [100, 10000, 4],   // [agents owned to unlock, cost as a multiple of the agent's base price, multiplier, shared name]; the fourth tier is the scale-up
-  ...[[200, 10, 'overtime'], [300, 10, 'the night shift'], [400, 10, 'a second office'], [500, 1000, 'the thousand-fold'], [600, 10, 'offshore'], [700, 10, 'a merger'], [800, 10, 'an acquisition'], [900, 10, 'the IPO'], [1000, 1000, 'the singularity']]
-    .map(([owned, mult, name]) => [owned, (mult >= 1000 ? 100 : 10) * Math.pow(1.15, owned), mult, name])];   // the late tiers: a hundred agents apart, priced like ten more of the agent (a hundred more for a thousand-fold)
+const mineUpgradesAll = () => MINE_UPGRADES;
+const mineUpById = (g, id) => MINE_UPGRADES.find((x) => x.id === id) || null;
+const mineUpsMult = (g) => { let m = 1; for (const id of g.ups) { const up = mineUpById(g, id); if (up && up.mult) m *= up.mult; } return m; };   // what the agent upgrades owned multiply every agent by
+// the fifteen upgrades, two chains that each unlock one at a time: seven for the agents (every agent mines faster) and eight for the hand (clicks)
 const MINE_UPGRADES = [
   { id: 'kbd', name: 'mechanical keyboard', desc: 'clicks are worth twice as much', cost: 100, click: 2 },
-  { id: 'dictation', name: 'dictation', desc: 'clicks are worth twice as much', cost: 2000, click: 2, need: 'kbd' },
-  { id: 'macro', name: 'macro pad', desc: 'clicks are worth twice as much', cost: 50000, click: 2, need: 'dictation' },
-  { id: 'omni', name: 'command palette', desc: 'each click also earns a second of the mine', cost: 1e6, clickSec: 1, need: 'macro' },
-  { id: 'thinking', name: 'ultrathink', desc: 'each click also earns three seconds of the mine', cost: 5e8, clickSec: 3, need: 'omni' },
-  { id: 'voice', name: 'voice control', desc: 'clicks are worth twice as much', cost: 1e11, click: 2, need: 'thinking' },
-  { id: 'mouse2', name: 'a second mouse', desc: 'clicks are worth twice as much', cost: 1e14, click: 2, need: 'voice' },
-  { id: 'pedal', name: 'a foot pedal', desc: 'clicks are worth twice as much', cost: 1e17, click: 2, need: 'mouse2' },
-  { id: 'batchclick', name: 'the batch click', desc: 'each click also earns ten seconds of the mine', cost: 1e20, clickSec: 10, need: 'pedal' },
-  { id: 'hands', name: 'a thousand hands', desc: 'clicks are worth a thousand times as much', cost: 1e24, click: 1000, need: 'batchclick' },
-  ...MINE_UNITS.flatMap((u) => MINE_TIERS.map(([owned, x, mult, tname], i) => ({ id: `${u.id}${i + 1}`, name: tname ? `${tname} (${u.name})` : u.tiers[i], desc: `${u.name} mines ${mult === 2 ? 'twice' : `${fmtInt(mult)} times`} as fast`, cost: u.cost * x, unit: u.id, mult, owned }))),
+  { id: 'caching', name: 'prompt caching', desc: 'every agent mines twice as fast', cost: 2000, mult: 2 },
+  { id: 'dictation', name: 'dictation', desc: 'clicks are worth twice as much', cost: 50000, click: 2, need: 'kbd' },
+  { id: 'plan', name: 'plan mode', desc: 'every agent mines twice as fast', cost: 1e6, mult: 2, need: 'caching' },
+  { id: 'omni', name: 'command palette', desc: 'each click also earns a second of the mine', cost: 2e7, clickSec: 1, need: 'dictation' },
+  { id: 'mcp', name: 'MCP tools', desc: 'every agent mines twice as fast', cost: 5e8, mult: 2, need: 'plan' },
+  { id: 'thinking', name: 'ultrathink', desc: 'each click also earns three seconds of the mine', cost: 1e10, clickSec: 3, need: 'omni' },
+  { id: 'hooks', name: 'hooks', desc: 'every agent mines three times as fast', cost: 2e11, mult: 3, need: 'mcp' },
+  { id: 'voice', name: 'voice control', desc: 'clicks are worth twice as much', cost: 5e12, click: 2, need: 'thinking' },
+  { id: 'context', name: '1M context', desc: 'every agent mines three times as fast', cost: 1e14, mult: 3, need: 'hooks' },
+  { id: 'pedal', name: 'a foot pedal', desc: 'clicks are worth twice as much', cost: 2e15, click: 2, need: 'voice' },
+  { id: 'parallel', name: 'parallel tool calls', desc: 'every agent mines five times as fast', cost: 5e16, mult: 5, need: 'context' },
+  { id: 'batchclick', name: 'the batch click', desc: 'each click also earns ten seconds of the mine', cost: 1e18, clickSec: 10, need: 'pedal' },
+  { id: 'hands', name: 'a thousand hands', desc: 'clicks are worth a thousand times as much', cost: 1e20, click: 1000, need: 'batchclick' },
+  { id: 'singularity', name: 'the singularity', desc: 'every agent mines ten times as fast', cost: 1e23, mult: 10, need: 'parallel' },
 ];
 // surprises: a bubble that shows up now and then while the tab is on screen; click it before it goes
 const MINE_SURPRISES = [
@@ -3789,7 +3772,7 @@ const MINE_MILESTONES = [
   { id: 'agents500', name: 'a campus', desc: 'five hundred agents at once', test: (g) => mineAgents(g) >= 500 },
   { id: 'oneofeach', name: 'the full stack', desc: 'one of every agent', test: (g) => mineUnitsOpen(g).every((u) => g.units[u.id]) },
   { id: 'fleet', name: 'admiral', desc: 'buy the fleet', test: (g) => (g.units.fleet || 0) >= 1 },
-  { id: 'allups', name: 'maxed out', desc: 'every upgrade on offer bought, with at least fifty owned', test: (g) => g.ups.length >= 50 && !mineUpgradesOpen(g).length },
+  { id: 'allups', name: 'maxed out', desc: 'all fifteen upgrades bought', test: (g) => MINE_UPGRADES.every((up) => g.ups.includes(up.id)) },
   { id: 'total1k', name: 'a thousand', desc: '1,000 tokens mined all time', test: (g) => g.total >= 1e3 },
   { id: 'total1m', name: 'a million', desc: '1,000,000 tokens mined all time', test: (g) => g.total >= 1e6 },
   { id: 'total1b', name: 'a billion', desc: '1,000,000,000 tokens mined all time', test: (g) => g.total >= 1e9 },
@@ -3815,8 +3798,8 @@ const MINE_MILESTONES = [
   { id: 'total1qi', name: 'a quintillion', desc: '1,000,000,000,000,000,000 tokens mined all time', test: (g) => g.total >= 1e18 },
   { id: 'stars100', name: 'a hundred stars', desc: 'a hundred stars earned', test: (g) => g.starsEver >= 100 },
   { id: 'stars1k', name: 'a thousand stars', desc: 'a thousand stars earned', test: (g) => g.starsEver >= 1000 },
-  { id: 'tier200', name: 'overtime', desc: 'buy an agent\'s tier at 200 owned', test: (g) => g.ups.some((id) => (mineUpById(g, id) || {}).owned >= 200) },
-  { id: 'tier1k', name: 'thousand-fold', desc: 'buy a ×1,000 tier', test: (g) => g.ups.some((id) => (mineUpById(g, id) || {}).mult >= 1000) },
+  { id: 'ups5', name: 'kitted out', desc: 'five upgrades bought', test: (g) => g.ups.length >= 5 },
+  { id: 'tier1k', name: 'thousand-fold', desc: 'buy a thousand hands', test: (g) => g.ups.includes('hands') },
   { id: 'factory1', name: 'lights out', desc: 'hire the software factory', test: (g) => (g.units.factory || 0) >= 1 },
   { id: 'founder1', name: 'founder mode', desc: 'hire the founder', test: (g) => (g.units.founder || 0) >= 1 },
   { id: 'sprint1', name: 'sprinter', desc: 'finish a sprint', test: (g) => g.sprintsDone >= 1 },
@@ -4035,11 +4018,12 @@ const mineCombo = { n: 0, at: 0 };   // fast clicks in a row (transient)
 const mineSeen = [];   // live events already paid, so a reconnect replay never pays twice
 function mineNormalize(g) {
   const n = { v: 5, bank: 0, total: 0, clicks: 0, units: {}, ups: [], ach: [], real: { turns: 0, tokens: 0, commits: 0, bonus: 0 }, caught: 0, bestCombo: 0, night: false, capped: false, releases: 0, stars: 0, starsEver: 0, starsBonus: 0, spent: 0, shop: {}, names: {}, cos: {}, keepUp: '', hired: 0, upsBought: 0, big: 0, sprint: null, sprintsDone: 0, sprintDays: 0, streak: 0, boost: null, clickBoost: null,
-    shares: 0, ipo: 0, ipoStars: 0, ipoReleases: 0, totalIpo: 0, mined: null, rounds: 0, relAt: 0, bestRel: 0, runs: [], fastRel: 0, tiersBought: 0, frenzies: 0, bigHires: 0, week: null, weeksDone: 0, hardDone: 0, perfectDays: 0,
+    shares: 0, ipo: 0, ipoStars: 0, ipoReleases: 0, totalIpo: 0, mined: null, rounds: 0, relAt: 0, bestRel: 0, runs: [], fastRel: 0, frenzies: 0, bigHires: 0, week: null, weeksDone: 0, hardDone: 0, perfectDays: 0,
     px: 0, pxIpo: 0, fair: 0, fairAt: 0, shock: 0, noise: 0, pxDay: '', pxOpen: 0, pxHigh: 0, hist: [], event: null, basis: 0, trades: 0, invested: 0, cashed: 0, bought: 0, dipBuys: 0, gains: 0, arcade: {}, last: Date.now(), started: Date.now(), ...(g && typeof g === 'object' ? g : {}) };
   n.real = { turns: 0, tokens: 0, commits: 0, bonus: 0, ...(n.real || {}) }; n.units = n.units || {}; n.ups = Array.isArray(n.ups) ? n.ups : []; n.ach = Array.isArray(n.ach) ? n.ach : [];
   const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}); n.shop = obj(n.shop); n.names = obj(n.names); n.arcade = obj(n.arcade); n.cos = { skin: '', verbs: '', pet: '', confetti: true, ...obj(n.cos) }; n.keepUp = typeof n.keepUp === 'string' ? n.keepUp : '';
-  for (const k of ['bank', 'total', 'clicks', 'last', 'started', 'caught', 'bestCombo', 'releases', 'stars', 'starsEver', 'starsBonus', 'spent', 'hired', 'upsBought', 'big', 'sprintsDone', 'sprintDays', 'streak', 'shares', 'ipo', 'ipoStars', 'ipoReleases', 'totalIpo', 'rounds', 'relAt', 'bestRel', 'fastRel', 'tiersBought', 'frenzies', 'bigHires', 'weeksDone', 'hardDone', 'perfectDays', 'px', 'pxIpo', 'fair', 'fairAt', 'shock', 'noise', 'pxOpen', 'pxHigh', 'basis', 'trades', 'invested', 'cashed', 'bought', 'dipBuys', 'gains']) n[k] = Number(n[k]) || 0;
+  n.ups = n.ups.filter((id, i) => MINE_UPGRADES.some((up) => up.id === id) && n.ups.indexOf(id) === i); if (n.keepUp && !n.ups.includes(n.keepUp)) n.keepUp = '';   // the per-agent tiers of older saves are gone
+  for (const k of ['bank', 'total', 'clicks', 'last', 'started', 'caught', 'bestCombo', 'releases', 'stars', 'starsEver', 'starsBonus', 'spent', 'hired', 'upsBought', 'big', 'sprintsDone', 'sprintDays', 'streak', 'shares', 'ipo', 'ipoStars', 'ipoReleases', 'totalIpo', 'rounds', 'relAt', 'bestRel', 'fastRel', 'frenzies', 'bigHires', 'weeksDone', 'hardDone', 'perfectDays', 'px', 'pxIpo', 'fair', 'fairAt', 'shock', 'noise', 'pxOpen', 'pxHigh', 'basis', 'trades', 'invested', 'cashed', 'bought', 'dipBuys', 'gains']) n[k] = Number(n[k]) || 0;
   n.hist = Array.isArray(n.hist) ? n.hist.filter((h) => Array.isArray(h) && h.length === 2).slice(-120) : []; n.event = n.event && typeof n.event === 'object' && typeof n.event.name === 'string' ? n.event : null; n.pxDay = typeof n.pxDay === 'string' ? n.pxDay : '';
   if (n.ipo && !(n.px > 0)) {   // a listing from before the market had a price: the shares are priced from the stars that became them, with the pop
     const held = Math.max(1000, n.ipoStars - n.spent); n.px = n.fair = n.pxIpo = n.pxOpen = n.pxHigh = n.basis = held * 1.25 / Math.max(1, n.shares);
@@ -4116,7 +4100,7 @@ async function mineTrade(side, qty) {   // shares for stars at the ask, stars fo
   mineSave(true); mineCheck(g); mineRefresh();
 }
 const mineAgentMult = (g) => (1 + 0.25 * mineLevel(g, 'vp')) * Math.pow(2, g.rounds);   // the agents only: VPs of engineering and this run's funding rounds
-function mineBaseRate(g) { let r = 0; const mults = mineUnitMults(g); for (const u of mineUnitsAll(g)) r += (g.units[u.id] || 0) * u.rate * (mults[u.id] || 1); return r * mineMult(g) * mineAgentMult(g); }
+function mineBaseRate(g) { let r = 0; for (const u of mineUnitsAll(g)) r += (g.units[u.id] || 0) * u.rate; return r * mineUpsMult(g) * mineMult(g) * mineAgentMult(g); }
 const mineBoostOn = (b, now = Date.now()) => !!(b && b.until > now && b.mult > 1);
 function mineRate(g) { return mineBaseRate(g) * (mineBoostOn(g.boost) ? g.boost.mult : 1); }
 function mineClickValue(g) { let v = 1, sec = 0; for (const id of g.ups) { const up = mineUpById(g, id); if (!up) continue; if (up.click) v *= up.click; if (up.clickSec) sec += up.clickSec; } return v * mineMult(g) * (1 + 0.25 * mineLevel(g, 'ergo')) * (mineBoostOn(g.clickBoost) ? g.clickBoost.mult : 1) + mineRate(g) * sec; }
@@ -4165,15 +4149,15 @@ function mineBuy(kind, id) {
   const g = mineAccrue();
   if (kind === 'unit') { const u = mineUnitsAll(g).find((x) => x.id === id); if (!u) return; const owned = g.units[u.id] || 0; const n = mineBuyCount(u, g); const cost = n ? mineUnitCostN(u, owned, n) : Infinity; if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = owned + n; g.hired += n; if (n >= 100) g.bigHires += 1; if (n > 1) mineNote(`hired ${fmtInt(n)} × ${u.name} for ${fmtFull(cost)} tokens`); }
   else if (kind === 'ups-all') { const [bought, spent] = mineBuyAllUps(g); if (!bought) return; mineNote(`bought ${bought} upgrade${bought === 1 ? '' : 's'} for ${fmtFull(spent)} tokens`); }
-  else { const up = mineUpById(g, id); const c = up ? mineUpCost(g, up) : Infinity; if (!up || g.ups.includes(up.id) || g.bank < c) return; g.bank -= c; g.ups.push(up.id); g.upsBought += 1; if (up.unit) g.tiersBought += 1; }
+  else { const up = mineUpById(g, id); const c = up ? mineUpCost(g, up) : Infinity; if (!up || g.ups.includes(up.id) || g.bank < c) return; g.bank -= c; g.ups.push(up.id); g.upsBought += 1; }
   mineSave(); mineCheck(g); mineRefresh();
 }
 function mineBuyAllUps(g) {   // the cheapest open upgrade the bank covers, over and over: [how many, for how much]
   let bought = 0, spent = 0;
-  for (;;) { const next = mineUpgradesOpen(g).map((up) => [up, mineUpCost(g, up)]).filter(([, c]) => c <= g.bank).sort((a, b) => a[1] - b[1])[0]; if (!next) break; g.bank -= next[1]; g.ups.push(next[0].id); bought += 1; spent += next[1]; if (next[0].unit) g.tiersBought += 1; }
+  for (;;) { const next = mineUpgradesOpen(g).map((up) => [up, mineUpCost(g, up)]).filter(([, c]) => c <= g.bank).sort((a, b) => a[1] - b[1])[0]; if (!next) break; g.bank -= next[1]; g.ups.push(next[0].id); bought += 1; spent += next[1]; }
   g.upsBought += bought; return [bought, spent];
 }
-function mineUpgradesOpen(g) { return mineUpgradesAll(g).filter((up) => !g.ups.includes(up.id) && (!up.need || g.ups.includes(up.need)) && (!up.unit || (g.units[up.unit] || 0) >= up.owned)); }
+function mineUpgradesOpen(g) { return MINE_UPGRADES.filter((up) => !g.ups.includes(up.id) && (!up.need || g.ups.includes(up.need))); }   // the next of each chain
 function mineClick(e) {
   const g = mineAccrue(); const now = Date.now();
   mineCombo.n = now - mineCombo.at < mineComboWindow(g) ? mineCombo.n + 1 : 1; mineCombo.at = now; const cm = mineComboMult(mineCombo.n, g); if (cm > g.bestCombo) g.bestCombo = cm;
@@ -4261,7 +4245,7 @@ async function mineShopBuy(id) {   // a star (or a share) for a perk or a cosmet
 async function mineKeepPick() {
   const g = mineLoad(); const owned = g.ups.map((id) => mineUpById(g, id)).filter(Boolean);
   if (!owned.length) { toast('keep one: pick an upgrade once you own one (under "your setup" in the shop)'); return; }
-  const v = await chooseDialog('Keep one: which upgrade survives every release?', owned.map((up) => [up.id, up.name, up.unit ? up.unit : 'clicks']));
+  const v = await chooseDialog('Keep one: which upgrade survives every release?', owned.map((up) => [up.id, up.name, up.mult ? 'agents' : 'clicks']));
   if (!v) return; g.keepUp = v; mineSave(); mineNote(`keep one: ${(mineUpById(g, v) || {}).name} survives every release`); mineRefresh();
 }
 async function mineRename(id) {
@@ -4303,7 +4287,7 @@ const MINE_SPRINTS = [   // the goals scale with the mine: clicks, hires, turns 
   { id: 'mine', k: 'mined', n: (g) => Math.max(1000, Math.round(mineBaseRate(g) * 7200)), w: 2, text: (n) => `mine ${fmtMine(n)} tokens` },
   { id: 'catch', k: 'caught', n: 2, w: 2, text: (n) => `catch ${n} surprises` },
   { id: 'hire', k: 'hired', n: (g) => Math.max(30, Math.round(mineAgents(g) * 0.25 / 10) * 10), w: 1, text: (n) => `hire ${fmtInt(n)} agents` },
-  { id: 'ups', k: 'upsBought', n: (g) => Math.max(3, Math.min(20, Math.round(mineUpgradesAll(g).length / 30))), w: 2, text: (n) => `buy ${n} upgrades` },
+  { id: 'ups', k: 'upsBought', n: 1, w: 2, text: () => 'buy an upgrade' },
   { id: 'turns', k: (g) => g.real.turns, n: (g) => Math.max(5, Math.min(200, Math.round(mineDailyAvg(g, g.real.turns) * 0.5))), w: 2, text: (n) => `pay in ${n} real turns` },
   { id: 'commits', k: (g) => g.real.commits, n: (g) => Math.max(2, Math.min(50, Math.round(mineDailyAvg(g, g.real.commits) * 0.5))), w: 3, text: (n) => `pay in ${n} real commits` },
   { id: 'combo', k: 'big', n: 50, w: 1, text: (n) => `${n} clicks at a ×5 combo or better` },
@@ -4311,13 +4295,12 @@ const MINE_SPRINTS = [   // the goals scale with the mine: clicks, hires, turns 
   { id: 'dip', k: 'dipBuys', n: 1, w: 2, text: () => 'buy shares on a dip (5% or more under fair value)', when: (g) => g.ipo > 0 },
   { id: 'release', k: 'releases', n: 1, w: 3, text: () => 'cut a release' },
   { id: 'speed', k: 'fastRel', n: (g) => (g.bestRel ? Math.max(600, Math.round(g.bestRel * 1.25 / 60) * 60) : 7200), w: 3, text: (n) => `cut a release inside ${fmtDurLong(n)} of the last`, one: true },   // n is the target in seconds; counted when a release lands inside it
-  { id: 'tiers', k: 'tiersBought', n: 3, w: 2, text: (n) => `buy ${n} agent tiers` },
   { id: 'frenzy', k: 'frenzies', n: 1, w: 2, text: () => 'catch a timed boost' },
   { id: 'spend', k: 'spent', n: (g) => Math.max(1, Math.round(g.stars * 0.01)), w: 1, text: (n) => `spend ${fmtInt(n)} star${n === 1 ? '' : 's'} in the shop` },
   { id: 'rtokens', k: (g) => g.real.tokens, n: (g) => Math.max(10000, Math.round(Math.max(20000, mineDailyAvg(g, g.real.tokens) * 0.5) / 1000) * 1000), w: 2, text: (n) => `pay in ${fmtMine(n)} tokens from real turns` },
   { id: 'bighire', k: 'bigHires', n: 1, w: 1, text: () => 'hire a hundred agents in one go' },
 ];
-const MINE_HARD = ['clicks', 'mine', 'hire', 'ups', 'turns', 'commits', 'combo', 'tiers', 'rtokens'];   // templates the hard sprint can triple
+const MINE_HARD = ['clicks', 'mine', 'hire', 'ups', 'turns', 'commits', 'combo', 'rtokens'];   // templates the hard sprint can triple
 const mineCounter = (g, k) => (typeof k === 'function' ? k(g) : Number(g[k]) || 0);
 const mineDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const mineWeekKey = (d = new Date()) => { const t = new Date(d); t.setHours(0, 0, 0, 0); t.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return mineDay(t); };   // the Monday of the week
@@ -4450,7 +4433,7 @@ function renderFunView() {
 function mineRefresh() {
   const box = $('#fun-body'); if (!box || !box.dataset.built) return;
   const g = mineLoad(); const now = Date.now(); const rate = mineRate(g); const set = (k, v) => { const el = box.querySelector(`[data-m="${k}"]`); if (el && el.textContent !== String(v)) el.textContent = v; };
-  const bankText = fmtFull(g.bank); set('bank', bankText); const bankEl = box.querySelector('.mine-bank'); const bankCls = `mine-bank${bankText.length > 30 ? ' xl' : bankText.length > 18 ? ' l' : ''}`; if (bankEl.className !== bankCls) bankEl.className = bankCls;
+  set('bank', fmtFull(g.bank));
   set('rate', fmtMine(Math.round(rate * 10) / 10)); set('click', fmtMine(Math.round(mineClickValue(g) * 10) / 10));
   set('combo', now - mineCombo.at < mineComboWindow(g) && mineCombo.n >= 5 ? ` · combo ×${mineComboMult(mineCombo.n, g).toFixed(2)}` : '');
   const boosts = [g.boost, g.clickBoost].filter((b) => mineBoostOn(b, now)).map((b) => `${b.name}: ${b.id === 'stash' ? 'clicks' : 'the mine'} ×${b.mult} for ${Math.ceil((b.until - now) / 1000)} s`); set('boost', boosts.join(' · '));
@@ -4491,21 +4474,18 @@ function mineRefresh() {
   const runsEl = box.querySelector('[data-m="runs"]'); const runsKey = g.runs.map((r) => r.at).join(',');
   if (runsEl.dataset.key !== runsKey) { runsEl.dataset.key = runsKey; runsEl.innerHTML = g.runs.length ? `<span class="dim">runs</span>${g.runs.slice().reverse().map((r) => `<span title="${esc(new Date(r.at).toLocaleString())}">${r.kind === 'ipo' ? 'went public' : `v${r.v}`} · ${fmtDurLong(r.secs)} · +${fmtInt(r.got)} ${r.kind === 'ipo' ? 'share' : 'star'}${r.got === 1 ? '' : 's'}</span>`).join('')}` : ''; }
   const unitsEl = $('#mine-units'); const ukey = `${mineUnitsOpen(g).map((u) => u.id).join(',')}|${JSON.stringify(g.names)}|${mineHas(g, 'names') ? 1 : 0}`;
-  if (unitsEl.dataset.key !== ukey) { unitsEl.dataset.key = ukey; unitsEl.innerHTML = mineUnitsOpen(g).map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${mineHas(g, 'names') ? `<span class="rn" data-rename="${u.id}" title="rename">${esc(mineUnitName(g, u))}</span>` : esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="nx" data-m="next"></div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join(''); }
-  const mults = mineUnitMults(g); const allUps = mineUpgradesAll(g);
+  if (unitsEl.dataset.key !== ukey) { unitsEl.dataset.key = ukey; unitsEl.innerHTML = mineUnitsOpen(g).map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${mineHas(g, 'names') ? `<span class="rn" data-rename="${u.id}" title="rename">${esc(mineUnitName(g, u))}</span>` : esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join(''); }
+  const um = mineUpsMult(g);
   for (const u of mineUnitsOpen(g)) {
     const row = box.querySelector(`[data-unit="${u.id}"]`); const n = g.units[u.id] || 0; const cost = mineUnitCost(u, n);
-    const m = mults[u.id] || 1;
-    row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.classList.toggle('owned', n > 0);   // once hired, the blurb makes way for the next-tier line row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * m * mineMult(g) * mineAgentMult(g) * 10) / 10)}/s` : '';
+    row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.classList.toggle('owned', n > 0); row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * um * mineMult(g) * mineAgentMult(g) * 10) / 10)}/s` : '';
     const fl = row.querySelector('[data-m="floor"]'); const floor = n ? u.glyph.repeat(Math.min(n, 60)) + (n > 60 ? ` +${fmtInt(n - 60)}` : '') : ''; if (fl.textContent !== floor) fl.textContent = floor;
-    const pend = allUps.find((up) => up.unit === u.id && !g.ups.includes(up.id));   // the next tier: how many more agents it takes and how long that is at this rate
-    const nx = row.querySelector('[data-m="next"]'); const nxText = !pend ? 'every tier bought' : n >= pend.owned ? `${pend.name} is on offer under upgrades` : `${fmtInt(pend.owned - n)} more to ${pend.name} (×${fmtInt(pend.mult)}) · ${mineEta(g, mineUnitCostN(u, n, pend.owned - n))}`; if (nx.textContent !== nxText) nx.textContent = nxText;
     const k = mineBuyCount(u, g); const costK = k ? mineUnitCostN(u, n, k) : cost;
     row.querySelector('[data-m="cost"]').textContent = k > 1 ? `×${fmtInt(k)} · ${fmtMine(costK)} tokens` : `${fmtMine(costK)} tokens`; row.querySelector('button').disabled = !k || g.bank < costK;
   }
   const open = mineUpgradesOpen(g); const key = `${open.map((u) => u.id).join(',')}|${mineLevel(g, 'bulk')}`;
   const ups = $('#mine-ups');
-  if (ups.dataset.key !== key) { ups.dataset.key = key; ups.innerHTML = open.length ? open.map((up) => `<div class="mine-up" data-uprow="${up.id}"><div><b>${esc(up.name)}</b><div class="ds">${esc(up.desc)}<span data-m="eta"></span></div></div><button data-up="${up.id}">${fmtMine(mineUpCost(g, up))} tokens</button></div>`).join('') : `<div class="dim">${g.ups.length >= mineUpgradesAll(g).length ? 'every upgrade bought' : 'more appear as you buy agents'}</div>`; }
+  if (ups.dataset.key !== key) { ups.dataset.key = key; ups.innerHTML = open.length ? open.map((up) => `<div class="mine-up" data-uprow="${up.id}"><div><b>${esc(up.name)}</b><div class="ds">${esc(up.desc)}<span data-m="eta"></span></div></div><button data-up="${up.id}">${fmtMine(mineUpCost(g, up))} tokens</button></div>`).join('') : `<div class="dim">${g.ups.length >= mineUpgradesAll(g).length ? 'every upgrade bought' : 'the next appears once the last is bought'}</div>`; }
   for (const up of open) { const c = mineUpCost(g, up); const b = ups.querySelector(`[data-up="${up.id}"]`); if (b) b.disabled = g.bank < c; const eta = ups.querySelector(`[data-uprow="${up.id}"] [data-m="eta"]`); const t = g.bank < c ? mineEta(g, c) : ''; if (eta && eta.textContent !== t) eta.textContent = t; }
   const all = box.querySelector('[data-mine="ups-all"]'); const canAll = open.some((up) => mineUpCost(g, up) <= g.bank); if (all.disabled === canAll) all.disabled = !canAll;
   // today's sprints (three and the hard one) and the week's: progress toward each goal, the stars it pays, done ones lit

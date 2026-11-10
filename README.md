@@ -357,14 +357,14 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
 - **Fun** (alt+3): the **token mine**, a clicker. Click the KCODER banner for
   tokens and spend them on agents that mine on their own (Haiku intern,
   Sonnet builder, Opus architect, a second pane, a worktree, a cron
-  schedule, the task queue, the fleet) and on upgrades that multiply them
-  (thirteen tiers each: doublings at 10, 25 and 50 owned, a ×4 scale-up at
-  100, then a tier every hundred agents to 1,000 with ×10 each and a
-  ×1,000 at 500 and at 1,000, so the first agents catch up late in the
-  game), with a ×1 / ×10 / ×100 / max buy amount on the agents card, a
-  "buy all affordable" button on the upgrades, and under every agent how
-  many more it takes to reach its next tier and how long that is at the
-  current rate (unaffordable upgrades say how long too). Fast clicks in a
+  schedule, the task queue, the fleet) and on fifteen upgrades in two
+  chains that unlock one at a time (seven for the agents, prompt caching
+  to the singularity, that multiply every agent; eight for the hand,
+  mechanical keyboard to a thousand hands, that multiply clicks or add
+  seconds of the mine to each), with a ×1 / ×10 / ×100 / max buy amount on
+  the agents card and a "buy all affordable" button on the upgrades
+  (unaffordable ones say how long they take at the current rate). Fast
+  clicks in a
   row build a combo up to ×5. Surprises pop up now and then in the part of
   the tab that is on screen (a free retry, a prompt cache hit, a rate limit
   lifted, the intern's stash): click one before it goes for a lump of tokens
@@ -374,7 +374,7 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   and bank reset, stars stay, +10% each (one star at a million, ten at a
   billion). Three **sprints** a day and a hard one that triples a goal and
   its pay, new at midnight, plus one sprint for the week paid five times
-  over (click, mine, catch, hire, buy upgrades or agent tiers, pay in real
+  over (click, mine, catch, hire, buy an upgrade, pay in real
   turns, commits or tokens, a ×5 combo, a hundred agents in one go, cut a
   release, cut one inside your best time...). Goals scale with how much you
   usually do in a day and with the run, and every sprint pays a share of the
@@ -433,11 +433,10 @@ move, <kbd>y</kbd>/<kbd>n</kbd> answer and the selection moves on,
   beaten: past the open-source fork a new agent appears every time the last
   one is hired (the second universe, the time loop, the Dyson sphere... and
   round again with numerals), each 25 times the price and 12 times the rate
-  of the one before; past a thousand of any agent a ×10 tier shows up every
-  hundred more (beyond the singularity, the recursion, the heat death...);
-  past a thousand hands the next thousand-fold click upgrade costs ten
-  thousand times the last; and the total family runs on past a vigintillion
-  by powers of ten to the edge of what a number can hold.
+  of the one before, and the total family runs on past a vigintillion
+  by powers of ten to the edge of what a number can hold. Every count
+  shows its digits up to a trillion and reads as words from there (4.52
+  quadrillion), so the bank never outgrows its card.
   The rank (token miner, foreman, pit boss, token baron... the multiverse,
   the omniverse, the simulation, the heat death, the reboot and on by
   powers of ten) follows stars ever earned over every listing, with a
