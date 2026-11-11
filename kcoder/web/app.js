@@ -1127,7 +1127,7 @@ function focusPane(sid) {
   state.focus = sid;
   if (sid) { state.sid = sid; localStorage.setItem('kcoder.sid', sid); loadEvents(sid, -1); const s = state.sessions.get(sid); if (s && s.project && s.project.git && !state.gitInfo.has(sid)) gitStatus(sid, false).catch(() => {}); }
   renderWall();
-  if (sid) { const pane = $(`.pane[data-sid="${sid}"]`); if (pane) { renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); fitShell(sid); focusComposer(); if (isPhone()) pinPaneBody(pane); } }
+  if (sid) { const pane = $(`.pane[data-sid="${sid}"]`); if (pane) { renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); fitShell(sid); focusComposer(); if (isPhone()) { const f = $('.composer', pane); if (f && f._comp) f._comp.grow(); pinPaneBody(pane); } } }
 }
 // On the phone a chat opens at its newest message and stays there (the keyboard rising, the composer
 // growing, an image loading) until the reader scrolls up; wirePane keeps _pin from the body's scroll.
@@ -1538,7 +1538,11 @@ function mountComposer(slot, sid, termStyle) {
   if (termStyle) $('.prompt-label', form).hidden = false; else $('.prompt-label', form).hidden = true;
   if (slot.closest('.cpane')) ta.placeholder = 'Message kcoder…  (Enter sends)';
   form._comp = comp;
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + 'px'; };
+  // the box is sized to its text: scrollHeight is the padding box, so the borders are added back (box-sizing is
+  // border-box), or the textarea is a few px scrollable and iOS draws a scrollbar thumb down the side of an
+  // empty box; a hidden textarea (an unfocused pane on the phone) has no size, so it is left for the open
+  const grow = () => { if (!ta.getClientRects().length) { ta.style.height = ''; return; } ta.style.height = 'auto'; const edges = ta.offsetHeight - ta.clientHeight; ta.style.height = Math.min(Math.ceil(ta.scrollHeight + edges), window.innerHeight * 0.4) + 'px'; };
+  comp.grow = grow;
   ta.addEventListener('input', () => { grow(); updateMenu(comp); });
   ta.addEventListener('keydown', (e) => onComposerKey(e, comp));
   // the $ button docks this session's shell under the chat (voice input is the mic button and the palette)
