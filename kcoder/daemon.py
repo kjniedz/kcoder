@@ -2874,7 +2874,13 @@ def _web_hash() -> str:
 def _phone_file(path: str, token: str) -> tuple:
     """A web app file for a phone, through the tunnel: the same files the loopback listener serves."""
     r = _serve_static(SimpleNamespace(path=path), token)
-    return r.status_code, r.headers.get("Content-Type") or "application/octet-stream", bytes(r.body or b"")
+    body = bytes(r.body or b"")
+    # The phone's page carries no manifest: a Home Screen install on the iPhone keeps its own storage, so the
+    # pairing has to ride in the URL iOS saves, and that is the page's own URL (fragment and all) only when
+    # there is no manifest start_url to take its place. apple-mobile-web-app-capable still opens it standalone.
+    if r.status_code == 200 and path.rstrip("/") in ("", "/index.html"):
+        body = re.sub(rb'<link rel="manifest"[^>]*>\n?', b"", body)
+    return r.status_code, r.headers.get("Content-Type") or "application/octet-stream", body
 
 
 def _phone_local_connect(host: str, port: int):

@@ -1074,3 +1074,22 @@ html[data-phone] .mine-grid { grid-template-columns: 1fr; }
 html[data-phone] .mine-ledger { grid-template-columns: 1fr 1fr; }
 html[data-phone] .help-grid.keys { display: none; }
 html[data-phone] .wall-empty p:last-child kbd { display: none; }
+/* the sessions list on the phone: one row per session (name, repo, status), the chat behind a tap */
+html[data-phone] .wall:not(.focus) { grid-auto-rows: auto; gap: 8px; padding: 8px; align-content: start; }
+html[data-phone] .wall:not(.focus) .pane { min-height: 0; border-radius: 12px; }
+html[data-phone] .wall:not(.focus) .pane .pane-body, html[data-phone] .wall:not(.focus) .pane .shell-drawer { display: none !important; }
+html[data-phone] .wall:not(.focus) .pane-title { flex-wrap: wrap; row-gap: 2px; padding: 10px 34px 4px 12px; font-size: 12px; background: transparent; border-bottom: none; white-space: normal; position: relative; min-height: 0; }
+html[data-phone] .wall:not(.focus) .pane-title .num, html[data-phone] .wall:not(.focus) .pane-title .model, html[data-phone] .wall:not(.focus) .pane-title .view-toggle, html[data-phone] .wall:not(.focus) .pane-title .spacer { display: none; }
+html[data-phone] .wall:not(.focus) .pane-title .name { flex: 1 1 0; min-width: 0; font-size: 15px; white-space: nowrap; }
+html[data-phone] .wall:not(.focus) .pane-title .repo { flex: 1 0 100%; margin-left: 16px; white-space: nowrap; }
+html[data-phone] .wall:not(.focus) .pane-title .chips, html[data-phone] .wall:not(.focus) .pane-status .git-line { display: none; }
+html[data-phone] .wall:not(.focus) .pane-title::after { content: '›'; position: absolute; right: 14px; top: 6px; font-size: 24px; color: var(--fg-mute); line-height: 1; }
+html[data-phone] .wall:not(.focus) .pane-status { background: transparent; border-top: none; padding: 0 12px 10px 28px; font-size: 11.5px; }
+html[data-phone] .wall:not(.focus) .pane-status > span:nth-child(-n+3) { display: none; }
+/* the open chat: a ✕ at the right of its title closes it and returns to the list */
+html[data-phone] .wall.focus .pane.focused .back { order: 100; font-size: 0; padding: 0; margin-left: 4px; min-width: 32px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--bg-2); }
+html[data-phone] .wall.focus .pane.focused .back::before { content: '✕'; font-size: 15px; color: var(--fg); }
+html[data-phone] .pane-actions { flex-wrap: nowrap; overflow-x: auto; }
+html[data-phone] .pane-actions button, html[data-phone] .pane-actions select { flex: 0 0 auto; white-space: nowrap; }
+html[data-phone] .wall.focus .pane.focused .pane-title .repo, html[data-phone] .wall.focus .pane.focused .pane-title .model { display: none; }
+html[data-phone] .wall.focus .pane.focused .pane-title .name { flex: 1 1 0; min-width: 0; }

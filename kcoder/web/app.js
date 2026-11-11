@@ -175,17 +175,14 @@ function readToken() {
   if (RELAY) phoneHomeScreen(); else if (m) history.replaceState(null, '', location.pathname + location.search);
   return localStorage.getItem('kcoder.token');
 }
-// On a phone the token and the key stay in the URL fragment (put back from storage when missing) and the
-// manifest's start_url carries them too: a Home Screen install on the iPhone keeps its own storage, separate
-// from Safari's, so the URL it was added from is the only thing that reaches it.
+// On a phone the token and the key stay in the URL fragment (put back from storage when missing): a Home
+// Screen install on the iPhone keeps its own storage, separate from Safari's, so the URL it was added from is
+// the only thing that reaches it. The page comes without a manifest so iOS saves that URL and not a start_url.
 function phoneHomeScreen() {
+  const link = document.querySelector('link[rel="manifest"]'); if (link) link.remove();
   const t = localStorage.getItem('kcoder.token'), k = localStorage.getItem('kcoder.key'); if (!t || !k) return;
   const hash = `#token=${encodeURIComponent(t)}&key=${encodeURIComponent(k)}`;
   if (location.hash !== hash) history.replaceState(null, '', location.pathname + location.search + hash);
-  const link = document.querySelector('link[rel="manifest"]'); if (!link) return;
-  const icon = (n) => ({ src: `${location.origin}${RELAY.base}/icon-${n}.png`, sizes: `${n}x${n}`, type: 'image/png' });
-  const man = { name: 'kcoder', short_name: 'kcoder', start_url: location.origin + location.pathname + location.search + hash, scope: `${location.origin}${RELAY.base}/`, display: 'standalone', background_color: '#0C0E12', theme_color: '#0C0E12', icons: [icon(192), icon(512)] };
-  link.href = 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify(man));
 }
 // every frame to the daemon goes through here: plain on the Mac, sealed in order through the relay
 function wsSend(text) {
@@ -836,13 +833,13 @@ function renderWall() {
     if (wall.children[i] !== pane) wall.insertBefore(pane, wall.children[i] || null);
     pane.classList.toggle('focused', s.id === state.focus);
     renderPaneChrome(pane, s, i + 1);
-    renderPaneBody(pane, s.id);
+    if (!isPhone() || s.id === state.focus) renderPaneBody(pane, s.id);   // the phone's list shows no body
   });
   for (const p of $$('.pane', wall)) if (!seen.has(p.dataset.sid)) { closeShell(p.dataset.sid); stashDraft($('.composer', p)); p.remove(); }
 }
 
 function paneSkeleton() {
-  return `<div class="pane-title"><span class="back" title="back to sessions">‹</span><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell"></span></div>
+  return `<div class="pane-title"><span class="back" title="close">‹</span><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell"></span></div>
   <div class="pane-body"></div>
   <div class="shell-drawer" hidden></div>
   <div class="approval-bar" hidden></div>
@@ -2869,7 +2866,7 @@ function uninstallDialog() {
 }
 
 function tokenGate(msg) {
-  if (RELAY) { $('#main').innerHTML = `<div class="token-gate"><p>${esc(msg || 'This phone is not paired with a Mac yet.')}</p><p>On the Mac, open kcoder, press ⌘K, pick <b>phone</b>, and scan the QR code with this phone. The code carries the key that seals everything between this phone and the Mac; the relay never sees it. Add kcoder to the Home Screen from the page the code opens, since a Home Screen app keeps its own storage.</p></div>`; return; }
+  if (RELAY) { $('#main').innerHTML = `<div class="token-gate"><p>${esc(msg || 'This phone is not paired with a Mac yet.')}</p><p>On the Mac, open kcoder, press ⌘K, pick <b>phone</b>, and scan the QR code with this phone. The code carries the key that seals everything between this phone and the Mac; the relay never sees it. Add kcoder to the Home Screen from the page the code opens, since a Home Screen app keeps its own storage.</p><p class="muted">${esc(`opened ${location.pathname}${location.hash ? ' with a fragment' : ' without a fragment'}, ${localStorage.getItem('kcoder.key') ? 'a key' : 'no key'} in this app's storage, ${navigator.standalone ? 'from the Home Screen' : 'in the browser'}`)}</p></div>`; return; }
   $('#main').innerHTML = `<div class="token-gate"><p>${esc(msg || 'This page needs the daemon token.')}</p><p>Run <code>kcoder ui</code> in a terminal - it opens this page with the token attached - or paste the contents of <code>~/.local/share/kcoder/token</code>:</p><input id="tok" placeholder="token"><button class="primary" id="tok-go">connect</button></div>`;
   const go = () => { const v = $('#tok').value.trim(); if (v) { localStorage.setItem('kcoder.token', v); location.reload(); } };
   $('#tok-go').onclick = go; $('#tok').onkeydown = (e) => { if (e.key === 'Enter') go(); };
