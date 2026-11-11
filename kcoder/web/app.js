@@ -417,7 +417,7 @@ function queueRender(sid) {
 
 function renderSession(sid) {
   const pane = $(`.pane[data-sid="${sid}"]`);
-  if (pane) renderPaneBody(pane, sid);
+  if (pane && (!isPhone() || pane.classList.contains('focused'))) renderPaneBody(pane, sid);   // the phone's list shows no body, so a hidden pane is not rendered (and keeps no stale render that would hold the log off the bottom when it opens)
   if (state.view === 'chat') for (const cp of $$(`.cpane[data-sid="${sid}"]`)) renderCpaneLog(cp);
   if (state.sid === sid && state.view === 'terminal') renderTermLog();
 }
@@ -1079,6 +1079,12 @@ function wirePane(pane, sid) {
   $('select[data-act]', pane); // wired via change delegation below
   pane.addEventListener('change', (e) => { const s = e.target.closest('select[data-act]'); if (s) handleAction(s, sid); });
   wireDrag(pane, sid);
+  // the phone only: the open chat stays pinned to the bottom until the reader scrolls up (see pinPaneBody)
+  const body = $('.pane-body', pane);
+  const onPhone = () => isPhone() && pane.classList.contains('focused');
+  body.addEventListener('scroll', () => { if (!onPhone()) return; pane._pin = nearBottom(body); if (pane._pin) { const j = $('.jump', pane); if (j) j.hidden = true; } });
+  if (window.ResizeObserver) new ResizeObserver(() => { if (onPhone() && pane._pin !== false) pinPaneBody(pane); }).observe(body);
+  body.addEventListener('load', () => { if (onPhone() && pane._pin !== false) pinPaneBody(pane); }, true);
 }
 
 function saveOrder() { localStorage.setItem('kcoder.order', JSON.stringify(state.order)); syncUiState(); }
@@ -1121,7 +1127,14 @@ function focusPane(sid) {
   state.focus = sid;
   if (sid) { state.sid = sid; localStorage.setItem('kcoder.sid', sid); loadEvents(sid, -1); const s = state.sessions.get(sid); if (s && s.project && s.project.git && !state.gitInfo.has(sid)) gitStatus(sid, false).catch(() => {}); }
   renderWall();
-  if (sid) { const pane = $(`.pane[data-sid="${sid}"]`); if (pane) { renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); fitShell(sid); focusComposer(); } }
+  if (sid) { const pane = $(`.pane[data-sid="${sid}"]`); if (pane) { renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); fitShell(sid); focusComposer(); if (isPhone()) pinPaneBody(pane); } }
+}
+// On the phone a chat opens at its newest message and stays there (the keyboard rising, the composer
+// growing, an image loading) until the reader scrolls up; wirePane keeps _pin from the body's scroll.
+function pinPaneBody(pane) {
+  const body = $('.pane-body', pane); if (!body) return;
+  body.scrollTop = body.scrollHeight; pane._pin = true; const j = $('.jump', pane); if (j) j.hidden = true;
+  requestAnimationFrame(() => { if (pane._pin !== false && body.isConnected) body.scrollTop = body.scrollHeight; });
 }
 function cyclePaneView(sid) {
   const order = ['chat', 'term', 'shell', 'preview'];

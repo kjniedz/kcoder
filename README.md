@@ -184,8 +184,9 @@ session. Voice input is the microphone button and "voice input" in the
 palette.
 **On a phone** (under 640 px wide, or the window squeezed that far) the
 app runs one column: the sessions grid is a list of rows (name, repo and
-branch, status and age), a tap opens a session full screen with a ✕ in its
-title that closes it, its action buttons scroll sideways, the composer sits
+branch, status and age), a tap opens a session full screen at its newest
+message (and it stays there through the keyboard rising until you scroll up)
+with a ✕ in its title that closes it, its action buttons scroll sideways, the composer sits
 above the keyboard, the search field becomes a button that opens the palette,
 dialogs run edge to edge, the sidebar and the 2 and 3 pane layouts fold
 away, and stats, the inbox, the mine and the games go single column. Add
