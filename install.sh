@@ -153,7 +153,9 @@ main() {
 
   say "Installing kcoder (this takes a minute)"
   run "$PY" -m pip install --quiet --upgrade pip
-  run "$PY" -m pip install --quiet -e "$CHECKOUT"
+  # --prefer-binary: a package whose newest version has no ready build for this machine (cryptography
+  # on an Intel Mac) is taken at the newest version that has one, instead of being compiled and failing
+  run "$PY" -m pip install --quiet --prefer-binary -e "$CHECKOUT"
   if [ "$OS" != "Darwin" ]; then
     run mkdir -p "$HOME/.local/bin"
     run ln -sf "$(dirname "$PY")/kcoder" "$HOME/.local/bin/kcoder"

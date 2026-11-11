@@ -112,6 +112,17 @@ hand. Nothing is wrong with your Mac: run the one-line installer above again.
 It ignores that Python, installs kcoder's own copy from python.org if it is
 not there yet, and finishes the install with it.
 
+**"Failed building wheel for cryptography"**, with "error originates from a
+subprocess" and lines about Rust or OpenSSL, means pip found no ready build of
+the cryptography package for this machine and tried to compile it. Since June
+2026 cryptography ships ready builds only for Apple Silicon Macs and 64-bit
+Windows, so this happens on an Intel Mac. Nothing is wrong with the Mac and no
+compiler is needed: run the one-line installer above again. Since November 2026
+it takes the newest version that has a ready build for the machine. (The
+installer's closing note lists "Could not resolve host" among the usual causes
+of a failed step; that line is advice, not a second error, unless it appears
+above it in red.)
+
 **"cannot import name '__version__' from 'kcoder' (unknown location)"** means
 Python was started as `python3 -m kcoder…` without `-P` from a folder that
 holds a bare `kcoder` folder, usually the home folder with the checkout in

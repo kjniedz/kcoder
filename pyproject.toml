@@ -15,8 +15,12 @@ dependencies = [
     "rich>=13.0.0",
     "pyfiglet>=1.0.0",
     "websockets>=13.0",
-    # the phone: AES-GCM for the frames through the relay
+    # the phone: AES-GCM for the frames through the relay. cryptography 49 (June 2026) stopped
+    # shipping wheels for Intel Macs and 32-bit Windows: there pip would compile it (Rust, OpenSSL)
+    # and fail, so those stay on the last version with a ready build
     "cryptography>=42.0",
+    "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "cryptography<49; sys_platform == 'win32' and platform_machine == 'x86'",
     "prompt_toolkit>=3.0",
     "pywebview>=5.0; sys_platform == 'darwin'",
     # on-device dictation in the app window (macOS Speech framework)

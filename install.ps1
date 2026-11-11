@@ -101,10 +101,10 @@ if (-not (Test-Path (Join-Path $venv 'Scripts\python.exe'))) {
 $vpy = Join-Path $venv 'Scripts\python.exe'
 Say 'Installing kcoder (this takes a minute)'
 & $vpy -m pip install --quiet --upgrade pip
-& $vpy -m pip install --quiet -e "$checkout[windows]"
+& $vpy -m pip install --quiet --prefer-binary -e "$checkout[windows]"
 if ($LASTEXITCODE -ne 0) {
     Write-Host 'The terminal-view extra did not install; installing kcoder without it.' -ForegroundColor Yellow
-    & $vpy -m pip install --quiet -e "$checkout"
+    & $vpy -m pip install --quiet --prefer-binary -e "$checkout"
     if ($LASTEXITCODE -ne 0) { Fail 'pip could not install kcoder. See the messages above.' }
 }
 

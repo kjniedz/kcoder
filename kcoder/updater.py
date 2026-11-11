@@ -306,7 +306,7 @@ def _changed(root: str, old: str, new: str) -> list:
 def _rebuild(root: str, changed: list) -> None:
     """Reinstall / rebuild what the new commits need, then prove the code imports."""
     if "pyproject.toml" in changed:
-        cmd = [sys.executable, "-m", "pip", "install", "--quiet", "-e", root]
+        cmd = [sys.executable, "-m", "pip", "install", "--quiet", "--prefer-binary", "-e", root]
         _log("$ " + " ".join(cmd))
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         if r.returncode != 0:
@@ -373,7 +373,7 @@ def helper_main(argv: list) -> int:
                 result["tried"] = new
                 _out(root, "reset", "--hard", "--quiet", old)
                 if "pyproject.toml" in _changed(root, old, new or old):
-                    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "-e", root], capture_output=True, timeout=900)
+                    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--prefer-binary", "-e", root], capture_output=True, timeout=900)
                 result["rolled_back"] = old
             except Exception as exc2:  # noqa: BLE001
                 _log(f"rollback failed: {exc2}")
