@@ -188,7 +188,10 @@ full screen with a back arrow in its title, the composer sits above the
 keyboard, the search field becomes a button that opens the palette,
 dialogs run edge to edge, the sidebar and the 2 and 3 pane layouts fold
 away, and stats, the inbox, the mine and the games go single column. Add
-the page to the Home Screen and it opens like an app.
+the page to the Home Screen and it opens like an app; through the relay
+the pairing rides in the page's URL, so add it from the page the QR code
+opened (a Home Screen app on the iPhone keeps its own storage, apart from
+Safari's).
 Grid panes also cycle through a real **shell** (xterm.js in the session's
 folder) and the **live preview** of a web project. Broadcast (⇶, with 2 or 3
 panes) sends one prompt to every pane, handy for comparing models.
