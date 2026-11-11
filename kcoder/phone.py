@@ -26,6 +26,7 @@ import os
 import re
 import secrets
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -182,13 +183,24 @@ class Phone:
         _aesgcm(secrets.token_bytes(32))   # fail now, not on the first phone, if the cipher is missing
         if self.state.get("relay") == relay and self.enabled():
             self.start()
+            self._wait_connected()
             return self.status()
         r = _call(relay, "POST", "/v1/installs", body={"name": compat.hostname()})
         self.state = {"relay": relay, "install_id": r["install_id"], "install_token": r["install_token"], "key": _b64u(secrets.token_bytes(32))}
         self._register_key()
         save_state(self.state)
-        self.start()
+        self.restart()   # not start(): a tunnel still retrying an earlier relay would keep its error and its target
+        self._wait_connected()
         return self.status()
+
+    def _wait_connected(self, seconds: float = 5.0) -> None:
+        """Called off the loop: give the tunnel a moment to make its first connection
+        (or fail) so the status handed back right after enable says which."""
+        if self.loop.is_running() and threading.current_thread() is threading.main_thread():
+            return
+        end = time.monotonic() + seconds
+        while time.monotonic() < end and not self.connected and not self.last_error:
+            time.sleep(0.1)
 
     def _register_key(self) -> None:
         self._api("POST", f"/v1/installs/{self.state['install_id']}/key", body={"rt": relay_token(self._key()), "version": self.version})
@@ -230,13 +242,27 @@ class Phone:
         self._api("DELETE", f"/v1/installs/{self.state['install_id']}/devices/{device_id}")
 
     def status(self) -> dict:
-        out = {"enabled": self.enabled(), "relay": self.relay, "connected": self.connected, "error": self.last_error, "devices": [], "phones": self.phones, "url": None}
+        out = {"enabled": self.enabled(), "relay": self.relay, "connected": self.connected, "error": self.last_error, "devices": [], "phones": self.phones, "url": None, "relay_sees_mac": None}
         if self.enabled():
             out["url"] = f"{self.relay}/m/{self.state['install_id']}/"
+            task = self._task
+            if task is not None and task.done() and not task.cancelled() and task.exception() is not None:
+                out["connected"] = False
+                out["error"] = f"the tunnel stopped: {task.exception()}"[:300]
+                self.last_error = out["error"]
+                self.start()
+            elif task is None or task.done():
+                out["connected"] = False
+                out["error"] = out["error"] or "the tunnel is not running"
+                self.start()
             try:
                 st = self._api("GET", f"/v1/installs/{self.state['install_id']}/status")
                 out["devices"] = st.get("devices") or []
                 out["phones"] = int(st.get("phones") or 0)
+                out["relay_sees_mac"] = bool(st.get("tunnel"))
+                if out["connected"] and not out["relay_sees_mac"]:
+                    out["error"] = "the relay does not see this Mac's connection; it is being reopened"
+                    self.restart()
             except PhoneError as exc:
                 out["error"] = str(exc)
         return out
@@ -254,15 +280,33 @@ class Phone:
     # -- the tunnel -------------------------------------------------------
 
     def start(self) -> None:
+        """Start the tunnel task; safe from any thread (enable runs in an executor,
+        and a task created from another thread does not wake the loop)."""
         if self._task is not None and not self._task.done():
             return
-        self._task = self.loop.create_task(self._run())
+        if threading.current_thread() is threading.main_thread() or not self.loop.is_running():
+            self._task = self.loop.create_task(self._run())
+            return
+        done = threading.Event()
+
+        def _go() -> None:
+            if self._task is None or self._task.done():
+                self._task = self.loop.create_task(self._run())
+            done.set()
+        self.loop.call_soon_threadsafe(_go)
+        done.wait(2)
 
     def stop(self) -> None:
         self.connected = False
-        if self._task is not None:
-            self._task.cancel()
-            self._task = None
+        task, self._task = self._task, None
+        if task is not None:
+            self.loop.call_soon_threadsafe(task.cancel)
+
+    def restart(self) -> None:
+        """Drop the connection and make a fresh one (the relay lost it, or a retry from the dialog)."""
+        self.stop()
+        self.last_error = None
+        self.start()
 
     def _seal(self, text: str) -> str:
         nonce = secrets.token_bytes(12)
@@ -273,11 +317,14 @@ class Phone:
         return _aesgcm(self._key()).decrypt(raw[:12], raw[12:], None).decode()
 
     async def _run(self) -> None:
-        from websockets.asyncio.client import connect
         backoff = 2.0
         while self.enabled():
             url = self.relay.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + f"/v1/installs/{self.state['install_id']}/tunnel"
             try:
+                try:
+                    from websockets.asyncio.client import connect  # noqa: PLC0415
+                except ImportError as exc:
+                    raise PhoneError("the websockets package is missing or older than 13: run the updater, or pip install -U websockets, then restart kcoderd") from exc
                 async with connect(url, additional_headers={"Authorization": f"Bearer {self.state['install_token']}", "User-Agent": USER_AGENT}, ssl=_ssl_context() if url.startswith("wss://") else None, max_size=8 * 1024 * 1024, ping_interval=20, ping_timeout=20) as ws:
                     self._ws = ws
                     self.connected = True
@@ -293,12 +340,15 @@ class Phone:
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
-                self.last_error = str(exc)[:200]
-                log.info("phone: tunnel closed (%s); reconnecting in %.0fs", exc, backoff)
+                self.last_error = (str(exc) or exc.__class__.__name__)[:300]
+                log.warning("phone: tunnel to %s closed (%s); reconnecting in %.0fs", self.relay, self.last_error, backoff)
             finally:
                 self.connected = False
                 self._ws = None
-                await self._close_all()
+                try:
+                    await self._close_all()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("phone: closing channels: %s", exc)
             try:
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:

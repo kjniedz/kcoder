@@ -2154,6 +2154,10 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
                 return {"phone": st, "pair_url": P.pair_url()}
             if action == "pair":
                 return {"phone": await loop.run_in_executor(None, P.status), "pair_url": P.pair_url()}
+            if action == "retry":
+                await loop.run_in_executor(None, P.restart)
+                await loop.run_in_executor(None, P._wait_connected)
+                return {"phone": await loop.run_in_executor(None, P.status), "pair_url": P.pair_url()}
             if action == "revoke":
                 await loop.run_in_executor(None, P.revoke, str(req.get("device") or ""))
             if action == "test":

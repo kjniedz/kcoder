@@ -768,7 +768,11 @@ every rule it understood and what it does; the pane chip shows the count.
   and the Mac is sealed with AES-GCM under that key, and the relay only ever
   sees the key's hash (the relay token a phone shows to be let through), so
   it carries bytes it cannot read. "New key" cuts every phone off until it
-  scans again; "turn off" leaves the relay. On the phone, Settings › Phone
+  scans again; "turn off" leaves the relay. If the dialog says "not
+  connected", a phone sees "your Mac is offline" until kcoderd's outbound
+  websocket to the relay is up: the dialog shows the error, has a "retry
+  now", and the daemon log says why (a firewall or proxy that blocks
+  websockets, or a websockets package older than 13). On the phone, Settings › Phone
   allows push notifications (on iPhone after Share › Add to Home Screen):
   a push arrives when a session asks for an approval or finishes while the
   app on the Mac is closed, and tapping it opens the inbox or the session.
