@@ -1834,6 +1834,20 @@ function renderConditions() {
   else if (P.kind === 'btc') { tag.hidden = false; tag.className = 'cond-tag btc ' + (P.btc > 0 ? 'up' : 'down'); tag.textContent = `₿ ${P.btc > 0 ? '+' : ''}${P.btc.toFixed(1)}%`; tag.title = `bitcoin's 24 h move${C.btc.price ? ' · ' + fmtUsd(C.btc.price) : ''} (CoinGecko) · read ${age(C.btc.at)} ago`; }
   else tag.hidden = true;
   if (P.kind === 'moon') document.documentElement.dataset.cond = 'moon'; else delete document.documentElement.dataset.cond;
+  renderCondBar(C, P);
+}
+// the readings themselves sit at the right of the status bar whatever the day (the header's accent needs
+// a 1" snow day, a 5% bitcoin day or a full-moon night; on a quiet day this is the only sign they are in)
+function renderCondBar(C, P) {
+  const el = $('#status-cond'); if (!el) return;
+  const st = (C && C.settings) || {}; const now = Date.now() / 1000; const fresh = (x) => !!(x && x.at && now - x.at <= COND_STALE);
+  const parts = [];
+  if (st.snow && fresh(C.snow)) parts.push(`${Math.round(Number(C.snow.inches || 0))}" ${C.snow.place || 'snow'}`);
+  if (st.btc && fresh(C.btc)) { const b = Number(C.btc.pct || 0); parts.push(`₿ ${b > 0 ? '+' : ''}${b.toFixed(1)}%`); }
+  if (st.moon && C.moon) { const lit = Math.round((C.moon.illumination || 0) * 100); parts.push(`${lit >= 95 ? '🌕' : lit >= 50 ? '🌔' : lit >= 5 ? '🌒' : '🌑'} ${lit}%`); }
+  el.hidden = !st.enabled || !parts.length;
+  el.textContent = parts.join(' · ');
+  el.title = `conditions · fresh snow in 24 h, bitcoin's 24 h move, the moon · the header gets its accent at 1" of snow, a 5% bitcoin day or a full-moon night in dark mode${P && P.kind ? ` (today: ${P.kind})` : ' (a quiet day: no accent)'} · click to customize`;
 }
 setInterval(renderConditions, 5 * 60 * 1000);   // staleness, nightfall and the hour move on their own
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', renderConditions);
@@ -1852,14 +1866,6 @@ function toggleShellDrawer(el) {
 }
 function shellType(sid, line) {   // type a line into the session's shell once the pty is up (the drawer or the shell view opened it a moment ago)
   const t0 = Date.now(); const tick = () => { const sh = state.shells.get(sid); if (sh && sh.open) { send('shell_input', { sid, data: btoa(unescape(encodeURIComponent(line + '\r'))) }); sh.term.focus(); return; } if (Date.now() - t0 < 8000) setTimeout(tick, 100); else toast('the shell did not open; type it yourself', 'err'); }; tick();
-}
-function remoteControl() {   // claude remote-control in this session's folder: the Mac shows up under Code in the Claude app and at claude.ai/code, for the same account
-  const comp = activeComposer(); const pane = comp && comp.form.closest('.pane, .cpane'); const sid = pane && pane.dataset.sid;
-  if (!sid) { toast('open a session first: remote control runs in its folder', 'err'); return; }
-  const drawer = $('.shell-drawer', pane); if (drawer && !(drawer.hidden === false && drawer.dataset.sid === sid) && !(pane.classList.contains('pane') && paneViewOf(sid) === 'shell')) toggleShellDrawer(comp.form);
-  const s = state.sessions.get(sid) || {}; const name = (s.title && s.title !== s.name ? s.title : s.name || 'kcoder').replace(/["\\$`]/g, '').slice(0, 60);
-  shellType(sid, `env -u ANTHROPIC_API_KEY claude remote-control --name "${name}"`);   // remote control needs the claude.ai login; a key in the daemon's env (the pty inherits it) would make claude refuse
-  toast('remote control: open the Claude app on your phone, Code, and pick this Mac', 'ok');
 }
 function closeShellDrawer(pane) {
   const drawer = $('.shell-drawer', pane); if (!drawer || drawer.hidden) return;
@@ -2970,7 +2976,6 @@ const SHORTCUTS = [
   { id: 'history', keys: '↑ / ↓', label: 'prompt history', scope: 'composer' },
   { id: 'dialog-submit', keys: '⌘↩', label: 'submit a multi-line dialog', scope: 'composer' },
   // palette only
-  { id: 'v-sessions', palette: 'sessions', run: () => openSessions() },
   { id: 'v-stats', palette: 'stats', run: () => setView('stats') },
   { id: 'v-fun', palette: 'just for fun', run: () => setView('fun') },
   { id: 'v-mine', palette: 'just for fun: the token mine', run: () => funSelect('mine') },
@@ -2982,14 +2987,12 @@ const SHORTCUTS = [
   { id: 'l-3', palette: 'sessions: 3 panes', run: () => setLayout('3') },
   { id: 'about', palette: 'about kcoder', run: () => aboutDialog() },
   { id: 'fullscreen', palette: 'full screen', run: () => toggleFullscreen() },
-  { id: 'search', palette: 'search across sessions', run: () => { toChat(); const si = $('#search'); si.focus(); si.select(); } },
   { id: 'new', palette: 'new session', run: () => openNewSession() },
   { id: 'waiting', palette: 'next item waiting on you', run: () => cycleWaiting() },
   { id: 'view', palette: 'pane view: chat / terminal', run: () => { if (state.focus) cyclePaneView(state.focus); else if (state.view === 'chat') { const p = chatPane(); if (p && p.dataset.sid) toggleCpaneView(p); } } },
   { id: 'archive-idle', palette: 'archive idle chats', run: () => archiveIdle() },
   { id: 'voice', palette: 'voice input (dictate into the composer)', when: () => speechSupported(), run: () => { const comp = activeComposer(); if (comp) toggleVoice(comp); } },
   { id: 'shellhere', palette: 'terminal here (a shell in the session\'s folder, under the chat)', run: () => { const comp = activeComposer(); if (comp) toggleShellDrawer(comp.form); } },
-  { id: 'remote', palette: 'remote control (drive this folder from the Claude app on your phone)', run: remoteControl },
   { id: 'split', palette: 'split: add a pane', run: () => { toChat(); splitAdd(null); } },
   { id: 'zoom', palette: 'pop out / restore pane', run: () => { toChat(); toggleZoom(); } },
   { id: 'inbox', palette: 'approval inbox', run: () => openInbox() },
@@ -3040,6 +3043,7 @@ $('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
 $('#btn-search').addEventListener('click', () => openPalette());
 $('#status-items').addEventListener('click', (e) => { if (e.target.closest('[data-phone]')) phoneDialog(); });
+$('#status-cond').addEventListener('click', () => customizeDialog());
 $('#brand').addEventListener('click', () => aboutDialog());
 // the search field is the command palette's front door: focusing it opens the palette with whatever was typed
 $('#omni').addEventListener('focus', () => { const o = $('#omni'); const q = o.value; o.value = ''; o.blur(); if (!state.dialog) openPalette(q); });
