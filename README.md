@@ -760,7 +760,8 @@ every rule it understood and what it does; the pane chip shows the count.
   nothing to install there. Opt-in (Settings › Phone, or "phone" in the
   palette). Your Mac opens no port: `kcoderd` keeps one outbound websocket
   (the tunnel) to a relay (`relay/`, a Cloudflare Worker; the default is the
-  one Kyle hosts, or deploy your own), and the phone opens the relay's
+  one Kyle hosts, or deploy your own; the host name alone will do, https
+  is added), and the phone opens the relay's
   `/m/<install>/` page, which is kcoder's own web app served through that
   tunnel, in the phone layout. Pairing is a QR code whose URL fragment
   carries the daemon token and a 256-bit key; every frame between the phone

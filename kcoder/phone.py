@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import ssl
 import time
@@ -35,6 +36,35 @@ log = logging.getLogger("kcoderd")
 STATE_PATH = os.path.join(paths.DATA_DIR, "phone.json")
 CHUNK = 180_000          # base64 characters per tunnel frame for a file (the relay's frames stay well under its limit)
 DEFAULT_RELAY = "https://kcoder-relay.kyleniedz99.workers.dev"
+
+
+def normalize_relay(relay: str | None) -> str:
+    """The relay URL as typed into the dialog, reduced to its https origin.
+
+    People paste it from everywhere: a bare hostname, wss://, a capital scheme,
+    quotes or angle brackets around it, the pair URL with its /m/<id>/ path and
+    fragment, a trailing slash, a zero-width space from a chat app. All of those
+    mean the same relay, so take the host and use https. Only a plain http:// to
+    127.0.0.1 or localhost is let through, for a wrangler dev relay.
+    """
+    raw = (relay or "").strip().strip("'\"<>`").strip()
+    raw = "".join(ch for ch in raw if ch.isprintable() and not ch.isspace())
+    if not raw:
+        return DEFAULT_RELAY
+    m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*)://(.*)$", raw)
+    scheme, rest = (m.group(1).lower(), m.group(2)) if m else ("https", raw)
+    if scheme == "wss":
+        scheme = "https"
+    elif scheme == "ws":
+        scheme = "http"
+    if scheme not in ("https", "http"):
+        raise PhoneError(f"the relay URL must be https://, not {scheme}:// (got {raw!r})")
+    host = rest.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if not host or not re.match(r"^[A-Za-z0-9.\-]+(:\d+)?$", host):
+        raise PhoneError(f"the relay URL needs a host name, like {DEFAULT_RELAY} (got {raw!r})")
+    if scheme == "http" and host.split(":")[0] not in ("127.0.0.1", "localhost"):
+        raise PhoneError(f"the relay URL must be https:// (got {raw!r}); plain http:// is only for a local 127.0.0.1 relay")
+    return f"{scheme}://{host.lower()}"
 
 
 class PhoneError(Exception):
@@ -148,9 +178,7 @@ class Phone:
         return _unb64u(self.state["key"])
 
     def enable(self, relay: str | None) -> dict:
-        relay = (relay or DEFAULT_RELAY).strip().rstrip("/")
-        if not relay.startswith(("https://", "http://127.0.0.1", "http://localhost")):
-            raise PhoneError("the relay URL must be https:// (or a local http://127.0.0.1 for testing)")
+        relay = normalize_relay(relay)
         _aesgcm(secrets.token_bytes(32))   # fail now, not on the first phone, if the cipher is missing
         if self.state.get("relay") == relay and self.enabled():
             self.start()
