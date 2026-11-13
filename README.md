@@ -178,7 +178,7 @@ picker above the sessions switches layouts (the palette does too). Drag a chat f
 the sidebar onto a pane, or click the pane's name to pick one. The layout is
 remembered.
 
-Every pane has its own input, model and trust pickers, and a **chat /
+Every pane has its own input and trust picker, and a **chat /
 terminal** toggle that renders the same session as a plain transcript.
 The `$` button next to send (or "terminal here" in the palette)
 docks a real **shell** under the chat, in the session's folder, in a grid
@@ -620,14 +620,16 @@ seen during its turns, approximate when sessions run in parallel), and to
 reconnect or clear a limit you reset yourself. Each session's pane and
 sidebar row show its own share.
 
-**The plan's own model, by default.** A new Claude session is on **default**:
-kcoder sends Claude Code no model flag, so it picks the model exactly as it
-does in the terminal (the plan's default, or the `model` in your own Claude
-Code settings) and keeps its own plan management, such as moving to Sonnet
-partway through a Max window. The pane shows which model it picked
-("default → opus-4-8") and the usage log records that name. Picking `opus`,
-`sonnet` or `fable` pins the model and never steps down, which is what makes
-kcoder use far more of a plan than the terminal; pin only when you mean it.
+**The plan's own model, always.** A Claude session in the app is on
+**default**: kcoder sends Claude Code no model flag, so it picks the model
+exactly as it does in the terminal (the plan's default, or the `model` in
+your own Claude Code settings) and keeps its own plan management, such as
+moving to Sonnet partway through a Max window. The pane shows which model it
+picked ("default → opus-4-8") and the usage log records that name. The app
+has no model picker, on the Mac or the phone: pinning `opus`, `sonnet` or
+`fable` never steps down, which is what made kcoder use far more of a plan
+than the terminal. The terminal client's `/model` still pins one for a
+session you start there, and `kcoder --model NAME` too.
 **Effort** (Settings, `medium` by default) is passed to every Claude turn as
 Claude Code's `--effort`: `low` for the quickest answers, `high` for hard
 tasks, `default` to leave it to Claude Code. In a terminal: `kcoder login` and `kcoder
@@ -754,9 +756,9 @@ every rule it understood and what it does; the pane chip shows the count.
   small turns and a stronger one for large work (`sonnet` / `opus` on your
   plan). A turn is judged by its own prompt (length, several files, words
   like refactor or migrate), never by how long the conversation is, so a
-  short follow-up in a long session stays on the cheap tier. New Claude
-  sessions start on **default** (the plan's own choice, above) rather than
-  auto; pick a concrete model to turn routing off.
+  short follow-up in a long session stays on the cheap tier. Claude
+  sessions in the app are on **default** (the plan's own choice, above),
+  not auto; `auto` is for the other providers and the terminal client.
 - **Fallback**: on a rate limit or outage the turn moves to the next
   configured provider, never from your Claude plan to a paid API key, never
   to a paid provider once the daily cap is reached.
@@ -883,7 +885,7 @@ from a turn: Claude Code's login to your Claude account is no longer accepted
 Click **Reconnect Claude** on the red note (or run `kcoder login`), sign in
 with the Claude account that holds the plan, and send again. Nothing was
 billed. If the session is on **fable**, the error says so instead: Fable is not
-on every plan, switch to opus or sonnet with `/model opus` or the model menu.
+on every plan; only a session pinned from the terminal client can be on it.
 
 **"Claude Code was stopped from outside this turn (SIGTERM)"** means something
 ended the `claude` process while it worked: a kill command, the system, or

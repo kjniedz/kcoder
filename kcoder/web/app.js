@@ -12,7 +12,7 @@ const BANNER = [
 
 const SLASH = [
   ['/help', 'show commands'], ['/clear', 'reset conversation history'], ['/cd', 'change working directory'],
-  ['/model', 'switch model or provider (all providers)'], ['/provider', 'same picker as /model'], ['/trust', 'auto | write | read | none | dry'], ['/auto', 'toggle auto-approve'],
+  ['/trust', 'auto | write | read | none | dry'], ['/auto', 'toggle auto-approve'],
   ['/title', 'set the chat title'], ['/name', 'rename the session'], ['/queue', 'add a follow-up task'],
   ['/fork', 'fork this chat'], ['/compact', 'summarise history to free context'], ['/export', 'download as markdown'], ['/recap', 'where we left off (/recap new rewrites it)'],
   ['/archive', 'archive this chat'], ['/shell', 'toggle the shell pane'], ['/grid', 'sessions: the grid'],
@@ -895,7 +895,6 @@ function renderPaneChrome(pane, s, num) {
       `<button data-act="interrupt" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■ interrupt</button>` +
       `<button data-act="queue">+ task</button>` +
       `<select data-act="trust" title="trust level"><option value="auto">trust: auto</option><option value="write">trust: write</option><option value="read">trust: read</option><option value="none">trust: none</option><option value="dry">trust: dry run</option></select>` +
-      `<select data-act="model" title="model"></select>` +
       (s.project && s.project.git ? `<button data-act="git">git status</button><button data-act="pull" title="git pull --ff-only from the remote">⇣ pull</button>` : '') +
       (s.worktree ? `<button data-act="merge" title="merge this session's branch into the project">⇤ merge</button><button data-act="pr">open PR</button><button data-act="discard" class="danger">discard</button>` : '') +
       (s.worktree ? `<button data-act="changes" title="review this session's changes hunk by hunk">${s.needs_review ? '⚑ ' : ''}changes</button>` : '') +
@@ -903,7 +902,6 @@ function renderPaneChrome(pane, s, num) {
       `<button data-act="instructions" title="the repo's instruction file (KCODER.md / AGENTS.md / CLAUDE.md)">instructions</button>` +
       `<button data-act="open-chat">open in chat</button><button data-act="export">export</button><button data-act="archive">archive</button>`;
     $('select[data-act="trust"]', acts).value = s.trust || 'read';
-    fillModelSelect($('select[data-act="model"]', acts), s);
   }
   const slot = $('.composer-slot', pane);
   slot.hidden = paneViewOf(s.id) === 'shell';
@@ -913,14 +911,6 @@ function renderPaneChrome(pane, s, num) {
   const ta = $('.composer textarea', slot); if (ta) ta.placeholder = focused && !isPhone() ? 'Message kcoder…  (Enter sends · Shift+Enter newline · / commands · @ files · Esc interrupts)' : 'Message ' + s.name + '…';
 }
 
-function fillModelSelect(sel, s) {
-  const prov = (state.providers || []).find((p) => p.id === s.provider);
-  const models = prov ? prov.models.slice() : [];
-  if (prov && prov.auto && !models.includes('auto')) models.unshift('auto');
-  if (s.model && !models.includes(s.model)) models.unshift(s.model);
-  sel.innerHTML = models.map((m) => `<option value="${esc(m)}">${m === 'auto' ? `auto (${esc(((prov && prov.tiers) || {}).small || '')} / ${esc(((prov && prov.tiers) || {}).large || '')})` : m === 'default' && s.provider === 'claude' ? 'default (the plan\'s choice)' : claudeModelNote(s.provider, m) ? esc(m) + ' (' + claudeModelNote(s.provider, m) + ')' : esc(m)}</option>`).join('') + '<option value="__other">other model…</option>';
-  sel.value = s.model;
-}
 
 function paneViewOf(sid) { return state.paneView.get(sid) || 'chat'; }
 
@@ -1203,11 +1193,6 @@ async function handleAction(el, sid) {
       }
       case 'queue': { const t = await promptDialog('Add a follow-up task', 'It runs when the current turn finishes.'); if (t) await request('queue', { sid, action: 'add', text: t }); break; }
       case 'trust': await request('set', { sid, trust: el.value }); break;
-      case 'model': {
-        let m = el.value;
-        if (m === '__other') { m = await promptDialog('Model name', ''); if (!m) { el.value = s.model; return; } }
-        await request('set', { sid, model: m }); break;
-      }
       case 'git': await gitStatus(sid, true); break;
       case 'pull': { try { const r = await request('pull', { sid }); toast(r.message || 'pulled', 'ok'); gitStatus(sid, false).catch(() => {}); } catch (e) { toast('pull: ' + e.message, 'err'); } break; }
       case 'merge': if (await confirmDialog(`Merge branch ${s.worktree.branch} into ${s.project.name}?`, 'Uncommitted changes in the worktree are committed first.')) { const r = await request('merge', { sid }); toast(r.message || 'merged', r.ok === false ? 'err' : 'ok'); } break;
@@ -1476,7 +1461,6 @@ function _renderTitlebarsLegacy() {
     `<span class="dot ${s.archived ? 'archived' : s.status}"></span><span class="title">${esc(s.title || s.name)}</span><span class="meta">${esc((s.project || {}).name || '')}${s.worktree ? ' @ ' + esc(s.worktree.branch) : ''} · ${esc(shortHome(s.cwd))}</span><span class="spacer"></span>` +
     `<span class="meta">ctx ${fmtTokens(s.context_tokens || 0)} · ${s.plan ? (planShareText(s) ? 'plan ' + planShareText(s) : 'on your plan') : fmtUsd((s.usage || {}).cost || 0)}</span>` +
     `<select data-act="trust" title="trust"><option value="auto">auto</option><option value="write">write</option><option value="read">read</option><option value="none">none</option><option value="dry">dry run</option></select>` +
-    `<select data-act="model" title="model"></select>` +
     `<button data-act="interrupt" title="Esc" ${s.status === 'working' || s.status === 'waiting' ? '' : 'disabled'}>■</button>` +
     `<button data-act="export" title="export markdown">⤓</button><button data-act="menu" title="more">⋯</button>`;
   return html;
@@ -1681,7 +1665,7 @@ function modelSeesImages(s) {
 function renderAtts(comp) {
   comp.atts.hidden = comp.images.length === 0;
   const s = state.sessions.get(comp.sid);
-  const warn = comp.images.length && s && !modelSeesImages(s) ? `<div class="att-warn">⚠ ${esc(s.model)} can't take images: switch the model (/model) or they are left out</div>` : '';
+  const warn = comp.images.length && s && !modelSeesImages(s) ? `<div class="att-warn">⚠ ${esc(s.model)} can't take images: they are left out</div>` : '';
   comp.atts.innerHTML = comp.images.map((im, i) => im.pending ? `<span class="attachment pending" title="preparing ${esc(im.name)}…">…</span>` : `<span class="attachment" title="${esc(im.name)}${im.w ? ` · ${im.w}×${im.h}` : ''} · click to view"><img src="${im.data_url}" alt="${esc(im.name)}" data-preview="${im.data_url}" data-name="${esc(im.name)}"><span class="x" data-i="${i}" title="remove">✕</span></span>`).join('') + warn;
   for (const x of $$('.x', comp.atts)) x.onclick = (e) => { e.stopPropagation(); comp.images.splice(Number(x.dataset.i), 1); renderAtts(comp); };
 }
@@ -1742,7 +1726,7 @@ async function submitComposer(comp) {
   if (images.length) {
     const blind = targets.map((t) => state.sessions.get(t)).filter((ts) => ts && !modelSeesImages(ts));
     if (blind.length) {
-      const ok = await confirmDialog(`${blind.map((b) => b.model).join(', ')} can't take images`, `${images.length} image${images.length === 1 ? '' : 's'} would be left out. Send the text alone? Cancel to keep the images and switch the model with /model first.`);
+      const ok = await confirmDialog(`${blind.map((b) => b.model).join(', ')} can't take images`, `${images.length} image${images.length === 1 ? '' : 's'} would be left out. Send the text alone?`);
       if (!ok) return;
       images = [];
       if (!text) return;
@@ -1770,13 +1754,6 @@ async function slashCommand(sid, line) {
       case '/help': settingsDialog(); return true;
       case '/clear': await request('clear', { sid }); return true;
       case '/cd': if (arg) await request('set', { sid, cwd: arg }); return true;
-      case '/model': {
-        if (!arg) { modelPicker(sid); return true; }
-        const [p, ...m] = arg.split('/'); const prov = (state.providers || []).find((x) => x.id === p);
-        if (prov && m.length) await switchModel(sid, p, m.join('/')); else await request('set', { sid, model: arg });
-        return true;
-      }
-      case '/provider': modelPicker(sid); return true;
       case '/trust': if (arg) await request('set', { sid, trust: arg }); else toast('trust: ' + s.trust); return true;
       case '/auto': await request('set', { sid, trust: s.trust === 'auto' ? 'read' : 'auto' }); return true;
       case '/title': if (arg) await request('title', { sid, title: arg }); return true;
@@ -2036,7 +2013,6 @@ async function openNewSession(pre = {}) {
     </label>
     <div class="row">
       <label>provider<select id="ns-provider">${provs.map((p) => `<option value="${p.id}"${p === def ? ' selected' : ''}${p.configured ? '' : ' disabled'}>${esc(p.label)}${p.configured ? '' : ' (not set up)'}</option>`).join('')}</select></label>
-      <label>model<select id="ns-model"></select></label>
       <label>trust<select id="ns-trust"><option value="auto">auto (never ask)</option><option value="write">write (gate shell)</option><option value="read">read (gate writes + shell)</option><option value="none">none (ask for everything)</option><option value="dry">dry run (plan + diff only, changes nothing)</option></select></label>
     </div>
     <label>session name (optional)<input id="ns-name" placeholder="defaults to the folder name"></label>
@@ -2045,15 +2021,13 @@ async function openNewSession(pre = {}) {
     <label class="check"><input type="checkbox" id="ns-wt" ${cfg.worktrees === false ? '' : 'checked'}> use a separate git worktree + branch (recommended when running several sessions on one repo)</label>
     <div class="help" style="text-transform:none;letter-spacing:0">Provider not set up yet? <a href="#" id="ns-setup">Connect your AI</a></div>
   </div><div class="foot"><span class="help" id="ns-status"></span><span class="spacer" style="flex:1"></span><button data-x="cancel">cancel</button><button class="primary" data-x="ok">start</button></div>`, 'new');
-  const modelSel = $('#ns-model', d), provSel = $('#ns-provider', d), cwdIn = $('#ns-cwd', d), repoMenu = $('#ns-repos', d), status = $('#ns-status', d), tplSel = $('#ns-tpl', d);
-  const collect = () => ({ cwd: cwdIn.value.trim(), provider: provSel.value, model: modelSel.value, trust: $('#ns-trust', d).value, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked });
-  const applyTpl = (t) => { if (!t) return; cwdIn.value = t.cwd || ''; if (t.provider && provs.some((p) => p.id === t.provider)) { provSel.value = t.provider; provSel.dispatchEvent(new Event('change')); } if (t.model) { if (!Array.from(modelSel.options).some((o) => o.value === t.model)) modelSel.insertBefore(new Option(t.model, t.model), modelSel.lastElementChild); modelSel.value = t.model; } if (t.trust) $('#ns-trust', d).value = t.trust; $('#ns-task', d).value = t.task || ''; $('#ns-queue', d).value = (t.queue || []).join('\n'); if (t.worktree != null) $('#ns-wt', d).checked = !!t.worktree; $('[data-x="tpl-del"]', d).hidden = false; };
+  const provSel = $('#ns-provider', d), cwdIn = $('#ns-cwd', d), repoMenu = $('#ns-repos', d), status = $('#ns-status', d), tplSel = $('#ns-tpl', d);
+  const collect = () => ({ cwd: cwdIn.value.trim(), provider: provSel.value, trust: $('#ns-trust', d).value, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked });
+  const applyTpl = (t) => { if (!t) return; cwdIn.value = t.cwd || ''; if (t.provider && provs.some((p) => p.id === t.provider)) { provSel.value = t.provider; provSel.dispatchEvent(new Event('change')); } if (t.trust) $('#ns-trust', d).value = t.trust; $('#ns-task', d).value = t.task || ''; $('#ns-queue', d).value = (t.queue || []).join('\n'); if (t.worktree != null) $('#ns-wt', d).checked = !!t.worktree; $('[data-x="tpl-del"]', d).hidden = false; };
   tplSel.addEventListener('change', () => { const t = tpls.find((x) => x.id === tplSel.value); if (t) applyTpl(t); else $('[data-x="tpl-del"]', d).hidden = true; });
   if (pre.template) { tplSel.value = pre.template; applyTpl(tpls.find((x) => x.id === pre.template)); }
   $('#ns-setup', d).addEventListener('click', (e) => { e.preventDefault(); const pid = provSel.value; closeDialog(); setupDialog(pid); });
   $('#ns-trust', d).value = state.config && state.config.default_trust ? state.config.default_trust : 'auto';
-  const fill = () => { const p = provs.find((x) => x.id === provSel.value) || {}; const auto = p.auto && (!state.config || !state.config.routing || state.config.routing.enabled !== false); const plan = p.default_model === 'default'; modelSel.innerHTML = (auto ? `<option value="auto"${plan ? '' : ' selected'}>auto (${esc((p.tiers || {}).small || '')} for small tasks, ${esc((p.tiers || {}).large || '')} for large)</option>` : '') + (p.models || []).map((m) => `<option${(plan || !auto) && m === p.default_model ? ' selected' : ''}>${m === 'default' && plan ? 'default (the plan\'s choice, as in the terminal)' : esc(m)}</option>`).join('') + '<option value="__other">other…</option>'; };
-  provSel.addEventListener('change', fill); fill();
   // repo picker: local git repos + GitHub repos via gh
   let repos = state.repoCache;
   const renderRepos = () => {
@@ -2073,9 +2047,8 @@ async function openNewSession(pre = {}) {
   repoMenu.addEventListener('mousedown', (e) => { const it = e.target.closest('[data-v]'); if (it) { e.preventDefault(); cwdIn.value = it.dataset.v; repoMenu.hidden = true; $('#ns-task', d).focus(); } });
   if (!cwd) { setTimeout(() => cwdIn.focus(), 20); } else $('#ns-task', d).focus();
   const submit = async () => {
-    let model = modelSel.value; if (model === '__other') { model = await promptDialog('Model name', ''); if (!model) return; }
     const spec = cwdIn.value.trim();
-    const fields = { cwd: spec, provider: provSel.value, model, trust: $('#ns-trust', d).value, name: $('#ns-name', d).value.trim() || undefined, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked };
+    const fields = { cwd: spec, provider: provSel.value, trust: $('#ns-trust', d).value, name: $('#ns-name', d).value.trim() || undefined, task: $('#ns-task', d).value.trim(), queue: $('#ns-queue', d).value.split('\n').map((x) => x.trim()).filter(Boolean), worktree: $('#ns-wt', d).checked };
     if (/^(https?:\/\/github\.com\/|git@github\.com:)?[\w.-]+\/[\w.-]+\/?$/.test(spec) && !spec.startsWith('/') && !spec.startsWith('~') && !spec.startsWith('.')) status.textContent = 'cloning ' + spec + '…';
     $('[data-x="ok"]', d).disabled = true;
     try { const r = await request('create', fields); closeDialog(); state.repoCache = null; state.sid = r.session.id; localStorage.setItem('kcoder.sid', r.session.id); loadEvents(r.session.id, -1); if (state.view === 'wall') focusPane(r.session.id); else if (state.view === 'chat') assignPane(pre.pane != null ? pre.pane : state.layout.focus, r.session.id); toast('started ' + r.session.name + ' in ' + shortHome(r.session.cwd), 'ok'); }
@@ -2702,54 +2675,6 @@ async function instructionsDialog(sid) {
   show();
 }
 
-// ---- /model: every provider and its models in one list ----
-// on Kyle's Max plan Fable turns are billed as overage credits, not plan usage
-const claudeModelNote = (pid, m) => {
-  if (pid !== 'claude' || !m || m === 'auto' || m === 'default') return '';
-  const fam = /fable/i.test(m) ? 'fable' : /sonnet/i.test(m) ? 'sonnet' : /haiku/i.test(m) ? 'haiku' : 'opus';
-  if (((state.claude || {}).limits || []).some((l) => l.scope === 'all' || l.scope === fam)) return 'limit reached';
-  return fam === 'fable' ? 'weekly Fable limit' : '';
-};
-async function switchModel(sid, pid, model) {
-  const s = state.sessions.get(sid) || {};
-  if (pid === s.provider) { await request('set', { sid, model }); toast(`model → ${model}`, 'ok'); return; }
-  const prov = (state.providers || []).find((x) => x.id === pid) || {};
-  if (!prov.configured) { setupDialog(pid); return; }
-  if (s.messages && !(await confirmDialog(`Switch to ${prov.label}?`, 'Message formats differ between providers, so this conversation\'s history is cleared. Files in the worktree are not touched.'))) return;
-  await request('set', { sid, provider: pid, model });
-  toast(`${prov.label} · ${model}`, 'ok');
-}
-async function modelPicker(sid) {
-  await refreshProviders();
-  const s = state.sessions.get(sid) || {};
-  const rows = [];
-  for (const p of state.providers || []) {
-    const models = (p.auto ? ['auto'] : []).concat(p.models || []);
-    if (!p.configured) { rows.push({ pid: p.id, model: p.default_model, label: p.label, meta: 'not set up · connect', off: true }); continue; }
-    for (const m of models) rows.push({ pid: p.id, model: m, label: p.label, meta: m === 'auto' ? `auto (${(p.tiers || {}).small || ''} / ${(p.tiers || {}).large || ''})` : m === 'default' && p.id === 'claude' ? 'default · the plan\'s own choice, as in the terminal' : claudeModelNote(p.id, m) ? `${m} · ${claudeModelNote(p.id, m)}` : m, cur: p.id === s.provider && m === s.model });
-  }
-  let sel = Math.max(0, rows.findIndex((r) => r.cur)), shown = rows;
-  const d = openDialog(`<div class="palette"><input id="mp-in" placeholder="model or provider… (provider/model to type any model)"><div class="list" id="mp-list"></div></div>`, 'palette');
-  const inp = $('#mp-in', d), list = $('#mp-list', d);
-  const render = () => {
-    let last = null;
-    list.innerHTML = shown.map((r, i) => { const head = r.pid !== last ? `<div class="group-h">${esc(r.label)}</div>` : ''; last = r.pid; return head + `<div class="item${i === sel ? ' sel' : ''}${r.off ? ' off' : ''}" data-i="${i}"><span>${esc(r.meta)}</span>${r.cur ? '<span class="meta">current</span>' : ''}</div>`; }).join('') || '<div class="empty-row">no match · press enter to use what you typed</div>';
-    const el = $('.item.sel', list); if (el) el.scrollIntoView({ block: 'nearest' });
-  };
-  const filter = () => { const q = inp.value.toLowerCase().trim(); shown = q ? rows.filter((r) => fuzzy((r.label + ' ' + r.pid + ' ' + r.meta).toLowerCase(), q)) : rows; sel = 0; render(); };
-  const run = async (i) => {
-    const r = shown[i]; const typed = inp.value.trim(); closeDialog();
-    try {
-      if (r) await switchModel(sid, r.pid, r.model);
-      else if (typed) { const [p, ...m] = typed.split('/'); if (m.length && (state.providers || []).some((x) => x.id === p)) await switchModel(sid, p, m.join('/')); else await switchModel(sid, s.provider, typed); }
-    } catch (e) { toast(e.message, 'err'); }
-  };
-  inp.addEventListener('input', filter);
-  inp.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { sel = Math.min(shown.length - 1, sel + 1); render(); e.preventDefault(); } else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); } else if (e.key === 'Enter') { e.preventDefault(); run(sel); } });
-  list.addEventListener('click', (e) => { const it = e.target.closest('[data-i]'); if (it) run(Number(it.dataset.i)); });
-  render(); inp.focus();
-}
-
 // ---- live preview pane ----
 const previewPolls = new Map();
 function renderPreviewPane(body, sid) {
@@ -3159,7 +3084,6 @@ function renderCpaneBar(pane) {
   for (const el of $$('select[data-act], button[data-act]', bar)) el.disabled = !s;
   if (s) {
     const ts = $('select[data-act="trust"]', bar); if (ts.value !== (s.trust || 'read')) ts.value = s.trust || 'read';
-    const ms = $('select[data-act="model"]', bar); if (ms.dataset.for !== sid + ':' + s.model + ':' + s.provider) { fillModelSelect(ms, s); ms.dataset.for = sid + ':' + s.model + ':' + s.provider; }
     $('button[data-act="interrupt"]', bar).disabled = !(s.status === 'working' || s.status === 'waiting');
   }
   const tv = cpaneViewOf(sid) === 'term';
@@ -3367,7 +3291,7 @@ async function paneMenu(pane) {
   const i = Number(pane.dataset.pane);
   const items = [['pick', 'Switch session…'], ['find', 'Find in session', keyHint('find')], ['zoom', state.layout.zoom != null ? 'Back to the grid' : 'Pop out this pane', keyHint('zoom')], ['split', 'Add a pane', keyHint('split')], ['close', 'Close this pane', keyHint('close')], ['fullscreen', 'Full screen', keyHint('fullscreen')]];
   if (s) {
-    items.push(['model', `Model: ${s.provider}/${s.model}`, '/model'], ['trust', `Trust: ${s.trust}`, '/trust']);
+    items.push(['trust', `Trust: ${s.trust}`, '/trust']);
     if (s.status === 'working' || s.status === 'waiting') items.push(['interrupt', 'Interrupt', keyHint('interrupt')]);
     if (s.project && s.project.git) items.push(['git', 'Git status'], ['pull', 'Pull from remote']);
     if (s.worktree) items.push(['merge', 'Merge into project'], ['pr', 'Open PR'], ['discard', 'Discard worktree']);
@@ -3382,7 +3306,6 @@ async function paneMenu(pane) {
       case 'split': splitAdd(null); break;
       case 'close': splitClose(i); break;
       case 'fullscreen': toggleFullscreen(); break;
-      case 'model': modelPicker(sid); break;
       case 'trust': { const t = await chooseDialog('Trust', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything'], ['dry', 'dry run - plan and diff only, changes nothing']]); if (t) await request('set', { sid, trust: t }); break; }
       case 'rename': { const t = await promptDialog('Chat title', '', s.title || ''); if (t) await request('title', { sid, title: t }); break; }
       default: handleAction({ dataset: { act: v } }, sid);
