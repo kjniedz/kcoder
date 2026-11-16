@@ -488,12 +488,13 @@ class Engine:
         except (anthropic.NotFoundError, openai.NotFoundError):
             result = "error"
             del self.messages[turn_start:]
-            self.emit("error", text=f"Model not found: {self.model} (try /model, or /provider)")
+            self.emit("error", text=f"Model not found: {self.model}. Move the session to the provider's default model and send again.", pinned=self._pinned())
         except PlanLimitReached as exc:
             # plan only: stop here, never retry or fall back onto credits / an API key
             result = "error"
             del self.messages[min(turn_start, len(self.messages)):]
-            self.emit("error", text=str(exc), fix="plan-limit", resets_at=exc.resets_at, scope=exc.scope)
+            self.emit("error", text=str(exc), fix="plan-limit", resets_at=exc.resets_at, scope=exc.scope,
+                      pinned=self._pinned() if exc.scope != "all" else None)
         except NotOnPlan as exc:
             result = "error"
             del self.messages[min(turn_start, len(self.messages)):]
@@ -503,7 +504,7 @@ class Engine:
         except ModelUnavailable as exc:
             result = "error"
             del self.messages[min(turn_start, len(self.messages)):]
-            self.emit("error", text=str(exc))
+            self.emit("error", text=str(exc), pinned=self._pinned())
         except (anthropic.RateLimitError, openai.RateLimitError, ProviderOutage) as exc:
             result = "error"
             del self.messages[min(turn_start, len(self.messages)):]
@@ -860,6 +861,11 @@ class Engine:
         if status != self.status:
             self.status = status
             self.emit("status", status=status)
+
+    def _pinned(self) -> str | None:
+        """The model this session is pinned to, or None when the provider's default decides (the plan default for Claude)."""
+        m = self.model
+        return m if m and m not in (routing.PLAN_DEFAULT, routing.AUTO) and m != self.provider.default_model else None
 
     def emit(self, t: str, **fields) -> None:
         event = {"t": t, "ts": round(time.time(), 3)}

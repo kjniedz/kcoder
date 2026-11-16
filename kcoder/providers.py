@@ -85,8 +85,8 @@ def _claude_api_failure(text: str, model: str | None) -> Exception | None:
         return NotOnPlan(f"Claude Code's sign-in was refused ({text.strip()[:200]}).")
     if model_family(model) == "fable" and any(k in low for k in _AUTH_TEXT + _MODEL_TEXT):
         return ModelUnavailable(f"Claude Code could not run {model} on your Claude plan ({text.strip()[:200]}). "
-                                "Fable is not part of every plan and has its own weekly allowance: switch this session to "
-                                "opus or sonnet (/model opus, or the model menu on the session) and send again.")
+                                "Fable is not part of every plan and has its own weekly allowance: move this session to "
+                                "the plan's default model (the button on this error) and send again.")
     if any(k in low for k in _AUTH_TEXT):
         return NotOnPlan(f"Claude Code's sign-in was refused ({text.strip()[:200]}).")
     return None
@@ -695,14 +695,19 @@ def _when(ts: float | None) -> str:
     return f"{day} at " + f"{d.hour % 12 or 12}:{d:%M %p}".lower()   # no %-I: Windows strftime rejects it
 
 
-def plan_limit_message(scope: str, limit: str | None, resets_at: float | None, *, credits: bool) -> str:
+def plan_limit_message(scope: str, limit: str | None, resets_at: float | None, *, credits: bool, model: str | None = None) -> str:
     what = _LIMIT_LABEL.get(limit or "", "Claude plan limit")
     who = _SCOPE_LABEL.get(scope, "Claude")
     head = (f"Your {what} is used up and {who} switched to extra usage credits, so kcoder stopped the turn at once. "
             if credits else f"Your {what} is reached, so kcoder stopped instead of spending credits. ")
     tail = f"{who} is available again {_when(resets_at)}."
     if scope != "all":
-        tail += " Other models on your plan still work: switch with /model."
+        from . import routing
+        if model and model != routing.PLAN_DEFAULT:
+            tail += (f" The rest of your plan still works: this session is pinned to {model}, so move it to the plan's "
+                     "default model (the button on this error) and send again.")
+        else:
+            tail += " The rest of your plan still works: send again and the plan picks another model."
     return head + tail
 
 
@@ -872,7 +877,7 @@ class ClaudeCodeBackend:
         blocked = plan_block_for(model)
         if blocked:
             scope = "all" if plan_limits().get("all") else model_family(model)
-            raise PlanLimitReached(plan_limit_message(scope, blocked.get("limit"), blocked.get("until"), credits=False),
+            raise PlanLimitReached(plan_limit_message(scope, blocked.get("limit"), blocked.get("until"), credits=False, model=model),
                                    resets_at=blocked.get("until"), scope=scope, limit=blocked.get("limit"))
         reason = not_on_plan_reason(claude_auth(refresh=True))   # ~0.2s; a stale "on plan" must never let a turn through
         if reason:
@@ -1035,7 +1040,7 @@ class ClaudeCodeBackend:
                     if credits or info.get("status") == "rejected":
                         drop()
                         scope = _LIMIT_SCOPE.get(limit or "", "all")
-                        msg = plan_limit_message(scope, limit, resets, credits=credits)
+                        msg = plan_limit_message(scope, limit, resets, credits=credits, model=model)
                         _block(scope, resets or time.time() + 3600, limit, msg)
                         raise PlanLimitReached(msg, resets_at=resets, scope=scope, limit=limit)
                     if info.get("status") == "allowed_warning" and not getattr(self, "_warned", None) == limit:

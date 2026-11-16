@@ -546,7 +546,7 @@ function buildChatHtml(store, sid, opts = {}) {
       case 'usage':
         if (!opts.compact) out.push(`<div class="note usage">${e.recap ? '📍 recap written · ' : '✓ '}${e.elapsed != null ? e.elapsed.toFixed ? e.elapsed.toFixed(1) + 's · ' : e.elapsed + 's · ' : ''}${fmtInt(e.input)} in → ${fmtInt(e.output)} out tokens${e.plan ? ' · on your plan' : e.cost ? ' · ' + fmtUsd(e.cost) : ''}</div>`);
         break;
-      case 'error': out.push(`<div class="note err">${esc(e.text)}${e.fix === 'claude-login' ? ' <button class="primary" data-fix="claude">Reconnect Claude</button>' : e.fix === 'plan-limit' ? ' <button data-fix="claude">Claude plan</button>' : ` <button data-err="${esc(sid)}" title="what happened, send again, copy a report">details</button>`}</div>`); break;
+      case 'error': out.push(`<div class="note err">${esc(e.text)}${e.pinned ? ` <button class="primary" data-fix="default" data-sid="${esc(sid)}" title="this session is pinned to ${esc(e.pinned)}: put it on the provider's default model (the plan's own choice for Claude) and send the last prompt again">use the plan's default model</button>` : ''}${e.fix === 'claude-login' ? ' <button class="primary" data-fix="claude">Reconnect Claude</button>' : e.fix === 'plan-limit' ? ' <button data-fix="claude">Claude plan</button>' : e.pinned ? '' : ` <button data-err="${esc(sid)}" title="what happened, send again, copy a report">details</button>`}</div>`); break;
       case 'notice': out.push(`<div class="note warn">${esc(e.text)}</div>`); break;
       case 'retry': out.push(`<div class="note warn">↻ ${esc(e.reason)} - retrying in ${e.delay}s (${e.attempt}/${e.max})</div>`); break;
       case 'info': out.push(`<div class="note${e.kind === 'quota_shift' ? ' shift' : ''}">${e.kind === 'quota_shift' ? '⇣ ' : ''}${esc(e.text)}</div>`); break;
@@ -2987,6 +2987,17 @@ $('#statusbar').addEventListener('click', (e) => {
 $('#btn-version').addEventListener('click', () => settingsDialog());
 $('#btn-claude').addEventListener('click', () => claudeDialog());
 document.addEventListener('click', (e) => { if (e.target.closest('[data-fix="claude"]')) claudeDialog(); });
+// a session pinned to a model that is out (weekly Fable limit, a model the plan lacks): back to the provider's default, and the last prompt goes again
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-fix="default"]'); if (!b) return;
+  const sid = b.dataset.sid; b.disabled = true;
+  try {
+    const r = await request('set', { sid, model: 'default' });
+    const list = (state.events.get(sid) || { list: [] }).list; let last = null; for (let k = list.length - 1; k >= 0; k--) if (list[k].t === 'user') { last = list[k]; break; }
+    if (last && last.text) { await request('send', { sid, text: last.text, images: [], queue_if_busy: true }); toast(`on the plan's default model (${(r.changed || {}).model || 'default'}) · sent again`, 'ok'); }
+    else toast('on the plan\'s default model · send again', 'ok');
+  } catch (err) { toast(err.message, 'err'); b.disabled = false; }
+});
 setInterval(() => { if (state.connected) refreshClaude(); }, 5 * 60 * 1000);
 $('#btn-broadcast').addEventListener('click', toggleBroadcast);
 if (window.addEventListener) window.addEventListener('pywebviewready', () => document.body.classList.add('native'));

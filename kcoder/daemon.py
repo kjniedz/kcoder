@@ -303,6 +303,11 @@ class Manager:
                         log.warning("session %s: worktree not reattached: %s", sid, exc)
                         if not os.path.isdir(meta.get("cwd") or ""):
                             meta["cwd"] = info.get("root") if os.path.isdir(info.get("root") or "") else os.path.expanduser("~")
+                if meta.get("provider") == "claude" and meta.get("model") not in (routing.PLAN_DEFAULT, routing.AUTO, None):
+                    # the app has no model picker (2026-11-13): a Claude session pinned to opus/sonnet/fable from before, or
+                    # from the terminal's /model, goes back to the plan's own choice, which never spends what the plan lacks
+                    log.info("session %s: pinned model %s -> %s", sid, meta.get("model"), routing.PLAN_DEFAULT)
+                    meta["model"] = routing.PLAN_DEFAULT
                 session = self._build_session(meta, messages)
                 self._install_hooks(session.meta)
                 session.events.extend(load_events(sdir, EVENT_TAIL))

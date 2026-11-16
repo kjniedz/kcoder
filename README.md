@@ -628,8 +628,9 @@ moving to Sonnet partway through a Max window. The pane shows which model it
 picked ("default → opus-4-8") and the usage log records that name. The app
 has no model picker, on the Mac or the phone: pinning `opus`, `sonnet` or
 `fable` never steps down, which is what made kcoder use far more of a plan
-than the terminal. The terminal client's `/model` still pins one for a
-session you start there, and `kcoder --model NAME` too.
+than the terminal. The terminal client's `/model` and `kcoder --model NAME`
+still pin one for that session, until kcoderd restarts or the pinned model
+runs out, when the error offers **use the plan's default model**.
 **Effort** (Settings, `medium` by default) is passed to every Claude turn as
 Claude Code's `--effort`: `low` for the quickest answers, `high` for hard
 tasks, `default` to leave it to Claude Code. In a terminal: `kcoder login` and `kcoder
@@ -884,8 +885,12 @@ from a turn: Claude Code's login to your Claude account is no longer accepted
 (it expired, was revoked, or an API key got into Claude Code's own settings).
 Click **Reconnect Claude** on the red note (or run `kcoder login`), sign in
 with the Claude account that holds the plan, and send again. Nothing was
-billed. If the session is on **fable**, the error says so instead: Fable is not
-on every plan; only a session pinned from the terminal client can be on it.
+billed. If the session is pinned to **fable** (from before the picker went,
+or from the terminal's `/model`), the error says so instead: Fable is not on
+every plan and has its own weekly limit, and the error carries a **use the
+plan's default model** button that unpins the session and sends the last
+prompt again. The same button is on a weekly limit error for a pinned
+model; kcoderd also unpins every Claude session when it starts.
 
 **"Claude Code was stopped from outside this turn (SIGTERM)"** means something
 ended the `claude` process while it worked: a kill command, the system, or
