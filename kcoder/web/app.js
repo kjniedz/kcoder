@@ -284,7 +284,7 @@ async function onFrame(msg) {
   if (msg.type === 'shell') { onShellData(msg.sid, msg.data, msg.exit); return; }
   if (msg.type === 'conditions') { onConditions(msg); return; }
   if (msg.type === 'plan_usage') { state.claude = { ...(state.claude || {}), usage: msg.usage }; renderClaudeButton(); if (state.dialog === 'claude' && state._renderClaude) state._renderClaude(state.claude); return; }
-  if (msg.type === 'notice') { toast(`${msg.title}: ${msg.body}`, 'warn'); notify(msg.title, msg.body, msg.sid, 'wait'); return; }
+  if (msg.type === 'notice') { notify(msg.title, msg.body, msg.sid, 'wait', false); return; }   // one toast; the daemon already posted the Mac notification
 }
 
 async function onConnected() {
@@ -381,7 +381,7 @@ function onEvent(sid, ev) {
   if (ev.t === 'job') { if (state.dialog === 'job' && state.jobOpen === sid + ':' + ev.id) setTimeout(() => jobDialog(sid, ev.id), 200); }
   if (ev.t === 'handoff' && ev.to) {      // follow the work: every pane showing the old session shows the new one
     stashDraftsOf(sid, ev.to); restoreDraftsInto(ev.to);   // what is being typed follows too (the old session's panes are torn down or archived)
-    setTimeout(() => { state.layout.panes.forEach((p, i) => { if (p === sid) assignPane(i, ev.to); }); if (state.sid === sid) { state.sid = ev.to; localStorage.setItem('kcoder.sid', ev.to); } toast(`${ev.name}: fresh session with a handoff summary`, 'ok'); }, 300);
+    setTimeout(() => { state.layout.panes.forEach((p, i) => { if (p === sid) assignPane(i, ev.to); }); if (state.sid === sid) { state.sid = ev.to; localStorage.setItem('kcoder.sid', ev.to); } }, 300);   // the daemon's "handed off" notice is the toast
   }
   if (ev.t === 'turn_start') store.turn = { input: 0, output: 0 };
   if (ev.t === 'user') hideRecap(sid);
@@ -2954,9 +2954,22 @@ function toast(text, kind = '', action = null) {
 function toastPump() {
   if (toastShowing || !toastQueue.length) return;
   const t = toastQueue.shift(); const el = document.createElement('div'); el.className = 'toast ' + t.kind; el.appendChild(document.createTextNode(t.text));
-  const done = () => { if (toastShowing && toastShowing.el === el) toastShowing = null; el.remove(); toastPump(); };
+  let gone = false;
+  // a tap or click anywhere on it, a swipe to either side, or the timer: the toast slides away and the next one (if any) shows
+  const done = () => { if (gone) return; gone = true; clearTimeout(timer); if (toastShowing && toastShowing.el === el) toastShowing = null; el.classList.add('gone'); setTimeout(() => { el.remove(); toastPump(); }, 160); };
   if (t.action) { const b = document.createElement('button'); b.textContent = t.action.label; b.className = 'primary'; b.style.marginLeft = '8px'; b.onclick = (e) => { e.stopPropagation(); done(); t.action.run(); }; el.appendChild(b); }
-  $('#toasts').appendChild(el); toastShowing = { ...t, el }; el.onclick = done; setTimeout(done, t.action ? 12000 : 5000);
+  $('#toasts').appendChild(el); toastShowing = { ...t, el };
+  const timer = setTimeout(done, t.action ? 12000 : 5000);
+  let x0 = null, dx = 0, dragged = false;
+  el.addEventListener('pointerdown', (e) => { if (e.button !== 0 || e.target.tagName === 'BUTTON') return; x0 = e.clientX; dx = 0; dragged = false; try { el.setPointerCapture(e.pointerId); } catch {} });
+  el.addEventListener('pointermove', (e) => { if (x0 === null) return; dx = e.clientX - x0; if (Math.abs(dx) > 6) dragged = true; if (dragged) { el.classList.add('drag'); el.style.transform = `translateX(${dx}px)`; el.style.opacity = String(Math.max(0.2, 1 - Math.abs(dx) / 160)); } });
+  const release = () => {
+    if (x0 === null) return; x0 = null; el.classList.remove('drag');
+    if (Math.abs(dx) > 60) { el.style.transform = `translateX(${dx > 0 ? 120 : -120}%)`; el.style.opacity = '0'; done(); }
+    else { el.style.transform = ''; el.style.opacity = ''; }
+  };
+  el.addEventListener('pointerup', release); el.addEventListener('pointercancel', release);
+  el.onclick = () => { if (dragged) { dragged = false; return; } done(); };
 }
 let audioCtx = null;
 function ping(kind) {
@@ -2968,12 +2981,12 @@ function ping(kind) {
     notes.forEach((f, i) => { const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.type = 'sine'; o.frequency.value = f; g.gain.setValueAtTime(0.0001, t + i * 0.12); g.gain.exponentialRampToValueAtTime(0.08, t + i * 0.12 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.12 + 0.25); o.connect(g).connect(audioCtx.destination); o.start(t + i * 0.12); o.stop(t + i * 0.12 + 0.3); });
   } catch {}
 }
-function notify(title, body, sid, kind) {
+function notify(title, body, sid, kind, desktop = true) {
   ping(kind);
   toast(title + (body ? ' · ' + body : ''), kind === 'wait' ? 'warn' : kind === 'err' ? 'err' : 'ok');
   const winFocused = document.hasFocus() && !document.hidden;
   const focusedHere = winFocused && ((state.view === 'chat' && focusedSid() === sid) || (state.view === 'wall' && state.focus === sid));
-  if (!focusedHere) {
+  if (desktop && !focusedHere) {
     const api = window.pywebview && window.pywebview.api;
     if (api && api.notify) { try { api.notify(title, body || ''); } catch {} }
     else if ('Notification' in window && Notification.permission === 'granted') {

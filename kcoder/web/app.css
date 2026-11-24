@@ -378,7 +378,9 @@ a { color: var(--accent-text); }
 .help-grid.keys { grid-template-columns: max-content 1fr; margin: 2px 0 8px; font-size: 12px; }
 .help-grid kbd { justify-self: end; }
 .toasts { position: fixed; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; z-index: 60; }
-.toast { background: var(--bg-3); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; font-size: 12px; max-width: 360px; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.toast { background: var(--bg-3); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; font-size: 12px; max-width: 360px; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.4); touch-action: pan-y; user-select: none; -webkit-user-select: none; transition: transform .16s ease, opacity .16s ease; }
+.toast.drag { transition: none; }
+.toast.gone { opacity: 0; transform: translateX(120%); pointer-events: none; }
 .toast.warn { border-left-color: var(--yellow); }
 .toast.err { border-left-color: var(--red); }
 .toast.ok { border-left-color: var(--green); }

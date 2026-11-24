@@ -51,6 +51,7 @@ from websockets.http11 import Response
 
 from . import __version__, auth, chatlog, compat, conditions, config, identity, paths, pricing, projects, repos, setup, stats, updater
 from . import checkpoints, hooks, review, routing
+from . import app as appmod
 from . import pr as prmod
 from . import preview as previewmod
 from . import phone as phonemod
@@ -718,9 +719,8 @@ class Manager:
         """Desktop notification + a toast in every connected app."""
         self.broadcast_raw(json.dumps({"type": "notice", "title": title, "body": body, "sid": sid}))
         if sys.platform == "darwin":
-            script = 'display notification "%s" with title "%s"' % (
-                body.replace("\\", "\\\\").replace('"', '\\"')[:240], title.replace("\\", "\\\\").replace('"', '\\"')[:120])
-            self.loop.run_in_executor(None, lambda: subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10))
+            # posted from the app bundle's interpreter so Notification Center shows the kcoder icon, not Script Editor's
+            self.loop.run_in_executor(None, lambda: appmod.desktop_notify(title, body))
 
     def shutdown(self) -> None:
         for session in self.sessions.values():
@@ -1923,11 +1923,8 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
         title = str(req.get("title") or "kcoder")[:120]
         body = str(req.get("body") or "")[:240]
         if sys.platform == "darwin":
-            script = 'display notification "%s" with title "%s"' % (
-                body.replace("\\", "\\\\").replace('"', '\\"'), title.replace("\\", "\\\\").replace('"', '\\"'))
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10))
-            return {"sent": True}
+            sent = await asyncio.get_running_loop().run_in_executor(None, lambda: appmod.desktop_notify(title, body))
+            return {"sent": bool(sent)}
         return {"sent": False}
 
     if t == "ui_state":

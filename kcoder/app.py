@@ -42,6 +42,44 @@ BUNDLE_PATH = os.environ.get("KCODER_APP_BUNDLE") or os.path.expanduser("~/Appli
 AGENT_PLIST = os.environ.get("KCODER_AGENT_PLIST") or os.path.expanduser(f"~/Library/LaunchAgents/{AGENT_LABEL}.plist")
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
+_NOTIFY_SCRIPT = (
+    "import sys\n"
+    "import Foundation\n"
+    "n = Foundation.NSUserNotification.alloc().init()\n"
+    "n.setTitle_(sys.argv[1])\n"
+    "if sys.argv[2]: n.setInformativeText_(sys.argv[2])\n"
+    "Foundation.NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(n)\n"
+    "Foundation.NSRunLoop.currentRunLoop().runUntilDate_(Foundation.NSDate.dateWithTimeIntervalSinceNow_(0.7))\n"
+)
+
+
+def desktop_notify(title: str, body: str = "") -> bool:
+    """A macOS notification that carries the kcoder name and icon. Notification Center
+    shows the icon of the app bundle whose executable posted it, so a plain `osascript
+    -e 'display notification'` from kcoderd is labelled Script Editor; posting it from
+    the interpreter copied into ~/Applications/kcoder.app (the one the Dock calls kcoder)
+    makes it a kcoder notification. Falls back to osascript when the bundle is not
+    installed or the post fails. Blocking (about a second): call it off the loop."""
+    if sys.platform != "darwin":
+        return False
+    title, body = str(title or APP_NAME)[:120], str(body or "")[:240]
+    python = os.path.join(BUNDLE_PATH, "Contents", "MacOS", f"{APP_NAME}-python")
+    if os.path.isfile(python) and os.access(python, os.X_OK):
+        try:
+            r = subprocess.run([python, "-P", "-c", _NOTIFY_SCRIPT, title, body], capture_output=True, timeout=15)
+            if r.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+    script = 'display notification "%s" with title "%s"' % (
+        body.replace("\\", "\\\\").replace('"', '\\"'), title.replace("\\", "\\\\").replace('"', '\\"'))
+    try:
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 _CHROMIUM_MAC = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -638,10 +676,7 @@ class WindowApi:
                 return True
             except Exception:  # noqa: BLE001
                 pass
-            script = 'display notification "%s" with title "%s"' % (
-                body.replace("\\", "\\\\").replace('"', '\\"'), title.replace("\\", "\\\\").replace('"', '\\"'))
-            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
-            return True
+            return desktop_notify(title, body)
         return False
 
 

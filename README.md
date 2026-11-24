@@ -238,6 +238,20 @@ messages, ⌘C copies clean markdown, ⌘F finds in a session, the search field
 in the sidebar searches all of them, and files dropped on a pane attach to
 the prompt.
 
+**Notifications.** Anything the daemon wants you to know (a handoff, a job
+that failed, a session asking to use a connector, a deploy or CI failure,
+the weekly limit) shows once as a small toast at the bottom right of the
+app, or across the bottom of the phone's screen. Click or tap it, or swipe
+it to either side, and it slides away; otherwise it leaves on its own after
+five seconds (twelve when it carries an undo or an open button). Only one
+shows at a time, so dismissing one reveals the next if more are waiting.
+The same events reach Notification Center as kcoder notifications, with the
+kcoder icon: the daemon posts them from the interpreter inside
+~/Applications/kcoder.app rather than through Script Editor, so they are
+grouped under kcoder in the Mac's notification settings. Without the app
+bundle installed (`kcoder app --install` writes it) they fall back to the
+plain AppleScript notification, which macOS labels Script Editor.
+
 **Achievements.** The stats page keeps a badge wall: tokens (First Chair
 10M up to Space Station 50B, Powder Day and Avalanche for a single day),
 commits (Dropped In to Lifer, Double Digits and Ripper in a day), lines
