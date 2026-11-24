@@ -44,4 +44,4 @@ kcoderd = "kcoder.daemon:main"
 include = ["kcoder*"]
 
 [tool.setuptools.package-data]
-kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.webmanifest", "web/*.ico", "web/vendor/*", "data/*.txt"]
+kcoder = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.webmanifest", "web/*.ico", "web/vendor/*", "data/*.txt", "data/*.json"]

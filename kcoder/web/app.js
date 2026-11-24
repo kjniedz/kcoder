@@ -1775,8 +1775,9 @@ async function slashCommand(sid, line) {
 
 // ----------------------------------------------------------------------
 // ----------------------------------------------------------------------
-// conditions: the header's ridgeline accent. The daemon reads fresh snow at the place in settings
-// (Alta) and bitcoin's 24 h move every 30 minutes and pushes them; the moon is arithmetic. One
+// conditions: the header's ridgeline accent. The daemon reads fresh snow at the nearest ski area to
+// the Mac (from its IP, to the city) or at the place pinned in customize, and bitcoin's 24 h move,
+// every 30 minutes and pushes them; the moon is arithmetic. One
 // condition shows at a time (snow, then a big bitcoin day, then the full moon in dark mode). A
 // reading older than 12 hours is
 // nothing, so an offline laptop fades back to the plain header by itself.
@@ -1797,6 +1798,8 @@ function condPick(C) {
   const kind = snow >= 1 ? 'snow' : btc != null && Math.abs(btc) >= 5 ? 'btc' : moon ? 'moon' : null;
   return { kind, snow, btc };
 }
+// "near Tucson, Arizona (30 km)" when the daemon followed the Mac's location to the place, else ''
+function condNear(C) { const s = C && C.snow; if (!s || !s.followed || !s.near) return ''; return ` near ${s.near}${s.km ? ` (${s.km} km)` : ''}`; }
 function condRand(seed) { let t = seed * 2654435761 >>> 0; return () => { t = (t + 0x6D2B79F5) >>> 0; let r = Math.imul(t ^ (t >>> 15), 1 | t); r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r; return ((r ^ (r >>> 14)) >>> 0) / 4294967296; }; }
 function renderConditions() {
   const ridge = $('#ridge'), tag = $('#cond-tag'); if (!ridge || !tag) return;
@@ -1811,7 +1814,7 @@ function renderConditions() {
     const n = Math.min(48, Math.round(8 + P.snow * 3)); const key = `${n}:${still ? 's' : 'm'}`;
     if (flakes.dataset.key !== key) { flakes.dataset.key = key; flakes.innerHTML = Array.from({ length: n }, (_, i) => { const r = condRand(i + 7); return `<i style="left:${(r() * 100).toFixed(1)}%;--d:${(5 + r() * 6).toFixed(1)}s;--o:${(-r() * 11).toFixed(1)}s;--s:${(1.5 + r() * 2).toFixed(1)}px;top:${still ? (r() * 90).toFixed(0) + '%' : '-6px'}"></i>`; }).join(''); }
   } else { flakes.innerHTML = ''; delete flakes.dataset.key; }
-  if (P.kind === 'snow') { tag.hidden = false; tag.className = 'cond-tag snow'; tag.textContent = `${Math.round(P.snow)}" fresh at ${C.snow.place || 'the hill'}`; tag.title = `fresh snow in the last 24 h at ${C.snow.place || 'the place in settings'} (Open-Meteo) · read ${age(C.snow.at)} ago`; }
+  if (P.kind === 'snow') { tag.hidden = false; tag.className = 'cond-tag snow'; tag.textContent = `${Math.round(P.snow)}" fresh at ${C.snow.place || 'the hill'}`; tag.title = `fresh snow in the last 24 h at ${C.snow.place || 'the place in settings'}${condNear(C)} (Open-Meteo) · read ${age(C.snow.at)} ago`; }
   else if (P.kind === 'btc') { tag.hidden = false; tag.className = 'cond-tag btc ' + (P.btc > 0 ? 'up' : 'down'); tag.textContent = `₿ ${P.btc > 0 ? '+' : ''}${P.btc.toFixed(1)}%`; tag.title = `bitcoin's 24 h move${C.btc.price ? ' · ' + fmtUsd(C.btc.price) : ''} (CoinGecko) · read ${age(C.btc.at)} ago`; }
   else tag.hidden = true;
   if (P.kind === 'moon') document.documentElement.dataset.cond = 'moon'; else delete document.documentElement.dataset.cond;
@@ -1828,7 +1831,7 @@ function renderCondBar(C, P) {
   if (st.moon && C.moon) { const lit = Math.round((C.moon.illumination || 0) * 100); parts.push(`${lit >= 95 ? '🌕' : lit >= 50 ? '🌔' : lit >= 5 ? '🌒' : '🌑'} ${lit}%`); }
   el.hidden = !st.enabled || !parts.length;
   el.textContent = parts.join(' · ');
-  el.title = `conditions · fresh snow in 24 h, bitcoin's 24 h move, the moon · the header gets its accent at 1" of snow, a 5% bitcoin day or a full-moon night in dark mode${P && P.kind ? ` (today: ${P.kind})` : ' (a quiet day: no accent)'} · click to customize`;
+  el.title = `conditions · fresh snow in 24 h${C && C.snow && C.snow.place ? ` at ${C.snow.place}${condNear(C)}` : ''}, bitcoin's 24 h move, the moon · the header gets its accent at 1" of snow, a 5% bitcoin day or a full-moon night in dark mode${P && P.kind ? ` (today: ${P.kind})` : ' (a quiet day: no accent)'} · click to customize`;
 }
 setInterval(renderConditions, 5 * 60 * 1000);   // staleness, nightfall and the hour move on their own
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', renderConditions);
@@ -2310,7 +2313,8 @@ function condStatusHtml() {
   const C = state.conditions; if (!C) return '<div class="help plain">no reading yet: kcoderd reads the sources every 30 minutes</div>';
   const src = (label, x, text) => `<div class="row"><span>${label}</span><span class="help plain">${x && x.at ? `${text} · read ${age(x.at)} ago` : 'not read yet'}${x && x.error ? ` · <span class="bad">last try failed: ${esc(x.error)}</span>` : ''}</span></div>`;
   return src('bitcoin', C.btc, C.btc && C.btc.at ? `${C.btc.price ? fmtUsd(C.btc.price) + ' · ' : ''}${Number(C.btc.pct) > 0 ? '+' : ''}${Number(C.btc.pct || 0).toFixed(1)}% in 24 h` : '')
-    + src('snow', C.snow, C.snow && C.snow.at ? `${Math.round(Number(C.snow.inches || 0))}" in 24 h at ${esc(C.snow.place || 'the place')}` : '')
+    + src('snow', C.snow, C.snow && C.snow.at ? `${Math.round(Number(C.snow.inches || 0))}" in 24 h at ${esc(C.snow.place || 'the place')}${esc(condNear(C))}` : '')
+    + ((C.settings || {}).follow ? `<div class="row"><span>location</span><span class="help plain">${C.location && C.location.lat != null ? `${esc([C.location.city, C.location.region].filter(Boolean).join(', ') || `${C.location.lat}, ${C.location.lon}`)} · from this Mac's IP · read ${age(C.location.at)} ago` : 'not read yet'}${C.location && C.location.error ? ` · <span class="bad">last try failed: ${esc(C.location.error)}</span>` : ''}</span></div>` : '')
     + `<div class="row"><span>moon</span><span class="help plain">${C.moon ? `${Math.round((C.moon.illumination || 0) * 100)}% lit${C.moon.near_full ? ' · near full' : ''}` : ''}</span></div>`;
 }
 async function customizeDialog() {
@@ -2333,9 +2337,12 @@ async function customizeDialog() {
     <div id="cond-status">${condStatusHtml()}</div>
     <div class="label-h">conditions</div>
     ${(() => { const c = cfg.conditions || {}; const pl = c.place || {}; return `${chk('conditions_enabled', c.enabled !== false, 'Conditions in the header', 'an ambient accent on the header\'s ridgeline: fresh snow, bitcoin\'s day, the full moon; one at a time (snow first), refreshed every 30 minutes, kept while offline and gone after 12 hours; with reduced motion on, nothing moves')}
-    ${chk('conditions_snow', c.snow !== false, 'Fresh snow', 'light falling snow and a tag with the inches when the place below had snow in the last 24 h (Open-Meteo, no key; the place is fixed here, never your location)')}
+    ${chk('conditions_snow', c.snow !== false, 'Fresh snow', 'light falling snow and a tag with the inches when the mountain had snow in the last 24 h (Open-Meteo, no key)')}
+    ${chk('conditions_follow', c.follow !== false, 'Nearest mountain to this Mac', 'kcoderd finds the Mac\'s city from its public IP (ipinfo.io, no key; the IP is not kept) and reads the snow at the nearest ski area within 300 km, so the mountain changes when you travel; farther from any, the snow where you are. Off: the place below, wherever you are')}
+    <div id="cond-place"${c.follow !== false ? ' hidden' : ''}>
     <label class="setting"><span>Snow place <span class="help">the name in the tag</span></span><input type="text" data-set="conditions_place" value="${esc(pl.name || 'Alta')}" placeholder="Alta"></label>
     <label class="setting"><span>Snow place lat, lon <span class="help">decimal degrees</span></span><input type="text" data-set="conditions_latlon" value="${esc(`${pl.lat ?? 40.5884}, ${pl.lon ?? -111.6386}`)}" placeholder="40.5884, -111.6386"></label>
+    </div>
     ${chk('conditions_btc', c.btc !== false, 'Bitcoin', 'a 5% day either way puts a ₿ badge on the header (CoinGecko, no key)')}
     ${chk('conditions_moon', c.moon !== false, 'Full moon', 'in dark mode on full-moon nights: a small moon over the ridgeline and slightly cooler tones')}`; })()}
   </div><div class="foot"><span class="help plain">The day shows at the right of the status bar.</span><span class="spacer" style="flex:1"></span><button class="primary" data-x="close">Done</button></div>`, 'customize');
@@ -2354,7 +2361,7 @@ async function customizeDialog() {
       if (k === 'font') { const custom = el.value === '__custom'; $('#font-custom', d).hidden = !custom; if (custom) { $('[data-set="font_custom"]', d).focus(); return; } setFont(el.value, null); toast('font: ' + (el.value || 'system monospace'), 'ok'); return; }
       if (k === 'font_custom') { setFont(el.value.trim(), null); toast('font: ' + (el.value.trim() || 'system monospace'), 'ok'); return; }
       if (k === 'font_size') { setFont(null, Number(el.value)); toast('text size: ' + el.value + ' px', 'ok'); return; }
-      if (k.startsWith('conditions_')) { const r = await request('config', { [k]: el.type === 'checkbox' ? el.checked : el.value }); state.config = r.config; toast('saved; kcoderd reads the sources again now', 'ok'); }
+      if (k.startsWith('conditions_')) { const r = await request('config', { [k]: el.type === 'checkbox' ? el.checked : el.value }); state.config = r.config; if (k === 'conditions_follow') $('#cond-place', d).hidden = el.checked; toast('saved; kcoderd reads the sources again now', 'ok'); }
     } catch (err) { toast(err.message, 'err'); }
   });
   d.addEventListener('input', (e) => { const el = e.target.closest('input[type="color"][data-set]'); if (el) setLook(el.dataset.set, el.value); });

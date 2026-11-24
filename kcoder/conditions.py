@@ -1,9 +1,16 @@
-"""Conditions: fresh snow at a fixed place (Alta by default), bitcoin's 24 h
-move and the moon, for the app's header accent and three secret badges.
+"""Conditions: fresh snow at the nearest ski area (or a pinned place),
+bitcoin's 24 h move and the moon, for the app's header accent and three
+secret badges.
 
 Free sources, no keys: Open-Meteo for the snow (hourly snowfall, summed
 over the last 24 h at the place's own time), CoinGecko for bitcoin with
-Binance as the fallback, and arithmetic for the moon. The daemon refreshes
+Binance as the fallback, and arithmetic for the moon. With ``follow`` on
+(the default) the daemon asks an IP geolocation service (ipinfo.io, then
+ipapi.co, then ipwho.is) where the Mac is, to the city, and reads the snow
+at the nearest of the ski areas in ``data/ski_areas.json`` within
+``FOLLOW_MAX_KM``; farther from any, it reads the snow at the city itself.
+The IP itself is never kept, only the city and the coordinates. With
+``follow`` off the place in the config is used as it is. The daemon refreshes
 every 30 minutes (``REFRESH``) and keeps the last good value of each source
 when a fetch fails; the app treats a value older than 12 hours (``STALE``)
 as nothing. The state lives in ``conditions.json`` in the data dir so a
@@ -13,8 +20,8 @@ a 10% bitcoin day, and a session on a full-moon night.
 
 ``KCODER_CONDITIONS=off`` disables the fetches (the smoke test);
 ``KCODER_CONDITIONS_FAKE=<json file>`` reads ``{"snow_in", "btc_pct",
-"btc_price", "moon_full"}`` from the file instead of the network (the
-headless-Chrome harness)."""
+"btc_price", "moon_full", "lat", "lon", "city", "region"}`` from the file
+instead of the network (the headless-Chrome harness)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -37,7 +44,10 @@ log = logging.getLogger("kcoder.conditions")
 
 STATE_PATH = os.path.join(paths.DATA_DIR, "conditions.json")
 DEFAULT_PLACE = {"name": "Alta", "lat": 40.5884, "lon": -111.6386}
-DEFAULTS = {"enabled": True, "snow": True, "btc": True, "moon": True, "place": dict(DEFAULT_PLACE)}
+DEFAULTS = {"enabled": True, "snow": True, "btc": True, "moon": True, "follow": True, "place": dict(DEFAULT_PLACE)}
+FOLLOW_MAX_KM = 300.0        # a ski area farther than this is not "near"; the snow is read at the city instead
+AREAS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ski_areas.json")
+LOCATE_URLS = ("https://ipinfo.io/json", "https://ipapi.co/json/", "https://ipwho.is/")
 REFRESH = 30 * 60            # seconds between refreshes
 STALE = 12 * 3600            # a reading older than this is shown as nothing
 SNOW_MIN_IN = 1.0            # fresh snow worth showing
@@ -60,7 +70,7 @@ def settings(cfg: dict | None) -> dict:
     c = dict(DEFAULTS)
     c["place"] = dict(DEFAULT_PLACE)
     raw = (cfg or {}).get("conditions") or {}
-    for k in ("enabled", "snow", "btc", "moon"):
+    for k in ("enabled", "snow", "btc", "moon", "follow"):
         if k in raw:
             c[k] = bool(raw[k])
     place = raw.get("place") or {}
@@ -203,6 +213,108 @@ def moon(now: float | None = None) -> dict:
             "full": near_full and night}
 
 
+# ---- where the Mac is ----
+
+_areas: list | None = None
+
+
+def areas() -> list:
+    """The bundled ski areas: [name, region, lat, lon] each."""
+    global _areas
+    if _areas is None:
+        try:
+            with open(AREAS_PATH, "r", encoding="utf-8") as f:
+                _areas = [a for a in json.load(f) if isinstance(a, list) and len(a) == 4]
+        except (OSError, ValueError) as exc:
+            log.warning("ski areas list unreadable: %s", exc)
+            _areas = []
+    return _areas
+
+
+def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance (haversine)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlat, dlon = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlon / 2) ** 2
+    return 6371.0 * 2 * math.asin(math.sqrt(a))
+
+
+def nearest_area(lat: float, lon: float) -> dict | None:
+    """The closest bundled ski area within FOLLOW_MAX_KM, with its distance,
+    or None when nothing is that near."""
+    best = None
+    for name, region, alat, alon in areas():
+        d = distance_km(lat, lon, alat, alon)
+        if best is None or d < best["km"]:
+            best = {"name": name, "region": region, "lat": alat, "lon": alon, "km": round(d)}
+    if best is None or best["km"] > FOLLOW_MAX_KM:
+        return None
+    return best
+
+
+def _parse_location(d: dict) -> dict:
+    """ipinfo (loc: "lat,lon"), ipapi.co and ipwho.is (latitude, longitude);
+    all three give city and region."""
+    if "loc" in d:
+        lat, lon = (float(x) for x in str(d["loc"]).split(",")[:2])
+    else:
+        lat, lon = float(d["latitude"]), float(d["longitude"])
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError("coordinates out of range")
+    city = str(d.get("city") or "").strip()[:40]
+    region = str(d.get("region") or d.get("region_name") or "").strip()[:40]
+    return {"lat": lat, "lon": lon, "city": city, "region": region}
+
+
+def locate() -> dict:
+    """Where the Mac is, to the city, from its public IP: {"lat", "lon",
+    "city", "region"}. The IP is not returned. Raises when every service
+    fails (offline, or all three refused)."""
+    fake = _fake()
+    if fake is not None:
+        if fake.get("lat") is None:
+            raise RuntimeError("fake has no location")
+        return _parse_location({"latitude": fake["lat"], "longitude": fake["lon"], "city": fake.get("city") or "",
+                                "region": fake.get("region") or ""})
+    last = None
+    for url in LOCATE_URLS:
+        try:
+            return _parse_location(_get_json(url))
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+    raise RuntimeError(f"location lookup failed: {last}")
+
+
+def resolve_place(c: dict, state: dict) -> dict:
+    """The place to read the snow at. Pinned (follow off): the config's
+    place. Follow on: locate the Mac (the last location is kept when the
+    lookup fails), then the nearest ski area within FOLLOW_MAX_KM, or the
+    city itself when none is that near; the config's place when there has
+    never been a location."""
+    if not c.get("follow"):
+        return dict(c["place"])
+    loc = None
+    try:
+        loc = locate()
+        state["location"] = {**loc, "at": time.time()}
+        state["location"].pop("error", None)
+    except Exception as exc:  # noqa: BLE001
+        log.info("location lookup failed: %s", exc)
+        prev = state.get("location") or {}
+        if prev.get("lat") is not None:
+            loc = prev
+            state["location"]["error"] = str(exc)[:120]
+        else:
+            state["location"] = {"error": str(exc)[:120]}
+    if loc is None:
+        return dict(c["place"])
+    where = ", ".join(x for x in (loc.get("city"), loc.get("region")) if x)
+    area = nearest_area(loc["lat"], loc["lon"])
+    if area:
+        return {"name": area["name"], "lat": area["lat"], "lon": area["lon"], "near": where, "km": area["km"], "followed": True}
+    return {"name": loc.get("city") or "here", "lat": loc["lat"], "lon": loc["lon"], "near": where, "km": 0, "followed": True}
+
+
 # ---- refresh ----
 
 def refresh(cfg: dict | None) -> dict:
@@ -213,8 +325,10 @@ def refresh(cfg: dict | None) -> dict:
     now = time.time()
     if c["enabled"] and c["snow"] and not disabled():
         try:
-            s = fetch_snow(c["place"])
-            state["snow"] = {**s, "at": now}
+            place = resolve_place(c, state)
+            s = fetch_snow(place)
+            state["snow"] = {**s, "at": now, "followed": bool(place.get("followed")), "near": place.get("near") or "",
+                             "km": place.get("km"), "lat": place["lat"], "lon": place["lon"]}
             if s["inches"] >= POWDER_IN:
                 _unlock(state, "powder")
         except Exception as exc:  # noqa: BLE001
@@ -281,4 +395,5 @@ def payload(cfg: dict | None) -> dict:
         elif c["moon"] and m["full"]:
             active = "moon"
     return {"settings": c, "snow": snow, "btc": btc, "moon": m, "active": active, "now": now,
+            "location": dict(state.get("location") or {}),
             "unlocks": dict(state.get("unlocks") or {}), "refreshed_at": state.get("refreshed_at")}

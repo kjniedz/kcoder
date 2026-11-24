@@ -1677,9 +1677,9 @@ async def _dispatch(manager: Manager, client: Client, req: dict) -> dict:
             except (TypeError, ValueError):
                 raise RequestError("preview_idle_minutes must be a number")
             config.save({"preview_idle_minutes": manager.cfg["preview_idle_minutes"]})
-        if any(k in req for k in ("conditions_enabled", "conditions_snow", "conditions_btc", "conditions_moon", "conditions_place", "conditions_latlon")):
+        if any(k in req for k in ("conditions_enabled", "conditions_snow", "conditions_btc", "conditions_moon", "conditions_follow", "conditions_place", "conditions_latlon")):
             cc = conditions.settings(manager.cfg)
-            for k in ("enabled", "snow", "btc", "moon"):
+            for k in ("enabled", "snow", "btc", "moon", "follow"):
                 if "conditions_" + k in req:
                     cc[k] = bool(req["conditions_" + k])
             if "conditions_place" in req:

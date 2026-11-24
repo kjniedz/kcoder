@@ -527,11 +527,17 @@ error details, and an "approve all" button answers every approval at once.
   and accent colours, density, text font and size, and the conditions
   accent (below) with what each source last read.
 - **Conditions**: an ambient accent on the header that reflects real
-  conditions, never covering anything. Fresh snow at a fixed place (Alta by
-  default; the name and lat, lon are under customize, never your location):
-  when the last 24 h had an inch or more, a faint ridgeline appears under
-  the header with a snow cap, light falling snow (more for a bigger dump)
-  and a tag like `8" fresh at Alta`. Bitcoin: a 5% day either way puts a
+  conditions, never covering anything. Fresh snow at the nearest mountain:
+  kcoderd finds the Mac's city from its public IP (ipinfo.io, then ipapi.co,
+  then ipwho.is; no key, and the IP itself is never kept) and reads the snow
+  at the nearest of some 370 bundled ski areas within 300 km (Snowbird from
+  Salt Lake City, Mt Lemmon from Tucson), so the mountain follows you when
+  you travel; farther from any ski area it reads the snow where you are. A
+  VPN puts you where the VPN exits. Turn "Nearest mountain to this Mac" off
+  under customize to pin a place instead (Alta by default; the name and lat,
+  lon are there too). When the last 24 h had an inch or more, a faint
+  ridgeline appears under the header with a snow cap, light falling snow
+  (more for a bigger dump) and a tag like `8" fresh at Alta`. Bitcoin: a 5% day either way puts a
   `₿ +6.2%` badge on the ridgeline. The moon: on
   full-moon nights, dark mode gets a small moon over the ridgeline and
   slightly cooler tones. One condition shows at a time, snow first, then a
