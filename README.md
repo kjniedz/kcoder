@@ -351,8 +351,13 @@ and cached; it is only written again when the session has new activity. ✕
 dismisses it, ↻ rewrites it, `/recap` shows it any time (`/recap new`
 rewrites). The chat itself stays pinned to the newest message: when the
 recap card appears, the composer grows or an image finishes loading, a chat
-that was at the bottom goes back to the bottom on its own, and "jump to
-latest" only shows once you have scrolled up and something new arrived.
+that was at the bottom goes back to the bottom on its own. While a session
+is working, every chat (the wall, the split view, the phone) follows its
+newest output however far up you were, so you can read along; scroll up
+while it works and it stays put until the next turn starts (you send a
+prompt, or the session goes idle and starts working again). An idle chat
+only moves when you are already at the bottom, and "jump to latest" shows
+once you have scrolled up and something new arrived.
 
 **Customize.** Click the kcoder logo, then Customize (or the command
 palette): the theme (dark, light, follow the system), the style (classic:

@@ -944,7 +944,14 @@ function renderLogInto(holder, log, sid, store, opts, scroller) {
   const status = sess ? sess.status + ':' + (sess.pending_approval || '') : '';
   const optsKey = `${opts.tail || 0}|${opts.compact ? 1 : 0}`;
   const streaming = !!(store.streaming || store.live);
-  const stick = !r || nearBottom(scroller);
+  // Following: while the session works the log follows its newest output however far up it was, so a
+  // chat open during a turn reads along by itself (on the Mac's wall and split view and on the phone).
+  // Scrolling up while it works holds the log there (the scroll handlers in wirePane and wireCpane
+  // set _pin false) until the next turn starts: a new prompt, or the session going idle and working
+  // again. An idle chat sticks to the bottom only when the reader is already there.
+  const working = !!(sess && sess.status === 'working') || streaming;
+  if (r && working && (!r.working || store.list.slice(r.count).some((e) => e.t === 'user'))) holder._pin = true;
+  const stick = !r || nearBottom(scroller) || (working && holder._pin !== false);
   const incremental = r && r.sid === sid && r.store === store && r.optsKey === optsKey && !opts.tail && r.count <= store.list.length;
   let changed = true;
   if (!incremental) {
@@ -990,7 +997,7 @@ function renderLogInto(holder, log, sid, store, opts, scroller) {
     }
   }
   if (!incremental || changed) groupTools(log);
-  holder._rendered = { sig: 1, sid, store, optsKey, count: store.list.length, live: store.live, streaming, status, toolSig, toolIds: Object.keys(store.toolLive || {}) };
+  holder._rendered = { sig: 1, sid, store, optsKey, count: store.list.length, live: store.live, streaming, working, status, toolSig, toolIds: Object.keys(store.toolLive || {}) };
   const jump = holder.querySelector ? holder.querySelector('.jump') : null;
   if (stick) { scroller.scrollTop = scroller.scrollHeight; if (jump) jump.hidden = true; holder._pin = true; requestAnimationFrame(() => { if (holder._pin !== false && scroller.isConnected) scroller.scrollTop = scroller.scrollHeight; }); }
   else if (jump && changed) jump.hidden = false;
@@ -1071,10 +1078,11 @@ function wirePane(pane, sid) {
   $('select[data-act]', pane); // wired via change delegation below
   pane.addEventListener('change', (e) => { const s = e.target.closest('select[data-act]'); if (s) handleAction(s, sid); });
   wireDrag(pane, sid);
-  // the phone only: the open chat stays pinned to the bottom until the reader scrolls up (see pinPaneBody)
+  // the chat stays pinned to the bottom until the reader scrolls up; _pin is what renderLogInto reads
+  // to follow a working session, and on the phone pinPaneBody also keeps the open chat at the bottom
   const body = $('.pane-body', pane);
   const onPhone = () => isPhone() && pane.classList.contains('focused');
-  body.addEventListener('scroll', () => { if (!onPhone()) return; pane._pin = nearBottom(body); if (pane._pin) { const j = $('.jump', pane); if (j) j.hidden = true; } });
+  body.addEventListener('scroll', () => { pane._pin = nearBottom(body); if (pane._pin) { const j = $('.jump', pane); if (j) j.hidden = true; } });
   if (window.ResizeObserver) new ResizeObserver(() => { if (onPhone() && pane._pin !== false) pinPaneBody(pane); }).observe(body);
   body.addEventListener('load', () => { if (onPhone() && pane._pin !== false) pinPaneBody(pane); }, true);
 }
@@ -3351,7 +3359,7 @@ function renderCpaneLog(pane) {
   log.classList.toggle('term-log', !!sid && term);
   if (!sid) { log.innerHTML = '<div class="empty"><p>No session in this pane.</p><p><button class="primary" data-pane="pick">Pick a session</button> or drag one from the sidebar.</p></div>'; pane._rendered = null; $('.jump', pane).hidden = true; return; }
   const store = state.events.get(sid) || { list: [], live: '', streaming: false };
-  if (term) { const stick = nearBottom(log); log.innerHTML = buildTermHtml(store, sid, {}); if (stick) log.scrollTop = log.scrollHeight; pane._rendered = null; $('.jump', pane).hidden = true; return; }
+  if (term) { const sess = state.sessions.get(sid); const stick = nearBottom(log) || (sess && sess.status === 'working' && pane._pin !== false); log.innerHTML = buildTermHtml(store, sid, {}); if (stick) log.scrollTop = log.scrollHeight; pane._rendered = null; $('.jump', pane).hidden = true; return; }
   renderLogInto(pane, log, sid, store, {}, log);
   if (pane._find && pane._find.q) runFind(pane, false);
   if (store.loaded) maybeRecap(pane, sid);
