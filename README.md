@@ -24,13 +24,18 @@ them in one window. Developed by Kyle Niedzwiecki.
   review, secret scanning, checkpoints you can undo to, and one-click
   draft PRs, all as your own GitHub account.
 
-![Three sessions side by side: one working with the live status line, one in terminal view](docs/chat-3-panes.png)
+![Three sessions side by side: one working with the live status line, one whose background job is still running, each with its "where we left off" recap](docs/chat-3-panes.png)
 
 <table>
 <tr>
 <td width="33%"><img src="docs/sessions.png" alt="The sessions grid: every live session as a pane"><br><sub><b>Sessions</b>: every live session as a pane, or 1 to 3 side by side</sub></td>
 <td width="33%"><img src="docs/changes.png" alt="Diff review: accept, edit or reject each hunk, then approve, merge or open a draft PR"><br><sub><b>Diff review</b>: accept, edit or reject each hunk, then approve, merge or open a PR</sub></td>
 <td width="33%"><img src="docs/stats.png" alt="Stats: tokens, lines of code, commits, sessions, cache use and more"><br><sub><b>Stats</b>: tokens, lines of code, commits, cache use, activity</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/phone.png" alt="kcoder on a phone: a session open full screen with the composer above the keyboard"><br><sub><b>Phone</b>: every session on your iPhone through the relay, with push notifications</sub></td>
+<td width="33%"><img src="docs/fun.png" alt="The fun tab: the token mine with its agents, upgrades, sprints and exchange"><br><sub><b>Fun</b>: the token mine, paid by your real turns and commits, plus 2048 and mahjong</sub></td>
+<td width="33%"><img src="docs/conditions.png" alt="The snow view: the last 7 days and the next 7 at the nearest mountain"><br><sub><b>Conditions</b>: fresh snow at the nearest mountain, bitcoin and the moon, from the status bar</sub></td>
 </tr>
 </table>
 
@@ -221,8 +226,9 @@ accent-coloured past 80%. Compacting, retries and approvals use plain wording.
 Runs of three or more tool calls fold into one row ("▸ 15 tool calls (reading
 files)") that expands on click and opens itself while a command is running.
 
-Status is readable from across the room: working, **waiting on you**
-(pulsing border), done, **error**. An error shows a red note with a
+Status is readable from across the room: working (orange), **waiting on you**
+(pulsing border), done (green), **background job** (yellow: the turn is over
+but a job the agent started is still running), **error**. An error shows a red note with a
 **details** button (also on the sidebar badge, the pane status and the inbox)
 that explains what happened, lets you **send the prompt again**, and copies a
 report you can paste into a kcoder session to get it fixed.
@@ -701,7 +707,9 @@ the model asks). For anything longer, the agent runs `kcoder job run --
 <command>`: kcoderd starts it in the session's folder as a background job,
 the pane shows it with live output and a **stop** button, the agent gets the
 output back when it finishes, or, if it has moved on, a message with the
-result and the last lines of output when the job ends. `kcoder job ls / tail
+result and the last lines of output when the job ends. While a job runs
+after the turn, the session's dot, border and sidebar badge are yellow
+("job running") rather than the idle green. `kcoder job ls / tail
 / wait / stop` work from the session's shell. Jobs do not survive a daemon
 restart; the pane marks them lost.
 
