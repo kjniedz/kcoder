@@ -1821,17 +1821,89 @@ function renderConditions() {
   renderCondBar(C, P);
 }
 // the readings themselves sit at the right of the status bar whatever the day (the header's accent needs
-// a 1" snow day, a 5% bitcoin day or a full-moon night; on a quiet day this is the only sign they are in)
+// a 1" snow day, a 5% bitcoin day or a full-moon night; on a quiet day this is the only sign they are in).
+// Three items, each its own button: snow opens the two-week snow and precipitation table, bitcoin the
+// week of prices, the moon its calendar.
 function renderCondBar(C, P) {
   const el = $('#status-cond'); if (!el) return;
   const st = (C && C.settings) || {}; const now = Date.now() / 1000; const fresh = (x) => !!(x && x.at && now - x.at <= COND_STALE);
-  const parts = [];
-  if (st.snow && fresh(C.snow)) parts.push(`${Math.round(Number(C.snow.inches || 0))}" ${C.snow.place || 'snow'}`);
-  if (st.btc && fresh(C.btc)) { const b = Number(C.btc.pct || 0); parts.push(`₿ ${b > 0 ? '+' : ''}${b.toFixed(1)}%`); }
-  if (st.moon && C.moon) { const lit = Math.round((C.moon.illumination || 0) * 100); parts.push(`${lit >= 95 ? '🌕' : lit >= 50 ? '🌔' : lit >= 5 ? '🌒' : '🌑'} ${lit}%`); }
-  el.hidden = !st.enabled || !parts.length;
-  el.textContent = parts.join(' · ');
-  el.title = `conditions · fresh snow in 24 h${C && C.snow && C.snow.place ? ` at ${C.snow.place}${condNear(C)}` : ''}, bitcoin's 24 h move, the moon · the header gets its accent at 1" of snow, a 5% bitcoin day or a full-moon night in dark mode${P && P.kind ? ` (today: ${P.kind})` : ' (a quiet day: no accent)'} · click to customize`;
+  const accent = `the header gets its accent at 1" of snow, a 5% bitcoin day or a full-moon night in dark mode${P && P.kind ? ` (today: ${P.kind})` : ' (a quiet day: no accent)'}`;
+  const items = [];
+  if (st.snow && fresh(C.snow)) items.push(['snow', `${Math.round(Number(C.snow.inches || 0))}" ${C.snow.place || 'snow'}`, `fresh snow in the last 24 h at ${C.snow.place || 'the place'}${condNear(C)} · click for the last and next 7 days of snow and precipitation`]);
+  if (st.btc && fresh(C.btc)) { const b = Number(C.btc.pct || 0); items.push(['btc', `₿ ${b > 0 ? '+' : ''}${b.toFixed(1)}%`, `bitcoin's 24 h move${C.btc.price ? ` · ${fmtUsd(Number(C.btc.price))}` : ''} · click for the week`]); }
+  if (st.moon && C.moon) { const lit = Math.round((C.moon.illumination || 0) * 100); items.push(['moon', `${moonGlyph(C.moon.phase)} ${lit}%`, `the moon: ${moonName(C.moon.phase)}, ${lit}% lit · click for the calendar and the next phases`]); }
+  el.hidden = !st.enabled || !items.length;
+  el.innerHTML = items.map(([k, text, title]) => `<button class="status-item dim" data-cond="${k}" title="${esc(title)} · ${esc(accent)}">${esc(text)}</button>`).join('');
+}
+
+// ---- the three detail views behind the status bar items ----
+const MOON_EPOCH = Date.UTC(2000, 0, 6, 18, 14) / 1000, SYNODIC = 29.530588853;   // a known new moon, the mean cycle in days
+const MOON_GLYPHS = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'];
+const MOON_NAMES = ['new moon', 'waxing crescent', 'first quarter', 'waxing gibbous', 'full moon', 'waning gibbous', 'last quarter', 'waning crescent'];
+function moonPhase(ts) { return (((ts - MOON_EPOCH) / 86400) % SYNODIC + SYNODIC) % SYNODIC / SYNODIC; }   // 0 new, .5 full
+function moonGlyph(phase) { return MOON_GLYPHS[Math.round(Number(phase || 0) * 8) % 8]; }
+function moonName(phase) { return MOON_NAMES[Math.round(Number(phase || 0) * 8) % 8]; }
+function moonIllum(phase) { return (1 - Math.cos(2 * Math.PI * phase)) / 2; }
+const condDay = (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+const condWhen = (ts) => new Date(ts * 1000).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+function condDialog(kind) { if (kind === 'snow') snowDialog(); else if (kind === 'btc') btcDialog(); else if (kind === 'moon') moonDialog(); }
+function condFoot(x, source) {
+  return `<div class="foot"><span class="help plain">${x && x.at ? `read ${age(x.at)} ago` : 'not read yet'} · ${source} · kcoderd reads again every 30 minutes</span><span class="spacer" style="flex:1"></span><button data-x="customize">customize</button><button class="primary" data-x="close">Done</button></div>`;
+}
+function condWire(d) {
+  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'close') closeDialog(); else if (b.dataset.x === 'customize') { closeDialog(); customizeDialog(); } });
+}
+// snow: the 24 h total at the mountain, then each of the last 7 days and the next 7 with snow, all precipitation and the high and low
+function snowDialog() {
+  const C = state.conditions || {}; const s = C.snow || {}; const days = s.days || [];
+  const max = Math.max(1, ...days.map((d) => Number(d.snow_in || 0)));
+  const row = (d) => `<div class="d${d.forecast ? ' fc' : ''}${d.date === new Date().toLocaleDateString('sv') ? ' today' : ''}"><span class="date">${esc(condDay(d.date))}</span><span class="bar"><i style="width:${Math.round(100 * Number(d.snow_in || 0) / max)}%"></i></span><span class="num">${Number(d.snow_in || 0) >= 0.05 ? Number(d.snow_in).toFixed(1) + '"' : '·'}</span><span class="num dim" title="all precipitation, as liquid">${Number(d.precip_in || 0) >= 0.05 ? Number(d.precip_in).toFixed(2) + '"<span class="pl"> precip</span>' : ''}</span><span class="num dim">${d.hi != null ? `${Math.round(d.hi)}° / ${Math.round(d.lo)}°` : ''}</span></div>`;
+  const past = days.filter((d) => !d.forecast), next = days.filter((d) => d.forecast);
+  const d = openDialog(`<h2>snow at ${esc(s.place || 'the mountain')}<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body cond-dlg">
+    <div class="big">${s.at ? `${Math.round(Number(s.inches || 0))}" <span class="help plain">in the last 24 h</span>` : '<span class="help plain">no reading yet</span>'}</div>
+    <p class="help plain">${s.followed && s.near ? `${esc(s.place)} is the nearest ski area to this Mac (${esc(s.near)}, ${s.km} km); it follows you when you travel.` : `${esc(s.place || 'the place')} is the place pinned under customize.`}${s.lat != null ? ` ${Number(s.lat).toFixed(3)}, ${Number(s.lon).toFixed(3)}.` : ''} Inches of snow; precipitation is everything that fell, as liquid; the high and low in °F.</p>
+    ${days.length ? `<div class="label-h">last 7 days</div><div class="cond-days">${past.map(row).join('')}</div><div class="label-h">next 7 days <span class="help">forecast</span></div><div class="cond-days">${next.map(row).join('')}</div>` : `<p class="help plain">${s.at ? 'the day table arrives with the next reading' : 'kcoderd has not read the snow yet'}${s.error ? ` · <span class="bad">last try failed: ${esc(s.error)}</span>` : ''}</p>`}
+  </div>${condFoot(s, 'Open-Meteo')}`, 'snow');
+  condWire(d);
+}
+// bitcoin: the price and the 24 h move, then the week's daily closes
+function btcDialog() {
+  const C = state.conditions || {}; const b = C.btc || {}; const week = b.week || []; const pct = Number(b.pct || 0);
+  const lo = Math.min(...week.map((w) => w.price)), hi = Math.max(...week.map((w) => w.price)); const span = Math.max(1, hi - lo);
+  const row = (w, i) => { const prev = i ? week[i - 1].price : null; const ch = prev ? (w.price - prev) / prev * 100 : null; return `<div class="d"><span class="date">${esc(new Date(w.t * 1000).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }))}</span><span class="bar"><i style="width:${Math.round(8 + 92 * (w.price - lo) / span)}%"></i></span><span class="num">${fmtUsd(w.price)}</span><span class="num ${ch == null ? 'dim' : ch >= 0 ? 'up' : 'down'}">${ch == null ? '' : (ch > 0 ? '+' : '') + ch.toFixed(1) + '%'}</span></div>`; };
+  const d = openDialog(`<h2>bitcoin<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body cond-dlg">
+    <div class="big">${b.at ? `${b.price ? fmtUsd(Number(b.price)) : ''} <span class="${pct >= 0 ? 'up' : 'down'}">${pct > 0 ? '+' : ''}${pct.toFixed(2)}%</span> <span class="help plain">in 24 h</span>` : '<span class="help plain">no reading yet</span>'}</div>
+    <p class="help plain">A 5% day either way puts the ₿ badge on the header's ridgeline; a 10% day earns a hidden badge.</p>
+    ${week.length ? `<div class="label-h">the week <span class="help">daily closes, UTC</span></div><div class="cond-days">${week.map(row).join('')}</div>` : `<p class="help plain">${b.at ? 'the week arrives with the next reading' : 'kcoderd has not read the price yet'}${b.error ? ` · <span class="bad">last try failed: ${esc(b.error)}</span>` : ''}</p>`}
+  </div>${condFoot(b, 'CoinGecko, Binance as the fallback')}`, 'btc');
+  condWire(d);
+}
+// the moon: tonight's phase, the next four phases, and a month calendar with a glyph per night (‹ › move months)
+function moonDialog() {
+  const now = Date.now() / 1000; let view = new Date(); view.setDate(1);
+  const nextOf = (k) => now + ((k - moonPhase(now) + 1) % 1) * SYNODIC * 86400;
+  const events = [[0, 'new moon'], [0.25, 'first quarter'], [0.5, 'full moon'], [0.75, 'last quarter']].map(([k, n]) => [nextOf(k), n]).sort((a, b) => a[0] - b[0]);
+  const cal = () => {
+    const y = view.getFullYear(), m = view.getMonth(); const first = new Date(y, m, 1).getDay(); const n = new Date(y, m + 1, 0).getDate(); const today = new Date();
+    const cells = []; for (let i = 0; i < first; i++) cells.push('<span class="c pad"></span>');
+    for (let day = 1; day <= n; day++) {
+      const ts = new Date(y, m, day, 21).getTime() / 1000; const ph = moonPhase(ts); const idx = Math.round(ph * 8) % 8;   // the phase at 9 pm that night
+      const full = Math.abs(ph - 0.5) * SYNODIC <= 0.5, newm = Math.min(ph, 1 - ph) * SYNODIC <= 0.5;
+      const isToday = today.getFullYear() === y && today.getMonth() === m && today.getDate() === day;
+      cells.push(`<span class="c${isToday ? ' today' : ''}${full ? ' full' : newm ? ' new' : ''}" title="${esc(MOON_NAMES[idx])}, ${Math.round(moonIllum(ph) * 100)}% lit">${day}<b>${MOON_GLYPHS[idx]}</b></span>`);
+    }
+    return `<div class="mooncal-h"><button data-x="prev" title="the month before">‹</button><span>${view.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</span><button data-x="next" title="the month after">›</button></div><div class="mooncal"><span class="w">S</span><span class="w">M</span><span class="w">T</span><span class="w">W</span><span class="w">T</span><span class="w">F</span><span class="w">S</span>${cells.join('')}</div>`;
+  };
+  const ph = moonPhase(now); const ageDays = ph * SYNODIC;
+  const d = openDialog(`<h2>the moon<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body cond-dlg">
+    <div class="big">${moonGlyph(ph)} ${esc(moonName(ph))} <span class="help plain">${Math.round(moonIllum(ph) * 100)}% lit · ${ageDays.toFixed(1)} days into a ${SYNODIC.toFixed(1)}-day cycle</span></div>
+    <div class="label-h">coming up</div>
+    <div class="cond-days">${events.map(([t, n]) => `<div class="d"><span class="date">${esc(condWhen(t))}</span><span class="num">${MOON_GLYPHS[MOON_NAMES.indexOf(n)]} ${esc(n)}</span><span class="num dim">in ${Math.round((t - now) / 86400) || 'under a'} day${Math.round((t - now) / 86400) === 1 ? '' : 's'}</span></div>`).join('')}</div>
+    <div id="mooncal">${cal()}</div>
+    <p class="help plain">Phases by arithmetic from a known new moon (a mean cycle; real phases land within a few hours). On full-moon nights dark mode gets a small moon over the ridgeline and cooler tones, and a session that night earns a hidden badge.</p>
+  </div>${condFoot({ at: now }, 'arithmetic, no source')}`, 'moon');
+  condWire(d);
+  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'prev' || b.dataset.x === 'next') { view.setMonth(view.getMonth() + (b.dataset.x === 'next' ? 1 : -1)); $('#mooncal', d).innerHTML = cal(); } });
 }
 setInterval(renderConditions, 5 * 60 * 1000);   // staleness, nightfall and the hour move on their own
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', renderConditions);
@@ -2979,7 +3051,7 @@ $('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
 $('#btn-search').addEventListener('click', () => openPalette());
 $('#status-items').addEventListener('click', (e) => { if (e.target.closest('[data-phone]')) phoneDialog(); });
-$('#status-cond').addEventListener('click', () => customizeDialog());
+$('#status-cond').addEventListener('click', (e) => { const b = e.target.closest('[data-cond]'); if (b) condDialog(b.dataset.cond); });
 $('#brand').addEventListener('click', () => aboutDialog());
 // the search field is the command palette's front door: focusing it opens the palette with whatever was typed
 $('#omni').addEventListener('focus', () => { const o = $('#omni'); const q = o.value; o.value = ''; o.blur(); if (!state.dialog) openPalette(q); });

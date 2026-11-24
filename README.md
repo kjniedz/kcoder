@@ -543,8 +543,13 @@ error details, and an "approve all" button answers every approval at once.
   slightly cooler tones. One condition shows at a time, snow first, then a
   big bitcoin day, then the moon. The readings themselves (the inches, the
   bitcoin move, the moon's phase) sit at the right of the status bar every
-  day, so a quiet day with a plain header still shows they are coming in; a
-  click opens customize. The daemon reads Open-Meteo and CoinGecko (Binance
+  day as three separate items, so a quiet day with a plain header still
+  shows they are coming in. Each opens its own view: the snow item shows
+  the mountain, the last 7 days and the next 7 with the snow, all
+  precipitation and the high and low; the bitcoin item the price, the 24 h
+  move and the week's daily closes; the moon item tonight's phase, the next
+  new moon, quarters and full moon, and a month calendar with a glyph per
+  night (‹ › move months). Customize is a button at the foot of each. The daemon reads Open-Meteo and CoinGecko (Binance
   as the fallback; all free, no keys) every 30 minutes, through certifi's
   certificate bundle and, if that is refused, the system's own trust store
   through curl, so a Mac whose python.org Python has no certificates (the
@@ -879,6 +884,18 @@ otherwise. `--dry-run` prints what it would do.
 **"kcoderd not running"** in the status bar: the app's window starts it again
 by itself; a browser tab cannot, so run `kcoder app`. The Claude plan button
 shows `plan ?` meanwhile; Claude is fine, the app just cannot reach kcoderd.
+
+**The phone shows nothing, or "your Mac is offline", while the phone dialog
+on the Mac says connected** and the daemon log repeats "phone: could not open
+a local connection: Connection refused": the daemon's own Unix socket file
+(`~/.local/share/kcoder/kcoderd.sock`) is dead. A second kcoderd started by
+hand next to the running one used to replace the live socket file and then
+die on the port, and every phone and terminal client that preferred the
+socket was refused from then on. Since November 2026 the daemon binds the
+port before it touches the socket, never removes a socket something still
+answers on, and the phone's connection falls back to loopback TCP when the
+socket refuses; on an older daemon, delete the socket file (the daemon
+falls through to TCP) or restart kcoderd.
 
 **A session shows ERROR.** Click **details** (on the red note, the sidebar
 badge, the pane status or in the inbox). It shows the error, the last things

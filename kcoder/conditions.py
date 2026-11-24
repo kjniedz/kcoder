@@ -156,13 +156,29 @@ def _get_json(url: str) -> dict:
 
 
 def fetch_snow(place: dict) -> dict:
-    """Inches of snow in the last 24 h at the place (Open-Meteo)."""
+    """Inches of snow in the last 24 h at the place (Open-Meteo), plus a day
+    table for the detail view: the last 7 days and the next 7 (``days``:
+    date, snow_in, precip_in, hi, lo in °F, forecast flag)."""
     fake = _fake()
     if fake is not None:
-        return {"inches": float(fake.get("snow_in") or 0), "place": place["name"]}
+        days = [{"date": d[0], "snow_in": float(d[1]), "precip_in": float(d[2]), "hi": d[3], "lo": d[4],
+                 "forecast": d[0] > dt.date.today().isoformat()} for d in (fake.get("snow_days") or [])]
+        return {"inches": float(fake.get("snow_in") or 0), "place": place["name"], "days": days}
     q = urllib.parse.urlencode({"latitude": place["lat"], "longitude": place["lon"], "hourly": "snowfall",
-                                "past_days": 1, "forecast_days": 1, "timezone": "auto", "precipitation_unit": "inch"})
+                                "daily": "snowfall_sum,precipitation_sum,temperature_2m_max,temperature_2m_min",
+                                "past_days": 7, "forecast_days": 7, "timezone": "auto", "precipitation_unit": "inch",
+                                "temperature_unit": "fahrenheit"})
     data = _get_json("https://api.open-meteo.com/v1/forecast?" + q)
+    daily = data.get("daily") or {}
+    offset = int(data.get("utc_offset_seconds") or 0)
+    today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=offset)).date().isoformat()
+    days = []
+    for i, date in enumerate(daily.get("time") or []):
+        def at(key):
+            v = (daily.get(key) or [None] * (i + 1))[i] if i < len(daily.get(key) or []) else None
+            return None if v is None else round(float(v), 1)
+        days.append({"date": date, "snow_in": at("snowfall_sum") or 0.0, "precip_in": at("precipitation_sum") or 0.0,
+                     "hi": at("temperature_2m_max"), "lo": at("temperature_2m_min"), "forecast": date > today})
     hourly = data.get("hourly") or {}
     times, falls = hourly.get("time") or [], hourly.get("snowfall") or []
     offset = int(data.get("utc_offset_seconds") or 0)
@@ -176,22 +192,47 @@ def fetch_snow(place: dict) -> dict:
             continue
         if cutoff < when <= now_local and v is not None:
             total += float(v)
-    return {"inches": round(total, 1), "place": place["name"]}
+    return {"inches": round(total, 1), "place": place["name"], "days": days}
 
 
 def fetch_btc() -> dict:
     """Bitcoin's 24 h move in percent and the price (CoinGecko, then Binance)."""
     fake = _fake()
     if fake is not None:
-        return {"pct": float(fake.get("btc_pct") or 0), "price": float(fake.get("btc_price") or 0)}
+        return {"pct": float(fake.get("btc_pct") or 0), "price": float(fake.get("btc_price") or 0),
+                "week": [{"t": float(t), "price": float(p)} for t, p in (fake.get("btc_week") or [])]}
     try:
         data = _get_json("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true")
         b = data["bitcoin"]
-        return {"pct": round(float(b["usd_24h_change"]), 2), "price": float(b["usd"])}
+        out = {"pct": round(float(b["usd_24h_change"]), 2), "price": float(b["usd"])}
+        week = _btc_week_coingecko()
     except Exception as exc:  # noqa: BLE001
         log.info("coingecko failed (%s), trying binance", exc)
-    data = _get_json("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
-    return {"pct": round(float(data["priceChangePercent"]), 2), "price": float(data["lastPrice"])}
+        data = _get_json("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT")
+        out = {"pct": round(float(data["priceChangePercent"]), 2), "price": float(data["lastPrice"])}
+        week = _btc_week_binance()
+    out["week"] = week
+    return out
+
+
+def _btc_week_coingecko() -> list:
+    """Daily closes for the last week, oldest first; [] when the call fails
+    (the badge does not need it)."""
+    try:
+        data = _get_json("https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7&interval=daily")
+        return [{"t": float(t) / 1000, "price": round(float(p), 2)} for t, p in (data.get("prices") or [])][-8:]
+    except Exception as exc:  # noqa: BLE001
+        log.info("coingecko week failed: %s", exc)
+        return []
+
+
+def _btc_week_binance() -> list:
+    try:
+        rows = _get_json("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=8")
+        return [{"t": float(r[6]) / 1000, "price": round(float(r[4]), 2)} for r in rows]
+    except Exception as exc:  # noqa: BLE001
+        log.info("binance week failed: %s", exc)
+        return []
 
 
 def moon(now: float | None = None) -> dict:

@@ -1093,3 +1093,27 @@ html[data-phone] .pane-actions { flex-wrap: nowrap; overflow-x: auto; }
 html[data-phone] .pane-actions button, html[data-phone] .pane-actions select { flex: 0 0 auto; white-space: nowrap; }
 html[data-phone] .wall.focus .pane.focused .pane-title .repo, html[data-phone] .wall.focus .pane.focused .pane-title .model { display: none; }
 html[data-phone] .wall.focus .pane.focused .pane-title .name { flex: 1 1 0; min-width: 0; }
+
+/* conditions: the three status bar items and their detail views */
+.statusbar .status-cond { display: inline-flex; align-items: center; gap: 0; }
+.statusbar .status-cond .status-item + .status-item::before { content: '·'; color: var(--fg-mute); margin-right: 6px; }
+.cond-dlg .big { font-size: 20px; font-weight: 600; color: var(--fg); }
+.cond-dlg .big .help, .cond-dlg .d .dim { font-weight: 400; color: var(--fg-dim); }
+.cond-dlg .up { color: var(--green); } .cond-dlg .down { color: var(--red); }
+.cond-days { display: flex; flex-direction: column; gap: 3px; }
+.cond-days .d { display: grid; grid-template-columns: 110px 1fr 56px 90px 80px; gap: 10px; align-items: center; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+.cond-days .d.fc { color: var(--fg-dim); }
+.cond-days .d.today { background: var(--bg-3); }
+.cond-days .d .date { white-space: nowrap; }
+.cond-days .d .bar { display: block; height: 8px; border-radius: 4px; background: var(--bg-3); border: 1px solid var(--line); overflow: hidden; }
+.cond-days .d .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.cond-days .d.fc .bar i { opacity: .55; }
+.cond-days .d .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mooncal-h { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 6px; font-size: 12px; color: var(--fg); }
+.mooncal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-top: 6px; }
+.mooncal .w { text-align: center; font-size: 10px; color: var(--fg-mute); }
+.mooncal .c { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 0; border-radius: 5px; font-size: 11px; color: var(--fg-dim); border: 1px solid transparent; }
+.mooncal .c b { font-size: 15px; font-weight: 400; }
+.mooncal .c.today { border-color: var(--accent); color: var(--fg); }
+.mooncal .c.full { background: var(--bg-3); } .mooncal .c.new { background: var(--bg); }
+@media (max-width: 640px) { .cond-days .d { grid-template-columns: 82px 1fr 44px 46px 66px; gap: 6px; font-size: 11px; } .cond-days .d .pl { display: none; } }

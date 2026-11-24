@@ -2900,7 +2900,11 @@ def _phone_local_connect(host: str, port: int):
 
     async def open_local():
         if sock_path and os.path.exists(sock_path):
-            return await unix_connect(sock_path, uri="ws://localhost/ws", max_size=64 * 1024 * 1024)
+            try:
+                return await unix_connect(sock_path, uri="ws://localhost/ws", max_size=64 * 1024 * 1024)
+            except OSError as exc:
+                # a dead socket file (another kcoderd start replaced ours and then failed): loopback TCP still answers
+                log.warning("phone: the socket %s refused (%s); using loopback TCP", sock_path, exc)
         return await connect(f"ws://127.0.0.1:{port}/ws", max_size=64 * 1024 * 1024)
     return open_local
 
@@ -3060,6 +3064,19 @@ def _port_open(host: str, port: int) -> bool:
         return False
 
 
+def _socket_answers(path: str) -> bool:
+    """True when a process accepts connections on the Unix socket file."""
+    if not os.path.exists(path):
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.connect(path)
+        return True
+    except OSError:
+        return False
+
+
 def already_running() -> dict | None:
     info = read_daemon_info()
     if info and _pid_alive(int(info.get("pid", 0))) and _port_open(info["host"], info["port"]):
@@ -3086,26 +3103,14 @@ async def _serve(host: str, port: int) -> None:
             pass  # not the main thread (embedded/tests) or Windows
 
     origins = [None] + sorted(allowed_origins(port))
-    # a user-only Unix socket where the platform has them (not Windows: loopback TCP only)
+    # a user-only Unix socket where the platform has them (not Windows: loopback TCP only). The TCP
+    # port is bound first: a second kcoderd started by hand next to a running one then fails on the
+    # port before it has touched the socket file (one that got there first used to replace the live
+    # socket and then die on the port, leaving a dead socket file that refused every phone and
+    # terminal client until the daemon restarted). A socket file something still answers on is
+    # never removed.
     sock_path = paths.SOCKET_PATH if hasattr(socket, "AF_UNIX") and not compat.WINDOWS else None
     unix_server = None
-    if sock_path:
-        try:
-            os.remove(sock_path)
-        except FileNotFoundError:
-            pass
-        old_umask = os.umask(0o177)   # the socket is created user-only
-        try:
-            unix_server = await unix_serve(
-                lambda ws: _handle(ws, manager, token), path=sock_path,
-                process_request=_unix_process_request, max_size=64 * 1024 * 1024, server_header=None,
-            ).__aenter__()
-        finally:
-            os.umask(old_umask)
-        try:
-            os.chmod(sock_path, 0o600)
-        except OSError:
-            pass
     async with serve(
         lambda ws: _handle(ws, manager, token),
         host, port,
@@ -3114,6 +3119,25 @@ async def _serve(host: str, port: int) -> None:
         max_size=64 * 1024 * 1024,
         server_header=None,
     ) as server:
+        if sock_path:
+            if _socket_answers(sock_path):
+                raise SystemExit(f"another kcoderd answers on {sock_path}; not starting")
+            try:
+                os.remove(sock_path)
+            except FileNotFoundError:
+                pass
+            old_umask = os.umask(0o177)   # the socket is created user-only
+            try:
+                unix_server = await unix_serve(
+                    lambda ws: _handle(ws, manager, token), path=sock_path,
+                    process_request=_unix_process_request, max_size=64 * 1024 * 1024, server_header=None,
+                ).__aenter__()
+            finally:
+                os.umask(old_umask)
+            try:
+                os.chmod(sock_path, 0o600)
+            except OSError:
+                pass
         info = {"host": host, "port": port, "pid": os.getpid(), "started": time.time(), "version": __version__,
                 "socket": sock_path}
         _atomic_write(paths.DAEMON_INFO_PATH, json.dumps(info))
