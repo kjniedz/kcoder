@@ -738,8 +738,8 @@ function renderStatusBar() {
   const tokens = (today.input || 0) + (today.output || 0);
   const items = [
     `<button class="status-item${st.cap_reached ? ' bad' : ''}" data-go="sessions" title="live sessions · open the sessions grid"><b>${st.sessions || 0}</b> active${st.cap_reached ? ' · paused (daily cap)' : ''}</button>`,
-    `<button class="status-item" data-go="stats:tokens" title="tokens today · open stats"><b>${fmtTokens(tokens)}</b> tokens today</button>`,
-    `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'} today</button>`,
+    `<button class="status-item" data-go="stats:tokens" title="tokens today · open stats"><b>${fmtTokens(tokens)}</b> tokens<span class="ph-x"> today</span></button>`,
+    `<button class="status-item" data-go="stats:commits" title="commits today · open stats"><b>${st.commits_today || 0}</b> commit${st.commits_today === 1 ? '' : 's'}<span class="ph-x"> today</span></button>`,
   ];
   const qm = quotaItemHtml(st.quota); if (qm) items.push(qm);
   const ph = st.phone || {};
@@ -771,7 +771,7 @@ function quotaItemHtml(q) {
   const pace = quotaPace(q);
   const src = q.source === 'provider' ? 'from Claude Code' : 'estimate';
   const title = `weekly plan limit · ${pct}% used (${src})${q.resets_at ? ' · resets ' + quotaWhen(q.resets_at) : ''}${pace ? '\n' + pace : ''}${q.shift_active ? '\nquota shift on: small turns run on the cheaper model' : ''}\nclick for the full meter`;
-  return `<button class="status-item quota ${quotaLevelClass(q)}" data-go="stats:quota" title="${esc(title)}">wk ${bar} <b>${pct}%</b>${q.resets_at ? ` <span class="dim">· resets ${esc(quotaWhen(q.resets_at))}</span>` : ''}${q.forecast_reliable && !q.on_track && q.utilization < 1 ? ` <span class="hit">· hits limit ${esc(quotaWhen(q.forecast_hit))}</span>` : ''}${q.shift_active ? ' <span class="shift" title="quota shift: small turns go to the cheaper model while the forecast says the limit runs out early">⇣ cheaper models</span>' : ''}</button>`;
+  return `<button class="status-item quota ${quotaLevelClass(q)}" data-go="stats:quota" title="${esc(title)}"><span class="ph-x">wk </span>${bar} <b>${pct}%</b>${q.resets_at ? ` <span class="dim">· resets ${esc(quotaWhen(q.resets_at))}</span>` : ''}${q.forecast_reliable && !q.on_track && q.utilization < 1 ? ` <span class="hit">· hits limit ${esc(quotaWhen(q.forecast_hit))}</span>` : ''}${q.shift_active ? ' <span class="shift" title="quota shift: small turns go to the cheaper model while the forecast says the limit runs out early">⇣ cheaper models</span>' : ''}</button>`;
 }
 
 function setView(v) {
@@ -839,7 +839,7 @@ function renderWall() {
 }
 
 function paneSkeleton() {
-  return `<div class="pane-title"><span class="back" title="close">‹</span><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell"></span></div>
+  return `<div class="pane-title"><span class="back" title="close">‹</span><span class="num"></span><span class="dot"></span><span class="name"></span><span class="repo"></span><span class="model"></span><span class="spacer"></span><span class="window-pin" title="pin to this window">📌</span><span class="view-toggle" title="view: chat / terminal / shell"></span><span class="full" title="full screen">⛶</span><span class="more" title="actions">⋯</span></div>
   <div class="pane-body"></div>
   <div class="shell-drawer" hidden></div>
   <div class="approval-bar" hidden></div>
@@ -853,7 +853,7 @@ function renderPaneChrome(pane, s, num) {
   pane.className = 'pane st-' + st + (pane.classList.contains('focused') ? ' focused' : '') + (pane.classList.contains('dragging') ? ' dragging' : '') + (state.sid === s.id ? ' active' : '');
   $('.num', pane).textContent = num <= 9 ? num : '';
   $('.dot', pane).className = 'dot ' + st;
-  $('.name', pane).textContent = s.title && s.title !== s.name ? `${s.name} · ${s.title}` : s.name;
+  $('.name', pane).innerHTML = `<span class="nm">${esc(s.name)}</span>` + (s.title && s.title !== s.name ? `<span class="sep"> · </span><span class="tt">${esc(s.title)}</span>` : '');
   $('.name', pane).title = s.title || s.name;
   const proj = s.project || {};
   const branch = s.worktree ? s.worktree.branch : (state.gitInfo.get(s.id) || {}).branch;
@@ -1054,6 +1054,8 @@ function wirePane(pane, sid) {
     if (e.target.classList.contains('back')) { focusPane(null); return; }
     if (e.target.classList.contains('window-pin')) { togglePin(sid); return; }
     if (e.target.classList.contains('view-toggle')) { cyclePaneView(sid); return; }
+    if (e.target.classList.contains('more')) { phonePaneMenu(sid); return; }
+    if (e.target.classList.contains('full')) { togglePhoneFull(); return; }
     if (e.target.closest('a')) return;
     const chip = e.target.closest('[data-act]'); if (chip) { handleAction(chip, sid); return; }
     focusPane(state.focus === sid ? null : sid);
@@ -1115,6 +1117,7 @@ function wireDrag(pane, sid) {
 
 function focusPane(sid) {
   state.focus = sid;
+  if (!sid) togglePhoneFull(false);
   if (sid) { state.sid = sid; localStorage.setItem('kcoder.sid', sid); loadEvents(sid, -1); const s = state.sessions.get(sid); if (s && s.project && s.project.git && !state.gitInfo.has(sid)) gitStatus(sid, false).catch(() => {}); }
   renderWall();
   if (sid) { const pane = $(`.pane[data-sid="${sid}"]`); if (pane) { renderPaneChrome(pane, state.sessions.get(sid), state.order.indexOf(sid) + 1); renderPaneBody(pane, sid); fitShell(sid); focusComposer(); if (isPhone()) { const f = $('.composer', pane); if (f && f._comp) f._comp.grow(); pinPaneBody(pane); } } }
@@ -1125,6 +1128,31 @@ function pinPaneBody(pane) {
   const body = $('.pane-body', pane); if (!body) return;
   body.scrollTop = body.scrollHeight; pane._pin = true; const j = $('.jump', pane); if (j) j.hidden = true;
   requestAnimationFrame(() => { if (pane._pin !== false && body.isConnected) body.scrollTop = body.scrollHeight; });
+}
+// The phone's open session keeps three controls on its title: ⛶ (full screen: the header and the status
+// bar go, the chat takes the whole screen), ⋯ (this menu: everything the pane's action row offers on the
+// Mac, plus the view) and ✕ (back to the list). The action row itself stays off the phone.
+async function phonePaneMenu(sid) {
+  const s = state.sessions.get(sid); if (!s) return;
+  const pv = paneViewOf(sid);
+  const VIEWS = { chat: 'chat', term: 'terminal', shell: 'shell', preview: 'preview' };
+  const items = [];
+  if (s.status === 'working' || s.status === 'waiting') items.push(['interrupt', '■ Interrupt']);
+  items.push(['queue', '+ Add a follow-up task'], ['trust', `Trust: ${s.trust || 'read'}…`], ['view', `View: ${VIEWS[pv] || 'chat'}…`]);
+  if (s.project && s.project.git) items.push(['git', 'Git status'], ['pull', '⇣ Pull']);
+  if (s.worktree) items.push(['changes', (s.needs_review ? '⚑ ' : '') + 'Review changes'], ['merge', '⇤ Merge into the project'], ['pr', 'Open a PR'], ['discard', 'Discard this work']);
+  items.push(['preview', '▶ Preview'], ['instructions', 'Instructions file'], ['export', 'Export'], ['archive', 'Archive']);
+  const k = await chooseDialog(s.name, items);
+  if (!k) return;
+  if (k === 'trust') { const t = await chooseDialog('Trust', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything'], ['dry', 'dry run - plan and diff only, changes nothing']]); if (t) { try { await request('set', { sid, trust: t }); } catch (e) { toast(e.message, 'err'); } } return; }
+  if (k === 'view') { const v = await chooseDialog('View', Object.entries(VIEWS)); if (v) setPaneView(sid, v); return; }
+  handleAction({ dataset: { act: k } }, sid);
+}
+function togglePhoneFull(on) {
+  const root = document.documentElement;
+  const want = on == null ? !root.hasAttribute('data-phone-full') : !!on;
+  root.toggleAttribute('data-phone-full', want);
+  for (const b of $$('.pane-title .full')) b.classList.toggle('on', want);
 }
 function cyclePaneView(sid) {
   const order = ['chat', 'term', 'shell', 'preview'];
@@ -1984,8 +2012,8 @@ function confirmDialog(title, help) {
 function chooseDialog(title, items) {
   return new Promise((resolve) => {
     state._dialogReject = resolve;
-    const d = openDialog(`<h2>${esc(title)}</h2><div class="list">${items.map(([k, l, h], i) => `<div class="item${i === 0 ? ' sel' : ''}" data-k="${esc(k)}"><span>${esc(l)}</span>${h ? `<span class="meta"><kbd>${esc(h)}</kbd></span>` : ''}</div>`).join('')}</div>`, 'choose');
-    d.addEventListener('click', (e) => { const it = e.target.closest('[data-k]'); if (!it) return; state._dialogReject = null; closeDialog(); resolve(it.dataset.k); });
+    const d = openDialog(`<h2>${esc(title)}<span class="spacer"></span><button data-x="close" title="close">✕</button></h2><div class="list">${items.map(([k, l, h], i) => `<div class="item${i === 0 ? ' sel' : ''}" data-k="${esc(k)}"><span>${esc(l)}</span>${h ? `<span class="meta"><kbd>${esc(h)}</kbd></span>` : ''}</div>`).join('')}</div>`, 'choose');
+    d.addEventListener('click', (e) => { if (e.target.closest('[data-x="close"]')) { closeDialog(); return; } const it = e.target.closest('[data-k]'); if (!it) return; state._dialogReject = null; closeDialog(); resolve(it.dataset.k); });
   });
 }
 function infoDialog(title, html) { openDialog(`<h2>${esc(title)}<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body">${html}</div>`, 'info').addEventListener('click', (e) => { if (e.target.closest('[data-x]')) closeDialog(); }); }
@@ -3511,9 +3539,10 @@ function sortableTable(id, cols, rows, opts = {}) {
   const col = cols.find((c) => c.k === st.key) || cols[0];
   const val = (r) => (col.sort ? col.sort(r) : r[col.k]);
   const sorted = rows.slice().sort((a, b) => { const x = val(a), y = val(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * st.dir; });
-  const head = cols.map((c) => `<th class="${c.cls || ''}${st.key === c.k ? ' on' : ''}${opts.hl === c.k ? ' hl' : ''}" data-sort="${c.k}" title="sort by ${esc(c.label)}">${c.label}${st.key === c.k ? (st.dir < 0 ? ' ↓' : ' ↑') : ''}</th>`).join('');
-  const body = sorted.length ? sorted.map((r) => `<tr${opts.row ? opts.row(r) : ''}>${cols.map((c) => `<td class="${c.cls || ''}${opts.hl === c.k ? ' hl' : ''}">${c.f(r)}</td>`).join('')}</tr>`).join('') : `<tr><td class="l" colspan="${cols.length}">${opts.empty || 'nothing in this range'}</td></tr>`;
-  const total = opts.total && sorted.length ? `<tr class="total">${cols.map((c, i) => `<td class="${c.cls || ''}">${i === 0 ? esc(opts.total.label) : c.f(opts.total.row)}</td>`).join('')}</tr>` : '';
+  const sec = (c) => (opts.keep && !opts.keep.includes(c.k) ? ' sec' : '');   // columns the phone drops (see html[data-phone] table.grid .sec)
+  const head = cols.map((c) => `<th class="${c.cls || ''}${sec(c)}${st.key === c.k ? ' on' : ''}${opts.hl === c.k ? ' hl' : ''}" data-sort="${c.k}" title="sort by ${esc(c.label)}">${c.label}${st.key === c.k ? (st.dir < 0 ? ' ↓' : ' ↑') : ''}</th>`).join('');
+  const body = sorted.length ? sorted.map((r) => `<tr${opts.row ? opts.row(r) : ''}>${cols.map((c) => `<td class="${c.cls || ''}${sec(c)}${opts.hl === c.k ? ' hl' : ''}">${c.f(r)}</td>`).join('')}</tr>`).join('') : `<tr><td class="l" colspan="${cols.length}">${opts.empty || 'nothing in this range'}</td></tr>`;
+  const total = opts.total && sorted.length ? `<tr class="total">${cols.map((c, i) => `<td class="${c.cls || ''}${sec(c)}">${i === 0 ? esc(opts.total.label) : c.f(opts.total.row)}</td>`).join('')}</tr>` : '';
   return `<div class="grid-wrap${opts.tall ? ' tall' : ''}${opts.fixed ? ' fixed' : ''}" data-table="${id}"><table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}${total}</tbody></table></div>`;
 }
 function sumRows(rows) { const t = {}; for (const r of rows) for (const k of Object.keys(r)) if (typeof r[k] === 'number') t[k] = (t[k] || 0) + r[k]; return t; }
@@ -3590,10 +3619,10 @@ async function renderStatsView(force) {
   // what the row's usage would cost at API rates; "est." whenever some of it ran on the plan (so was not billed)
   const costCol = { k: 'api_equivalent', label: 'API equiv.', f: (r) => (r.api_equivalent > (r.cost || 0) + 0.005 ? `<span class="dim" title="estimate at API rates${r.cost ? '; ' + fmtUsd(r.cost) + ' actually billed on API keys' : '; this usage ran on your plan'}">${fmtUsd(r.api_equivalent)} est.</span>` : fmtUsd(r.cost)) };
   const linesCols = [{ k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'insertions', label: '+', f: (r) => plus(r.insertions) }, { k: 'deletions', label: '-', f: (r) => minus(r.deletions) }, { k: 'net', label: 'net', f: (r) => fmtSigned(r.net) }, { k: 'tokens_per_line', label: 'tokens / line', f: (r) => (r.tokens_per_line == null ? '<span class="dim">-</span>' : fmtTokens(r.tokens_per_line)) }];
-  const byModel = sortableTable('model', [{ k: 'key', label: 'model', f: (r) => esc(r.key), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'fresh', label: 'fresh in', f: (r) => fmtTokens(r.fresh) }, { k: 'cache_read', label: 'cache read', f: (r) => fmtTokens(r.cache_read) }, { k: 'cache_write', label: 'cache write', f: (r) => fmtTokens(r.cache_write) }, { k: 'cache_hit', label: 'hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'output', label: 'out', f: (r) => fmtTokens(r.output) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, ...linesCols, costCol], d.by_model, { sort: { key: 'total', dir: -1 } });
-  const byProvider = sortableTable('provider', [{ k: 'key', label: 'provider', f: (r) => esc(r.key), cls: 'l' }, { k: 'billing', label: 'billing', f: (r) => esc(r.billing || (r.plan ? 'subscription' : 'api key')), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'cache_hit', label: 'cache hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, { k: 'cost', label: 'cost', f: (r) => (r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost)) }, costCol], d.by_provider, { sort: { key: 'total', dir: -1 } });
-  const byProject = sortableTable('project', [{ k: 'key', label: 'repo / project', f: (r) => esc(r.key), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, ...linesCols, { k: 'files', label: 'files', f: (r) => fmtInt(r.files) }, costCol], d.by_project, { sort: { key: 'total', dir: -1 } });
-  const top = sortableTable('top', [{ k: 'name', label: 'session', f: (r) => `<span class="ell" title="${esc((r.name || r.key) + (r.title ? ' · ' + r.title : ''))}">${esc(r.name || r.key)}${r.title && r.title !== r.name ? ' <span class="dim">· ' + esc(r.title) + '</span>' : ''}</span>${r.archived ? ' <span class="badge archived">archived</span>' : ''}`, cls: 'l name', sort: (r) => r.name || r.key }, { k: 'model', label: 'model', f: (r) => esc(r.model || ''), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'turns', label: 'turns', f: (r) => fmtInt(r.turns) }, { k: 'active_seconds', label: 'active', f: (r) => fmtDur(r.active_seconds) }, { k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'net', label: 'lines', f: (r) => (r.commits ? `${plus(r.insertions)} ${minus(r.deletions)}` : '<span class="dim">-</span>') }, costCol], d.top_sessions, { sort: { key: 'total', dir: -1 }, fixed: true, row: (r) => ` class="click" data-open="${esc(r.key)}" title="open in the focused pane"`, empty: 'no usage in this range' });
+  const byModel = sortableTable('model', [{ k: 'key', label: 'model', f: (r) => esc(r.key), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'fresh', label: 'fresh in', f: (r) => fmtTokens(r.fresh) }, { k: 'cache_read', label: 'cache read', f: (r) => fmtTokens(r.cache_read) }, { k: 'cache_write', label: 'cache write', f: (r) => fmtTokens(r.cache_write) }, { k: 'cache_hit', label: 'hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'output', label: 'out', f: (r) => fmtTokens(r.output) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, ...linesCols, costCol], d.by_model, { sort: { key: 'total', dir: -1 }, keep: ['key', 'total', 'cache_hit', 'calls'] });
+  const byProvider = sortableTable('provider', [{ k: 'key', label: 'provider', f: (r) => esc(r.key), cls: 'l' }, { k: 'billing', label: 'billing', f: (r) => esc(r.billing || (r.plan ? 'subscription' : 'api key')), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'cache_hit', label: 'cache hit', f: (r) => fmtPct(r.cache_hit) }, { k: 'calls', label: 'calls', f: (r) => fmtInt(r.calls) }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, { k: 'cost', label: 'cost', f: (r) => (r.plan ? '<span class="dim">plan</span>' : fmtUsd(r.cost)) }, costCol], d.by_provider, { sort: { key: 'total', dir: -1 }, keep: ['key', 'total', 'sessions'] });
+  const byProject = sortableTable('project', [{ k: 'key', label: 'repo / project', f: (r) => esc(r.key), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'sessions', label: 'sessions', f: (r) => fmtInt(r.sessions) }, ...linesCols, { k: 'files', label: 'files', f: (r) => fmtInt(r.files) }, costCol], d.by_project, { sort: { key: 'total', dir: -1 }, keep: ['key', 'total', 'sessions', 'commits'] });
+  const top = sortableTable('top', [{ k: 'name', label: 'session', f: (r) => `<span class="ell" title="${esc((r.name || r.key) + (r.title ? ' · ' + r.title : ''))}">${esc(r.name || r.key)}${r.title && r.title !== r.name ? ' <span class="dim">· ' + esc(r.title) + '</span>' : ''}</span>${r.archived ? ' <span class="badge archived">archived</span>' : ''}`, cls: 'l name', sort: (r) => r.name || r.key }, { k: 'model', label: 'model', f: (r) => esc(r.model || ''), cls: 'l' }, { k: 'total', label: 'tokens', f: (r) => `<b>${fmtTokens(r.total)}</b>` }, { k: 'turns', label: 'turns', f: (r) => fmtInt(r.turns) }, { k: 'active_seconds', label: 'active', f: (r) => fmtDur(r.active_seconds) }, { k: 'commits', label: 'commits', f: (r) => fmtInt(r.commits) }, { k: 'net', label: 'lines', f: (r) => (r.commits ? `${plus(r.insertions)} ${minus(r.deletions)}` : '<span class="dim">-</span>') }, costCol], d.top_sessions, { sort: { key: 'total', dir: -1 }, fixed: true, keep: ['name', 'total', 'turns', 'commits'], row: (r) => ` class="click" data-open="${esc(r.key)}" title="open in the focused pane"`, empty: 'no usage in this range' });
   // cache split
   const c = d.cache; const ci = Math.max(1, c.input);
   const cacheCard = `<div class="card"><h3>input tokens · ${P}</h3><div class="tokbar"><i class="fresh" style="width:${c.fresh / ci * 100}%" title="fresh input"></i><i class="cread" style="width:${c.cache_read / ci * 100}%" title="cache reads"></i><i class="cwrite" style="width:${c.cache_write / ci * 100}%" title="cache writes"></i></div>
@@ -3658,10 +3687,10 @@ async function renderStatsView(force) {
     ${nextUp ? `<div class="label-h">next up</div><div class="nextup">${nextUp}</div>` : ''}${recordLine}${wall}</div>`;
   // tools
   const toolRows = Object.values(d.tools.reduce((acc, r) => { const n = TOOL_NAMES[r.name] || r.name; const a = acc[n] || (acc[n] = { name: n, category: toolCategory(r.name), count: 0, errors: 0 }); a.count += r.count; a.errors += r.errors; return acc; }, {})).map((r) => ({ ...r, error_rate: r.count ? r.errors / r.count : 0 }));
-  const toolsT = sortableTable('tools', [{ k: 'name', label: 'tool', f: (r) => esc(r.name), cls: 'l' }, { k: 'category', label: 'kind', f: (r) => esc(r.category), cls: 'l' }, { k: 'count', label: 'calls', f: (r) => fmtInt(r.count) }, { k: 'errors', label: 'failed', f: (r) => (r.errors ? `<span class="warn">${fmtInt(r.errors)}</span>` : '0') }, { k: 'error_rate', label: 'failure rate', f: (r) => fmtPct(r.error_rate) }], toolRows, { sort: { key: 'count', dir: -1 }, empty: 'no tool calls in this range', total: toolRows.length ? { label: 'total', row: { ...sumRows(toolRows), error_rate: sumRows(toolRows).count ? sumRows(toolRows).errors / sumRows(toolRows).count : 0 } } : null });
+  const toolsT = sortableTable('tools', [{ k: 'name', label: 'tool', f: (r) => esc(r.name), cls: 'l' }, { k: 'category', label: 'kind', f: (r) => esc(r.category), cls: 'l' }, { k: 'count', label: 'calls', f: (r) => fmtInt(r.count) }, { k: 'errors', label: 'failed', f: (r) => (r.errors ? `<span class="warn">${fmtInt(r.errors)}</span>` : '0') }, { k: 'error_rate', label: 'failure rate', f: (r) => fmtPct(r.error_rate) }], toolRows, { sort: { key: 'count', dir: -1 }, keep: ['name', 'count', 'errors'], empty: 'no tool calls in this range', total: toolRows.length ? { label: 'total', row: { ...sumRows(toolRows), error_rate: sumRows(toolRows).count ? sumRows(toolRows).errors / sumRows(toolRows).count : 0 } } : null });
   // commits
   const ct = d.commit_totals;
-  const commitsT = sortableTable('commits', [
+  const commitsT = isPhone() ? commitListHtml(d.commits) : sortableTable('commits', [
     { k: 'ts', label: 'when', f: (c) => `<span title="${new Date(c.ts * 1000).toLocaleString()}">${fmtDate(c.date)} ${new Date(c.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>`, cls: 'l' },
     { k: 'sha', label: 'commit', f: (c) => (c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="open on GitHub">${c.sha.slice(0, 7)} ↗</a>` : `<code>${c.sha.slice(0, 7)}</code>`), cls: 'l' },
     { k: 'subject', label: 'subject', f: (c) => `<span class="subject" title="click to expand">${esc(c.subject)}</span>`, cls: 'l subj' },
@@ -3718,8 +3747,17 @@ async function renderStatsView(force) {
     const os = e.target.closest('[data-open-session]'); if (os) { e.preventDefault(); assignPane(state.layout.focus, os.dataset.openSession); setView('chat'); return; }
     if (e.target.closest('a')) return;
     const tr = e.target.closest('tr[data-open]'); if (tr) { assignPane(state.layout.focus, tr.dataset.open); setView('chat'); return; }
-    const cr = e.target.closest('tr[data-sha]'); if (cr) cr.classList.toggle('open');
+    const cr = e.target.closest('tr[data-sha], .ci[data-sha]'); if (cr) cr.classList.toggle('open');
   };
+}
+// the phone's commits: a card per commit, the subject on two lines (tap for all of it), then the facts
+function commitListHtml(rows) {
+  if (!rows.length) return '<p class="help plain">no commits from sessions in this range</p>';
+  const sorted = rows.slice().sort((a, b) => b.ts - a.ts);
+  const when = (c) => `${fmtDate(c.date)} ${new Date(c.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+  return `<div class="commit-list">${sorted.map((c) => `<div class="ci" data-sha="${esc(c.sha)}"><div class="s">${esc(c.subject)}</div>` +
+    `<div class="m">${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="open on GitHub">${c.sha.slice(0, 7)} ↗</a>` : `<code>${c.sha.slice(0, 7)}</code>`} · ${esc(c.project || '')}${c.branch ? ' <span class="dim">@ ' + esc(c.branch) + '</span>' : ''}${c.session ? ' · ' + esc(c.session) : ''}</div>` +
+    `<div class="m">${when(c)} · ${plus(c.insertions)} ${minus(c.deletions)} · ${fmtInt(c.files)} file${c.files === 1 ? '' : 's'} · <span class="badge ${c.pushed ? 'pushed' : 'local'}">${c.pushed ? 'pushed' : 'local only'}</span></div></div>`).join('')}</div>`;
 }
 // ---- kcoder Wrapped: the archive on the stats page, the card itself in a dialog, PNG through the save dialog ----
 function wrappedPeriodLabel(c) { const k = c.key || ''; return c.kind === 'week' || /W/.test(k) ? `week ${k.split('W')[1]} · ${fmtDate(c.start)} – ${fmtDate(c.end)}` : `${new Date(c.start + 'T00:00:00').toLocaleDateString([], { month: 'long', year: 'numeric' })}`; }
@@ -3844,7 +3882,7 @@ function renderDailyTable() {
   const w = statsData.window || {}; const rows = statsData.daily.filter((r) => (!w.start || r.date >= w.start) && (!w.end || r.date <= w.end));
   const tot = sumRows(rows); tot.date = `total · ${rows.length} day${rows.length === 1 ? '' : 's'}`;
   const metricCol = { tokens: 'total', commits: 'commits', sessions: 'sessions', active: 'active_seconds', lines: 'net', api: 'api_equivalent' }[state.statsMetric];
-  el.innerHTML = sortableTable('daily', DAILY_COLS, rows, { sort: { key: 'date', dir: -1 }, tall: true, hl: metricCol, empty: 'nothing in this period', total: rows.length ? { label: tot.date, row: tot } : null, row: (r) => ` data-day="${r.date}" title="show ${fmtDate(r.date)}"` + (r.date === statsData.today ? ' class="today click"' : ' class="click"') });
+  el.innerHTML = sortableTable('daily', DAILY_COLS, rows, { sort: { key: 'date', dir: -1 }, tall: true, hl: metricCol, keep: ['date', 'total', 'sessions', 'commits'], empty: 'nothing in this period', total: rows.length ? { label: tot.date, row: tot } : null, row: (r) => ` data-day="${r.date}" title="show ${fmtDate(r.date)}"` + (r.date === statsData.today ? ' class="today click"' : ' class="click"') });
 }
 async function exportStatsCsv() {
   if (!statsData) return;

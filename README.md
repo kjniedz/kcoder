@@ -186,13 +186,24 @@ pane or a chat-view pane alike: the daemon's own pty through xterm.js, so
 there is no Terminal window to open; ✕ or `$` again closes it. Voice input is the microphone button and "voice input" in the
 palette.
 **On a phone** (under 640 px wide, or the window squeezed that far) the
-app runs one column: the sessions grid is a list of rows (name, repo and
-branch, status and age), a tap opens a session full screen at its newest
-message (and it stays there through the keyboard rising until you scroll up)
-with a ✕ in its title that closes it, its action buttons scroll sideways, the composer sits
-above the keyboard, the search field becomes a button that opens the palette,
+app runs one column: the sessions grid is a list of cards (the name, the
+session's title on up to two lines, repo and branch, status and age), each
+sized to its text however many sessions are open; a tap opens a session full
+screen at its newest message (and it stays there through the keyboard rising
+until you scroll up) with three controls at the right of its title: ⛶ hides
+kcoder's header and status bar so the chat has the whole screen (tap again,
+or close the session, to get them back), ⋯ opens a menu with everything the
+pane's action row offers on the Mac (interrupt, a follow-up task, trust, the
+view: chat, terminal, shell or preview, git status, pull, the worktree's
+review, merge, PR and discard, preview, the instructions file, export,
+archive), and ✕ in the corner closes it; the composer sits above the
+keyboard, the status bar fits the active, token and commit counts beside the
+plan button, the search field becomes a button that opens the palette,
 dialogs run edge to edge, the sidebar and the 2 and 3 pane layouts fold
-away, and stats, the inbox, the mine and the games go single column. Add
+away, and stats, the inbox, the mine and the games go single column; the
+stats tables keep their name and token columns (the rest come back on a
+wider screen) and the commits list is a card per commit with its subject on
+two lines (tap for all of it). Add
 the page to the Home Screen and it opens like an app; through the relay
 the pairing rides in the page's URL, so add it from the page the QR code
 opened (a Home Screen app on the iPhone keeps its own storage, apart from

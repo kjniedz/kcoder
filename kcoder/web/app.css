@@ -1025,7 +1025,7 @@ html[data-style="montserrat"] .dialog .body { line-height: 1.5; }
 
 /* ---- the phone layout (html[data-phone], under 640 px): one column, one session at a time, big enough to tap ---- */
 .phone-only { display: none; }
-.pane-title .back { display: none; }
+.pane-title .back, .pane-title .full, .pane-title .more { display: none; }
 html[data-phone] { height: 100%; }
 html[data-phone] body { height: 100dvh; font-size: 13.5px; }
 html[data-phone] #header { gap: 6px; padding: 4px 8px; padding-top: calc(4px + env(safe-area-inset-top)); min-height: 44px; }
@@ -1063,24 +1063,45 @@ html[data-phone] .chat-log, html[data-phone] .cpane .chat-log { padding: 8px 10p
 html[data-phone] .overlay { padding: 0; align-items: stretch; }
 html[data-phone] .dialog { width: 100vw; max-width: none; max-height: none; height: 100%; border-radius: 0; border: none; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
 html[data-phone] .dialog h2 { position: sticky; top: 0; z-index: 2; }
-html[data-phone] .statusbar { overflow-x: auto; padding-bottom: env(safe-area-inset-bottom); min-height: 26px; }
+html[data-phone] .statusbar { overflow: hidden; gap: 0; padding: 0 6px env(safe-area-inset-bottom); min-height: 26px; }
+html[data-phone] .statusbar .status-items { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+html[data-phone] .statusbar .spacer { flex: 0 0 4px; }
+html[data-phone] .statusbar .status-item { padding: 1px 4px; }
+html[data-phone] .statusbar .sep { padding: 0; }
+html[data-phone] .statusbar .ph-x { display: none; }
+html[data-phone] #btn-claude { flex: 0 0 auto; }
 html[data-phone] .statusbar .status-item.quota .dim, html[data-phone] .statusbar .status-item.quota .hit, html[data-phone] .statusbar .status-item.quota .shift, html[data-phone] #status-pet { display: none; }
 html[data-phone] .toasts { left: 12px; right: 12px; bottom: calc(30px + env(safe-area-inset-bottom)); }
 html[data-phone] .toast { width: auto; max-width: none; }
 html[data-phone] .fun-tabs { overflow-x: auto; white-space: nowrap; }
 html[data-phone] .stats-body, html[data-phone] .fun-body { padding: 8px; }
 html[data-phone] .summary { grid-template-columns: 1fr 1fr; }
+html[data-phone] .card .delta { white-space: normal; }
+html[data-phone] .card .big { font-size: 19px; }
+html[data-phone] table.grid .sec { display: none; }
+html[data-phone] table.grid th, html[data-phone] table.grid td { padding: 3px 6px; }
+html[data-phone] table.grid td.l { white-space: normal; word-break: break-word; }
+.commit-list { display: flex; flex-direction: column; gap: 6px; }
+.commit-list .ci { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; min-width: 0; }
+.commit-list .ci .s { font-size: 12.5px; color: var(--fg); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+.commit-list .ci.open .s { display: block; }
+.commit-list .ci .m { font-size: 11px; color: var(--fg-dim); margin-top: 3px; white-space: normal; word-break: break-word; }
+.commit-list .ci .m a { color: var(--accent-text); }
 html[data-phone] .mine-grid { grid-template-columns: 1fr; }
 html[data-phone] .mine-ledger { grid-template-columns: 1fr 1fr; }
 html[data-phone] .help-grid.keys { display: none; }
 html[data-phone] .wall-empty p:last-child kbd { display: none; }
 /* the sessions list on the phone: one row per session (name, repo, status), the chat behind a tap */
-html[data-phone] .wall:not(.focus) { grid-auto-rows: auto; gap: 8px; padding: 8px; align-content: start; }
+html[data-phone] .wall:not(.focus) { grid-auto-rows: max-content; gap: 8px; padding: 8px; align-content: start; }
 html[data-phone] .wall:not(.focus) .pane { min-height: 0; border-radius: 12px; }
 html[data-phone] .wall:not(.focus) .pane .pane-body, html[data-phone] .wall:not(.focus) .pane .shell-drawer { display: none !important; }
-html[data-phone] .wall:not(.focus) .pane-title { flex-wrap: wrap; row-gap: 2px; padding: 10px 34px 4px 12px; font-size: 12px; background: transparent; border-bottom: none; white-space: normal; position: relative; min-height: 0; }
+html[data-phone] .wall:not(.focus) .pane-title { flex-wrap: wrap; row-gap: 2px; padding: 10px 34px 4px 12px; font-size: 12px; background: transparent; border-bottom: none; white-space: normal; position: relative; min-height: 0; align-items: flex-start; }
+html[data-phone] .wall:not(.focus) .pane-title .dot { margin-top: 6px; }
 html[data-phone] .wall:not(.focus) .pane-title .num, html[data-phone] .wall:not(.focus) .pane-title .model, html[data-phone] .wall:not(.focus) .pane-title .view-toggle, html[data-phone] .wall:not(.focus) .pane-title .spacer { display: none; }
-html[data-phone] .wall:not(.focus) .pane-title .name { flex: 1 1 0; min-width: 0; font-size: 15px; white-space: nowrap; }
+html[data-phone] .wall:not(.focus) .pane-title .name { flex: 1 1 0; min-width: 0; font-size: 15px; white-space: normal; }
+html[data-phone] .wall:not(.focus) .pane-title .name .nm { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-phone] .wall:not(.focus) .pane-title .name .sep { display: none; }
+html[data-phone] .wall:not(.focus) .pane-title .name .tt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 400; font-size: 13px; line-height: 1.3; color: var(--fg-dim); margin-top: 1px; word-break: break-word; }
 html[data-phone] .wall:not(.focus) .pane-title .repo { flex: 1 0 100%; margin-left: 16px; white-space: nowrap; }
 html[data-phone] .wall:not(.focus) .pane-title .chips, html[data-phone] .wall:not(.focus) .pane-status .git-line { display: none; }
 html[data-phone] .wall:not(.focus) .pane-title::after { content: '›'; position: absolute; right: 14px; top: 6px; font-size: 24px; color: var(--fg-mute); line-height: 1; }
@@ -1089,6 +1110,13 @@ html[data-phone] .wall:not(.focus) .pane-status > span:nth-child(-n+3) { display
 /* the open chat: a ✕ at the right of its title closes it and returns to the list */
 html[data-phone] .wall.focus .pane.focused .back { order: 100; font-size: 0; padding: 0; margin-left: 4px; min-width: 32px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: var(--bg-2); }
 html[data-phone] .wall.focus .pane.focused .back::before { content: '✕'; font-size: 15px; color: var(--fg); }
+html[data-phone] .wall.focus .pane.focused .view-toggle { display: none; }
+html[data-phone] .wall.focus .pane.focused .full, html[data-phone] .wall.focus .pane.focused .more { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 30px; border-radius: 8px; background: var(--bg-2); color: var(--fg); font-size: 16px; line-height: 1; margin-left: 4px; }
+html[data-phone] .wall.focus .pane.focused .full { order: 98; font-size: 14px; }
+html[data-phone] .wall.focus .pane.focused .more { order: 99; }
+html[data-phone] .wall.focus .pane.focused .full.on { color: var(--accent-text); }
+html[data-phone] .wall.focus .pane.focused .pane-actions { display: none !important; }
+html[data-phone][data-phone-full] #header, html[data-phone][data-phone-full] #statusbar { display: none; }
 html[data-phone] .pane-actions { flex-wrap: nowrap; overflow-x: auto; }
 html[data-phone] .pane-actions button, html[data-phone] .pane-actions select { flex: 0 0 auto; white-space: nowrap; }
 html[data-phone] .wall.focus .pane.focused .pane-title .repo, html[data-phone] .wall.focus .pane.focused .pane-title .model { display: none; }
