@@ -1,6 +1,6 @@
 /* Mahjong solitaire on the fun tab. The board is a fixed-size field scaled to the pane; tiles are ivory with a dark
    side to the lower right, higher layers lifted a few px up and left so a stack reads. Free tiles are bright, blocked
-   ones sit back; the selected tile gets the accent, a hinted pair the yellow. Suit marks keep the classic colours. */
+   ones sit back; the selected tile gets the accent, a hinted pair the yellow, a wrong pick the red. Suit marks keep the classic colours. */
 .mj { max-width: 760px; margin: 0 auto; }
 .mj-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 10px; }
 .mj-title { font-size: 34px; font-weight: 800; line-height: 1; color: var(--accent-text); letter-spacing: -.02em; }
@@ -20,6 +20,8 @@
 .mj-tile:not(.free) { filter: brightness(.76) saturate(.7); cursor: default; }
 .mj-tile.free:hover { background: #FFFBEE; }
 .mj-tile.sel { background: #DCEEFF; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 2px 3px 0 #A3957C, 3px 4px 5px rgba(0, 0, 0, .35); }
+.mj-tile.bad { border-color: var(--red); box-shadow: 0 0 0 2px var(--red), 0 0 10px var(--red), 2px 3px 0 #A3957C; animation: mj-bad .4s ease-in-out; }   /* a wrong pick: the blocked tile, or both of a pair that does not match, shake red */
+@keyframes mj-bad { 0%, 100% { translate: 0 0; } 25% { translate: -3px 0; } 50% { translate: 3px 0; } 75% { translate: -2px 0; } }
 .mj-tile.hint { border-color: var(--yellow); box-shadow: 0 0 0 2px var(--yellow), 0 0 10px var(--yellow), 2px 3px 0 #A3957C; animation: mj-hint .45s ease-in-out 4 alternate; }
 @keyframes mj-hint { from { translate: 0 0; } to { translate: 0 -4px; } }
 .mj-tile.dot i { color: #1F5C9A; font-size: 10px; } .mj-tile.bam i { color: #2E7D32; } .mj-tile.chr i { color: #B3261E; } .mj-tile.wind i { color: #4B5A6B; }

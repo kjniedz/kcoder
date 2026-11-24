@@ -550,7 +550,9 @@ error details, and an "approve all" button answers every approval at once.
   turtle or the pyramid, fortress, bridge or arena; a smaller board has
   fewer kinds, each four deep, so matches come easier. Every deal is built
   in reverse removal order so it can always be cleared; the **daily deal**
-  is the same all day. H hints a pair, U undoes (free, but
+  is the same all day. A wrong pick flashes red: a blocked tile on its
+  own, or both tiles of a pair that does not match (the selection then
+  moves to the new tile). H hints a pair, U undoes (free, but
   noted), S shuffles the rest for a 60-second penalty, N deals again; a
   timer, tiles left and pairs free sit above the board, which scales to a
   phone. A cleared board on medium pays a sprint unit of stars into the

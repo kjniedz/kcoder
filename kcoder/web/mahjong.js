@@ -10,7 +10,7 @@
 // set); easy pays half a sprint unit, medium one, hard two.
 (() => {
 const KEY = 'kcoder.mahjong', TW = 36, TH = 48, OFF = 4, PAD = 10, PENALTY = 60000;
-let G = null, pane = null, sel = -1, hint = null, hintTimer = 0, last = Date.now(), savedAt = 0;
+let G = null, pane = null, sel = -1, hint = null, hintTimer = 0, bad = [], badTimer = 0, last = Date.now(), savedAt = 0;   // bad: the tiles flashing red after a wrong pick
 // ---- difficulties and layouts: positions in half-tile units [x, y, z] like the classic layout files, a tile covers 2 by 2; a layout holds its difficulty's tile count ----
 const DIFFS = [{ id: 'easy', name: 'easy', size: 72, pay: 0.5 }, { id: 'medium', name: 'medium', size: 108, pay: 1 }, { id: 'hard', name: 'hard', size: 144, pay: 2 }];
 const rect = (x, y, w, h, z) => { const out = []; for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) out.push([x + 2 * c, y + 2 * r, z]); return out; };
@@ -89,9 +89,12 @@ const pairsFree = (g, p) => groups(g, freeList(g, p)).reduce((n, x) => n + Math.
 const fmtTime = (ms) => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; return `${h ? `${h}:${String(m).padStart(2, '0')}` : String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 const plural = (n, w) => `${fmtInt(n)} ${w}${n === 1 ? '' : 's'}`;
 // ---- play ----
+// a wrong pick flashes red: a blocked tile on its own, a free tile that does not match the one selected together with it
+// (the selection then moves to the new tile, so the next click can pair it); the flash clears itself after 450 ms
+function flash(ids) { bad = ids; clearTimeout(badTimer); badTimer = setTimeout(() => { bad = []; render(); }, 450); }
 function tap(i) {
-  const g = load(); if (g.won) return; const p = alive(g); if (!p[i]) return; const fr = new Set(freeList(g, p)); if (!fr.has(i)) return;   // a blocked tile does nothing
-  if (sel === i) sel = -1; else if (sel >= 0 && p[sel] && fr.has(sel) && match(g.kinds[sel]) === match(g.kinds[i])) { take(g, sel, i); return; } else sel = i;
+  const g = load(); if (g.won) return; const p = alive(g); if (!p[i]) return; const fr = new Set(freeList(g, p)); if (!fr.has(i)) { flash([i]); render(); return; }   // a blocked tile: a red flash, nothing else
+  if (sel === i) sel = -1; else if (sel >= 0 && p[sel] && fr.has(sel) && match(g.kinds[sel]) === match(g.kinds[i])) { take(g, sel, i); return; } else { if (sel >= 0 && p[sel]) flash([sel, i]); else bad = []; sel = i; }
   render();
 }
 function take(g, a, b) {
@@ -113,7 +116,7 @@ function finish(g) {   // the board is clear: the career, the best time for the 
   }
   mineSave(); mineCheck(mineLoad());
 }
-function undo() { const g = load(); if (g.won || !g.gone.length) return; g.gone.pop(); g.undos += 1; g.seen = false; sel = -1; hint = null; save(); render(); }
+function undo() { const g = load(); if (g.won || !g.gone.length) return; g.gone.pop(); g.undos += 1; g.seen = false; sel = -1; hint = null; bad = []; save(); render(); }
 function showHint() {
   const g = load(); if (g.won) return; const gs = groups(g, freeList(g, alive(g))); if (!gs.length) return;
   const grp = gs[Math.floor(Math.random() * gs.length)]; hint = [grp[0], grp[1]]; g.hints += 1; save(); render();
@@ -147,7 +150,10 @@ function render() {
   if (!pane) return; const g = load(), L = layoutOf(g), geo = geom(L), p = alive(g), fr = freeList(g, p), frS = new Set(fr), c = career(), today = mineDay();
   const left = p.filter(Boolean).length, pairs = groups(g, fr).reduce((n, x) => n + Math.floor(x.length / 2), 0), best = c.bestTime[L.id] || 0, D = diffOf(L);
   const q = (k) => pane.querySelector(`[data-mj="${k}"]`), set = (k, v) => { const el = q(k); if (el && el.textContent !== String(v)) el.textContent = v; };
-  q('board').innerHTML = g.kinds.map((k, i) => (p[i] ? tileHtml(L, geo, i, k, `${frS.has(i) ? ' free' : ''}${sel === i ? ' sel' : ''}${hint && hint.includes(i) ? ' hint' : ''}`) : '')).join('');
+  // the board is rebuilt only when it would differ: render runs on every daemon message while the fun tab is up (renderAll),
+  // and a tile replaced between mousedown and mouseup never gets its click, so with sessions streaming no pair could be picked
+  const bd = q('board'), key = `${L.id}|${g.seed}|${g.shuffles}|${g.gone.length}|${sel}|${hint ? hint.join(',') : ''}|${bad.join(',')}`;
+  if (bd.dataset.key !== key) { bd.dataset.key = key; bd.innerHTML = g.kinds.map((k, i) => (p[i] ? tileHtml(L, geo, i, k, `${frS.has(i) ? ' free' : ''}${sel === i ? ' sel' : ''}${hint && hint.includes(i) ? ' hint' : ''}${bad.includes(i) ? ' bad' : ''}`) : '')).join(''); }
   set('time', fmtTime(g.time)); set('left', fmtInt(left)); set('pairs', fmtInt(pairs));
   for (const b of pane.querySelectorAll('[data-mj^="diff:"]')) b.classList.toggle('active', b.dataset.mj === `diff:${D.id}`);
   const ls = q('layout'); if (ls.dataset.diff !== D.id) { ls.dataset.diff = D.id; ls.innerHTML = layoutsOf(D).map((l) => `<option value="${l.id}">${esc(l.name)} · ${l.slots.length}</option>`).join(''); }
@@ -189,7 +195,7 @@ setInterval(() => {   // the clock runs while the game is on screen with tiles l
 }, 1000);
 window.addEventListener('resize', () => { if (state.view === 'fun' && funTab() === 'mahjong') fit(); });
 window.addEventListener('pagehide', () => { if (G) save(); });
-funRegister({ id: 'mahjong', name: 'mahjong', hint: 'click two matching free tiles · H hint · U undo · S shuffle (+60 s) · N new deal', render: (el) => { if (!el.querySelector('.mj')) buildPane(el); else pane = el; render(); } });
+funRegister({ id: 'mahjong', name: 'mahjong', hint: 'click two matching free tiles (a wrong pick flashes red) · H hint · U undo · S shuffle (+60 s) · N new deal', render: (el) => { if (!el.querySelector('.mj')) buildPane(el); else pane = el; render(); } });
 window.__mahjong = {   // test hooks: the game, a deal by seed, a solvability trial that replays the builder's order, and a solver that clears the board the way it was built
   game: () => load(), layouts: LAYOUTS.map((l) => ({ id: l.id, n: l.slots.length, size: l.size })), diffs: DIFFS, render,
   deal(layoutId, seed) { G = deal(layoutId, seed, ''); sel = -1; hint = null; save(); render(); return G; },
