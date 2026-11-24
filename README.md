@@ -389,7 +389,8 @@ background and the accent (six swatches each per theme, or any colour;
 surfaces, lines, code blocks and the banner gradient follow), the density
 (comfortable or compact), the text font and size, and the conditions
 accent with its live readings. All of the look is per browser. The day
-(weekday and date) sits at the right of the status bar.
+(weekday and date) sits at the right of the status bar; click it for the
+moon calendar.
 
 **The inbox.** Everything waiting on you is one list: approvals, questions,
 changes to review, errors. "Next item waiting on you" in the palette shows
@@ -503,7 +504,11 @@ error details, and an "approve all" button answers every approval at once.
   Milestones come in families that always have a next chip (every
   thousandfold of tokens mined, releases, commits, turns, clicks, stars,
   sprints, streaks, perfect days, weeks, listings, shares, trades, the
-  share price since listing, the market cap and agents). The mine can be
+  share price since listing, the market cap and agents). Click a milestone
+  chip for its popup: what it takes to unlock, a progress bar with the
+  count so far against the target (340 of 1,000 clicks, 45 of 100
+  sprints, 17 of 17 kinds of agent), what it pays once earned, and the
+  next one in its family. The mine can be
   beaten: seventeen agents and fifteen upgrades, and hiring every agent
   with every upgrade bought earns the "beat the mine" milestone (the total
   family still runs on past a vigintillion by powers of ten). Every count
@@ -587,7 +592,9 @@ error details, and an "approve all" button answers every approval at once.
   precipitation and the high and low; the bitcoin item the price, the 24 h
   move and the week's daily closes; the moon item tonight's phase, the next
   new moon, quarters and full moon, and a month calendar with a glyph per
-  night (‹ › move months). Customize is a button at the foot of each. The daemon reads Open-Meteo and CoinGecko (Binance
+  night (‹ › move months); click any night for its phase, how lit it is,
+  how far into the cycle it sits and the next full or new moon from there
+  (the status bar's date opens the same calendar). Customize is a button at the foot of each. The daemon reads Open-Meteo and CoinGecko (Binance
   as the fallback; all free, no keys) every 30 minutes, through certifi's
   certificate bundle and, if that is refused, the system's own trust store
   through curl, so a Mac whose python.org Python has no certificates (the

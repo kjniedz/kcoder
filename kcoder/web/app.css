@@ -1155,3 +1155,15 @@ html[data-phone] .wall.focus .pane.focused .pane-title .name { flex: 1 1 0; min-
 .mooncal .c.today { border-color: var(--accent); color: var(--fg); }
 .mooncal .c.full { background: var(--bg-3); } .mooncal .c.new { background: var(--bg); }
 @media (max-width: 640px) { .cond-days .d { grid-template-columns: 82px 1fr 44px 46px 66px; gap: 6px; font-size: 11px; } .cond-days .d .pl { display: none; } }
+/* the moon calendar's nights are buttons: click one for its phase; the chosen night is outlined */
+.mooncal .c { background: none; font: inherit; cursor: pointer; } .mooncal .c.pad { cursor: default; pointer-events: none; }
+.mooncal .c:hover { border-color: var(--fg-dim); color: var(--fg); } .mooncal .c.sel { outline: 1px solid var(--yellow); outline-offset: -1px; }
+.moon-night { border-top: 1px solid var(--line); padding-top: 8px; } .moon-night .big { margin-top: 2px; font-size: 16px; }
+/* a milestone's popup: the bar fills as the mine closes in, green once earned */
+.mine-prog { height: 10px; border-radius: 5px; background: var(--bg-3); border: 1px solid var(--line-2); overflow: hidden; }
+.mine-prog i { display: block; height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s ease; } .mine-prog.done i { background: var(--green); }
+.mine-prog-n { display: flex; font-size: 12px; color: var(--fg-dim); } .mine-prog-n b { color: var(--fg); } .mine-ach-dlg .big .on { color: var(--green); font-size: 12px; }
+.mine-ach-dlg p.plain { margin: 0; font-size: 13px; color: var(--fg); line-height: 1.5; }
+.mine-prog-n .spacer { flex: 1; }
+/* on the phone the day rows (snow, bitcoin, the moon's coming-up list) fit the date instead of a fixed 110 px, so a time does not run into the next column */
+html[data-phone] .cond-days .d { grid-template-columns: max-content 1fr auto auto auto; gap: 6px; font-size: 11px; }

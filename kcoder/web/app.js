@@ -115,7 +115,7 @@ function applyLook() {
   for (const sh of state.shells.values()) { try { sh.term.options.theme = xtermTheme(); } catch {} }
 }
 function setLook(k, v) { if (v) localStorage.setItem('kcoder.' + k, v); else localStorage.removeItem('kcoder.' + k); applyLook(); }
-function renderDay() { const el = $('#status-day'); if (!el) return; const d = new Date(); el.textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); el.title = d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); }
+function renderDay() { const el = $('#status-day'); if (!el) return; const d = new Date(); el.textContent = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); el.title = `${d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} · click for the moon calendar`; }
 setInterval(renderDay, 60 * 1000);
 // ---- density: comfortable (default) or compact ----
 function densityChoice() { return localStorage.getItem('kcoder.density') || 'comfortable'; }
@@ -1917,10 +1917,20 @@ function btcDialog() {
   </div>${condFoot(b, 'CoinGecko, Binance as the fallback')}`, 'btc');
   condWire(d);
 }
-// the moon: tonight's phase, the next four phases, and a month calendar with a glyph per night (‹ › move months)
+// the moon: tonight's phase, the next four phases, and a month calendar with a glyph per night (‹ › move months);
+// click a night for its phase, how lit it is and the next full or new moon from there. The status bar's date opens it too.
 function moonDialog() {
-  const now = Date.now() / 1000; let view = new Date(); view.setDate(1);
+  const now = Date.now() / 1000; let view = new Date(); view.setDate(1); const t0 = new Date(); let sel = `${t0.getFullYear()}-${t0.getMonth()}-${t0.getDate()}`;   // the chosen night, today to start
   const nextOf = (k) => now + ((k - moonPhase(now) + 1) % 1) * SYNODIC * 86400;
+  // the chosen night: its phase at 9 pm, how lit, where in the cycle, and the next full or new moon from there
+  const night = () => {
+    const [y, m, day] = sel.split('-').map(Number); const at = new Date(y, m, day, 21); const ts = at.getTime() / 1000; const ph = moonPhase(ts);
+    const toFull = ((0.5 - ph + 1) % 1) * SYNODIC, toNew = ((1 - ph) % 1) * SYNODIC; const days = Math.abs(ts - now) / 86400; const sameDay = sel === `${t0.getFullYear()}-${t0.getMonth()}-${t0.getDate()}`;
+    const when = sameDay ? 'tonight' : `${at.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: at.getFullYear() === t0.getFullYear() ? undefined : 'numeric' })} · ${ts > now ? `in ${Math.round(days)} day${Math.round(days) === 1 ? '' : 's'}` : `${Math.round(days)} day${Math.round(days) === 1 ? '' : 's'} ago`}`;
+    const dnum = (x) => `${Math.round(x)} day${Math.round(x) === 1 ? '' : 's'}`;
+    const ahead = toFull < 0.75 ? 'the full moon that night' : toNew < 0.75 ? 'the new moon that night' : toFull < toNew ? `the full moon in ${dnum(toFull)}` : `the new moon in ${dnum(toNew)}`;
+    return `<div class="moon-night"><span class="help plain">${esc(when)}</span><div class="big">${moonGlyph(ph)} ${esc(moonName(ph))} <span class="help plain">${Math.round(moonIllum(ph) * 100)}% lit · ${(ph * SYNODIC).toFixed(1)} days into the cycle · ${ahead}</span></div></div>`;
+  };
   const events = [[0, 'new moon'], [0.25, 'first quarter'], [0.5, 'full moon'], [0.75, 'last quarter']].map(([k, n]) => [nextOf(k), n]).sort((a, b) => a[0] - b[0]);
   const cal = () => {
     const y = view.getFullYear(), m = view.getMonth(); const first = new Date(y, m, 1).getDay(); const n = new Date(y, m + 1, 0).getDate(); const today = new Date();
@@ -1929,7 +1939,7 @@ function moonDialog() {
       const ts = new Date(y, m, day, 21).getTime() / 1000; const ph = moonPhase(ts); const idx = Math.round(ph * 8) % 8;   // the phase at 9 pm that night
       const full = Math.abs(ph - 0.5) * SYNODIC <= 0.5, newm = Math.min(ph, 1 - ph) * SYNODIC <= 0.5;
       const isToday = today.getFullYear() === y && today.getMonth() === m && today.getDate() === day;
-      cells.push(`<span class="c${isToday ? ' today' : ''}${full ? ' full' : newm ? ' new' : ''}" title="${esc(MOON_NAMES[idx])}, ${Math.round(moonIllum(ph) * 100)}% lit">${day}<b>${MOON_GLYPHS[idx]}</b></span>`);
+      const key = `${y}-${m}-${day}`; cells.push(`<button class="c${isToday ? ' today' : ''}${key === sel ? ' sel' : ''}${full ? ' full' : newm ? ' new' : ''}" data-day="${key}" title="${esc(MOON_NAMES[idx])}, ${Math.round(moonIllum(ph) * 100)}% lit · click for the night">${day}<b>${MOON_GLYPHS[idx]}</b></button>`);
     }
     return `<div class="mooncal-h"><button data-x="prev" title="the month before">‹</button><span>${view.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</span><button data-x="next" title="the month after">›</button></div><div class="mooncal"><span class="w">S</span><span class="w">M</span><span class="w">T</span><span class="w">W</span><span class="w">T</span><span class="w">F</span><span class="w">S</span>${cells.join('')}</div>`;
   };
@@ -1939,10 +1949,11 @@ function moonDialog() {
     <div class="label-h">coming up</div>
     <div class="cond-days">${events.map(([t, n]) => `<div class="d"><span class="date">${esc(condWhen(t))}</span><span class="num">${MOON_GLYPHS[MOON_NAMES.indexOf(n)]} ${esc(n)}</span><span class="num dim">in ${Math.round((t - now) / 86400) || 'under a'} day${Math.round((t - now) / 86400) === 1 ? '' : 's'}</span></div>`).join('')}</div>
     <div id="mooncal">${cal()}</div>
+    <div id="moon-night">${night()}</div>
     <p class="help plain">Phases by arithmetic from a known new moon (a mean cycle; real phases land within a few hours). On full-moon nights dark mode gets a small moon over the ridgeline and cooler tones, and a session that night earns a hidden badge.</p>
   </div>${condFoot({ at: now }, 'arithmetic, no source')}`, 'moon');
   condWire(d);
-  d.addEventListener('click', (e) => { const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'prev' || b.dataset.x === 'next') { view.setMonth(view.getMonth() + (b.dataset.x === 'next' ? 1 : -1)); $('#mooncal', d).innerHTML = cal(); } });
+  d.addEventListener('click', (e) => { const c = e.target.closest('[data-day]'); if (c) { sel = c.dataset.day; $$('.mooncal .c.sel', d).forEach((x) => x.classList.remove('sel')); c.classList.add('sel'); $('#moon-night', d).innerHTML = night(); return; } const b = e.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'prev' || b.dataset.x === 'next') { view.setMonth(view.getMonth() + (b.dataset.x === 'next' ? 1 : -1)); $('#mooncal', d).innerHTML = cal(); } });
 }
 setInterval(renderConditions, 5 * 60 * 1000);   // staleness, nightfall and the hour move on their own
 matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', renderConditions);
@@ -3104,6 +3115,7 @@ $('#btn-new').addEventListener('click', () => openNewSession());
 $('#btn-search').addEventListener('click', () => openPalette());
 $('#status-items').addEventListener('click', (e) => { if (e.target.closest('[data-phone]')) phoneDialog(); });
 $('#status-cond').addEventListener('click', (e) => { const b = e.target.closest('[data-cond]'); if (b) condDialog(b.dataset.cond); });
+$('#status-day').addEventListener('click', () => moonDialog());   // the date opens the moon calendar, whatever the conditions settings
 $('#brand').addEventListener('click', () => aboutDialog());
 // the search field is the command palette's front door: focusing it opens the palette with whatever was typed
 $('#omni').addEventListener('focus', () => { const o = $('#omni'); const q = o.value; o.value = ''; o.blur(); if (!state.dialog) openPalette(q); });
@@ -3992,92 +4004,117 @@ const MINE_SURPRISES = [
   { id: 'stash', name: 'the intern found a stash', weight: 10, kind: 'clicks', mult: 50, sec: 13 },
 ];
 const mineAgents = (g) => Object.values(g.units).reduce((s, n) => s + (Number(n) || 0), 0);
+// every milestone knows how far along it is: ms() builds one from a counter and a target (the target may
+// depend on the mine, as "one of every agent" does), test is counter >= target and prog is [counter, target]
+// for the popup's bar; flag() is a yes-or-no milestone, whose bar is empty or full
+const ms = (id, name, desc, have, need, extra) => { const nd = typeof need === 'function' ? need : () => need; return { id, name, desc, test: (g) => have(g) >= nd(g), prog: (g) => [have(g), nd(g)], ...(extra || {}) }; };
+const flag = (id, name, desc, test, extra) => ms(id, name, desc, (g) => (test(g) ? 1 : 0), 1, { flag: true, ...(extra || {}) });
+const mineUnitsOwned = (g, ids) => ids.filter((id) => (g.units[id] || 0) >= 1).length;
 const MINE_MILESTONES = [
-  { id: 'click1', name: 'first click', desc: 'click the banner once', test: (g) => g.clicks >= 1 },
-  { id: 'click100', name: 'warm keyboard', desc: '100 clicks', test: (g) => g.clicks >= 100 },
-  { id: 'click1k', name: 'carpal tunnel', desc: '1,000 clicks', test: (g) => g.clicks >= 1000 },
-  { id: 'click10k', name: 'macro pad, surely', desc: '10,000 clicks', test: (g) => g.clicks >= 10000 },
-  { id: 'combo', name: 'on a roll', desc: 'a ×3 click combo (40 fast clicks in a row)', test: (g) => g.bestCombo >= 3 },
-  { id: 'combo5', name: 'unstoppable', desc: 'a ×5 click combo (80 fast clicks in a row)', test: (g) => g.bestCombo >= 5 },
-  { id: 'hire1', name: 'first hire', desc: 'hire a Haiku intern', test: (g) => (g.units.intern || 0) >= 1 },
-  { id: 'agents10', name: 'a team', desc: 'ten agents at once', test: (g) => mineAgents(g) >= 10 },
-  { id: 'agents100', name: 'an org chart', desc: 'a hundred agents at once', test: (g) => mineAgents(g) >= 100 },
-  { id: 'agents500', name: 'a campus', desc: 'five hundred agents at once', test: (g) => mineAgents(g) >= 500 },
-  { id: 'oneofeach', name: 'the full stack', desc: 'one of every agent', test: (g) => mineUnitsOpen(g).every((u) => g.units[u.id]) },
-  { id: 'fleet', name: 'admiral', desc: 'buy the fleet', test: (g) => (g.units.fleet || 0) >= 1 },
-  { id: 'allups', name: 'maxed out', desc: 'all fifteen upgrades bought', test: (g) => MINE_UPGRADES.every((up) => g.ups.includes(up.id)) },
-  { id: 'won', name: 'beat the mine', desc: 'every one of the seventeen agents hired and all fifteen upgrades bought', test: (g) => mineWon(g) },
-  { id: 'total1k', name: 'a thousand', desc: '1,000 tokens mined all time', test: (g) => g.total >= 1e3 },
-  { id: 'total1m', name: 'a million', desc: '1,000,000 tokens mined all time', test: (g) => g.total >= 1e6 },
-  { id: 'total1b', name: 'a billion', desc: '1,000,000,000 tokens mined all time', test: (g) => g.total >= 1e9 },
-  { id: 'total1t', name: 'a trillion', desc: '1,000,000,000,000 tokens mined all time', test: (g) => g.total >= 1e12 },
-  { id: 'real1', name: 'honest work', desc: 'a real turn pays in', test: (g) => g.real.turns >= 1 },
-  { id: 'real100', name: 'a hundred turns', desc: '100 real turns paid in', test: (g) => g.real.turns >= 100 },
-  { id: 'real500', name: 'five hundred turns', desc: '500 real turns paid in', test: (g) => g.real.turns >= 500 },
-  { id: 'commit1', name: 'shipped', desc: 'a real commit pays in', test: (g) => g.real.commits >= 1 },
-  { id: 'commit50', name: 'fifty commits', desc: '50 real commits paid in', test: (g) => g.real.commits >= 50 },
-  { id: 'gold1', name: 'quick hands', desc: 'catch a surprise', test: (g) => g.caught >= 1 },
-  { id: 'gold25', name: 'lucky streak', desc: 'catch 25 surprises', test: (g) => g.caught >= 25 },
-  { id: 'night', name: 'night shift', desc: 'click between 2 and 5 AM', test: (g) => !!g.night },
-  { id: 'away', name: 'well rested', desc: 'come back after the away cap (eight hours to start)', test: (g) => !!g.capped },
-  { id: 'release1', name: 'v1.0', desc: 'cut a release', test: (g) => g.releases >= 1 },
-  { id: 'release5', name: 'semver veteran', desc: 'cut five releases', test: (g) => g.releases >= 5 },
-  { id: 'stars10', name: 'trending', desc: 'ten stars earned', test: (g) => g.starsEver >= 10 },
-  { id: 'spend1', name: 'patron', desc: 'spend a star in the star shop', test: (g) => g.spent >= 1 },
-  { id: 'spend10', name: 'a regular', desc: 'spend ten stars in the star shop', test: (g) => g.spent >= 10 },
-  { id: 'daemon1', name: 'self-hosted', desc: 'hire the daemon', test: (g) => (g.units.daemon || 0) >= 1 },
-  { id: 'mythos1', name: 'approved organisation', desc: 'hire Mythos', test: (g) => (g.units.mythos || 0) >= 1 },
-  { id: 'agents1k', name: 'a city', desc: 'a thousand agents at once', test: (g) => mineAgents(g) >= 1000 },
-  { id: 'total1q', name: 'a quadrillion', desc: '1,000,000,000,000,000 tokens mined all time', test: (g) => g.total >= 1e15 },
-  { id: 'total1qi', name: 'a quintillion', desc: '1,000,000,000,000,000,000 tokens mined all time', test: (g) => g.total >= 1e18 },
-  { id: 'stars100', name: 'a hundred stars', desc: 'a hundred stars earned', test: (g) => g.starsEver >= 100 },
-  { id: 'stars1k', name: 'a thousand stars', desc: 'a thousand stars earned', test: (g) => g.starsEver >= 1000 },
-  { id: 'ups5', name: 'kitted out', desc: 'five upgrades bought', test: (g) => g.ups.length >= 5 },
-  { id: 'tier1k', name: 'thousand-fold', desc: 'buy a thousand hands', test: (g) => g.ups.includes('hands') },
-  { id: 'factory1', name: 'lights out', desc: 'hire the software factory', test: (g) => (g.units.factory || 0) >= 1 },
-  { id: 'founder1', name: 'founder mode', desc: 'hire the founder', test: (g) => (g.units.founder || 0) >= 1 },
-  { id: 'sprint1', name: 'sprinter', desc: 'finish a sprint', test: (g) => g.sprintsDone >= 1 },
-  { id: 'sprint3', name: 'a clean sprint', desc: 'finish all three sprints in a day', test: (g) => g.sprintDays >= 1 },
-  { id: 'streak7', name: 'a week of sprints', desc: 'all three sprints done seven days in a row', test: (g) => g.streak >= 7 },
-  { id: 'board1', name: 'the quorum', desc: 'hire the board', test: (g) => (g.units.board || 0) >= 1 },
-  { id: 'acquirer1', name: 'acquired', desc: 'hire the acquirer', test: (g) => (g.units.acquirer || 0) >= 1 },
-  { id: 'regulator1', name: 'compliant', desc: 'hire the regulator', test: (g) => (g.units.regulator || 0) >= 1 },
-  { id: 'agi1', name: 'the takeoff', desc: 'hire the AGI', test: (g) => (g.units.agi || 0) >= 1 },
-  { id: 'fork1', name: 'upstream', desc: 'hire the open-source fork', test: (g) => (g.units.fork || 0) >= 1 },
-  { id: 'vp10', name: 'a management layer', desc: 'ten VPs of engineering', test: (g) => mineLevel(g, 'vp') >= 10 },
-  { id: 'round1', name: 'series A', desc: 'raise a funding round', test: (g) => mineLevel(g, 'round') >= 1 },
-  { id: 'bounty1', name: 'bought out', desc: 'buy a sprint out with a bounty', test: (g) => mineLevel(g, 'bounty') >= 1 },
-  { id: 'fast1', name: 'speedrun', desc: 'cut a release inside the day\'s speed sprint', test: (g) => g.fastRel >= 1 },
-  { id: 'fast30', name: 'the thirty-minute release', desc: 'a release cut within thirty minutes of the last', test: (g) => g.bestRel > 0 && g.bestRel <= 1800 },
-  { id: 'hard1', name: 'the hard way', desc: 'finish a hard sprint', test: (g) => g.hardDone >= 1 },
-  { id: 'week1', name: 'a long week', desc: 'finish a weekly sprint', test: (g) => g.weeksDone >= 1 },
-  { id: 'dip', name: 'bought the dip', desc: 'buy shares while the price sits 5% or more under fair value', test: (g) => g.dipBuys >= 1 },
-  { id: 'cashout', name: 'took profits', desc: 'sell shares for more stars than they cost', test: (g) => g.gains >= 1 },
+  ms('click1', 'first click', 'click the banner once', (g) => g.clicks, 1),
+  ms('click100', 'warm keyboard', '100 clicks', (g) => g.clicks, 100),
+  ms('click1k', 'carpal tunnel', '1,000 clicks', (g) => g.clicks, 1000),
+  ms('click10k', 'macro pad, surely', '10,000 clicks', (g) => g.clicks, 10000),
+  ms('combo', 'on a roll', 'a ×3 click combo (40 fast clicks in a row)', (g) => g.bestCombo, 3, { unit: '× best combo' }),
+  ms('combo5', 'unstoppable', 'a ×5 click combo (80 fast clicks in a row)', (g) => g.bestCombo, 5, { unit: '× best combo' }),
+  ms('hire1', 'first hire', 'hire a Haiku intern', (g) => g.units.intern || 0, 1),
+  ms('agents10', 'a team', 'ten agents at once', mineAgents, 10),
+  ms('agents100', 'an org chart', 'a hundred agents at once', mineAgents, 100),
+  ms('agents500', 'a campus', 'five hundred agents at once', mineAgents, 500),
+  ms('oneofeach', 'the full stack', 'one of every agent', (g) => mineUnitsOwned(g, mineUnitsOpen(g).map((u) => u.id)), (g) => mineUnitsOpen(g).length, { unit: 'kinds of agent hired' }),
+  ms('fleet', 'admiral', 'buy the fleet', (g) => g.units.fleet || 0, 1),
+  ms('allups', 'maxed out', 'all fifteen upgrades bought', (g) => MINE_UPGRADES.filter((up) => g.ups.includes(up.id)).length, () => MINE_UPGRADES.length, { unit: 'upgrades' }),
+  ms('won', 'beat the mine', 'every one of the seventeen agents hired and all fifteen upgrades bought', (g) => mineUnitsOwned(g, MINE_UNITS.map((u) => u.id)) + MINE_UPGRADES.filter((up) => g.ups.includes(up.id)).length, () => MINE_UNITS.length + MINE_UPGRADES.length, { unit: 'agents and upgrades' }),
+  ms('total1k', 'a thousand', '1,000 tokens mined all time', (g) => g.total, 1e3),
+  ms('total1m', 'a million', '1,000,000 tokens mined all time', (g) => g.total, 1e6),
+  ms('total1b', 'a billion', '1,000,000,000 tokens mined all time', (g) => g.total, 1e9),
+  ms('total1t', 'a trillion', '1,000,000,000,000 tokens mined all time', (g) => g.total, 1e12),
+  ms('real1', 'honest work', 'a real turn pays in', (g) => g.real.turns, 1),
+  ms('real100', 'a hundred turns', '100 real turns paid in', (g) => g.real.turns, 100),
+  ms('real500', 'five hundred turns', '500 real turns paid in', (g) => g.real.turns, 500),
+  ms('commit1', 'shipped', 'a real commit pays in', (g) => g.real.commits, 1),
+  ms('commit50', 'fifty commits', '50 real commits paid in', (g) => g.real.commits, 50),
+  ms('gold1', 'quick hands', 'catch a surprise', (g) => g.caught, 1),
+  ms('gold25', 'lucky streak', 'catch 25 surprises', (g) => g.caught, 25),
+  flag('night', 'night shift', 'click between 2 and 5 AM', (g) => !!g.night),
+  flag('away', 'well rested', 'come back after the away cap (eight hours to start)', (g) => !!g.capped),
+  ms('release1', 'v1.0', 'cut a release', (g) => g.releases, 1),
+  ms('release5', 'semver veteran', 'cut five releases', (g) => g.releases, 5),
+  ms('stars10', 'trending', 'ten stars earned', (g) => g.starsEver, 10),
+  ms('spend1', 'patron', 'spend a star in the star shop', (g) => g.spent, 1),
+  ms('spend10', 'a regular', 'spend ten stars in the star shop', (g) => g.spent, 10),
+  ms('daemon1', 'self-hosted', 'hire the daemon', (g) => g.units.daemon || 0, 1),
+  ms('mythos1', 'approved organisation', 'hire Mythos', (g) => g.units.mythos || 0, 1),
+  ms('agents1k', 'a city', 'a thousand agents at once', mineAgents, 1000),
+  ms('total1q', 'a quadrillion', '1,000,000,000,000,000 tokens mined all time', (g) => g.total, 1e15),
+  ms('total1qi', 'a quintillion', '1,000,000,000,000,000,000 tokens mined all time', (g) => g.total, 1e18),
+  ms('stars100', 'a hundred stars', 'a hundred stars earned', (g) => g.starsEver, 100),
+  ms('stars1k', 'a thousand stars', 'a thousand stars earned', (g) => g.starsEver, 1000),
+  ms('ups5', 'kitted out', 'five upgrades bought', (g) => g.ups.length, 5),
+  flag('tier1k', 'thousand-fold', 'buy a thousand hands', (g) => g.ups.includes('hands')),
+  ms('factory1', 'lights out', 'hire the software factory', (g) => g.units.factory || 0, 1),
+  ms('founder1', 'founder mode', 'hire the founder', (g) => g.units.founder || 0, 1),
+  ms('sprint1', 'sprinter', 'finish a sprint', (g) => g.sprintsDone, 1),
+  ms('sprint3', 'a clean sprint', 'finish all three sprints in a day', (g) => g.sprintDays, 1),
+  ms('streak7', 'a week of sprints', 'all three sprints done seven days in a row', (g) => g.streak, 7, { unit: 'days in a row' }),
+  ms('board1', 'the quorum', 'hire the board', (g) => g.units.board || 0, 1),
+  ms('acquirer1', 'acquired', 'hire the acquirer', (g) => g.units.acquirer || 0, 1),
+  ms('regulator1', 'compliant', 'hire the regulator', (g) => g.units.regulator || 0, 1),
+  ms('agi1', 'the takeoff', 'hire the AGI', (g) => g.units.agi || 0, 1),
+  ms('fork1', 'upstream', 'hire the open-source fork', (g) => g.units.fork || 0, 1),
+  ms('vp10', 'a management layer', 'ten VPs of engineering', (g) => mineLevel(g, 'vp'), 10),
+  ms('round1', 'series A', 'raise a funding round', (g) => mineLevel(g, 'round'), 1),
+  ms('bounty1', 'bought out', 'buy a sprint out with a bounty', (g) => mineLevel(g, 'bounty'), 1),
+  ms('fast1', 'speedrun', 'cut a release inside the day\'s speed sprint', (g) => g.fastRel, 1),
+  flag('fast30', 'the thirty-minute release', 'a release cut within thirty minutes of the last', (g) => g.bestRel > 0 && g.bestRel <= 1800),
+  ms('hard1', 'the hard way', 'finish a hard sprint', (g) => g.hardDone, 1),
+  ms('week1', 'a long week', 'finish a weekly sprint', (g) => g.weeksDone, 1),
+  ms('dip', 'bought the dip', 'buy shares while the price sits 5% or more under fair value', (g) => g.dipBuys, 1),
+  ms('cashout', 'took profits', 'sell shares for more stars than they cost', (g) => g.gains, 1),
   // families: one chip at a time shows until it is earned, then the next, so there is always a next one
-  ...MINE_WORDS.slice(5).map((w, i) => ({ id: `total_${w}`, fam: 'total', name: `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w}`, desc: `${fmtMine(1e21 * Math.pow(1000, i))} tokens mined all time`, test: (g) => g.total >= 1e21 * Math.pow(1000, i) })),
-  ...Array.from({ length: 80 }, (_, i) => 66 + 3 * i).map((e) => ({ id: `total_e${e}`, fam: 'total', name: e === 99 ? 'a googol, nearly' : `ten to the ${e}th`, desc: `10^${e} tokens mined all time (${e >= 300 ? 'the edge of what a number can hold' : 'past the words'})`, test: (g) => g.total >= Math.pow(10, e) })),
-  ...[[10, 'double digits'], [15, 'v15'], [20, 'a score of releases'], [30, 'thirty releases'], [50, 'fifty releases'], [75, 'seventy-five'], [100, 'a hundred releases'], [250, 'release 250'], [500, 'release 500'], [1000, 'release 1,000']].map(([n, name]) => ({ id: `rel${n}`, fam: 'rel', name, desc: `cut ${fmtFull(n)} releases, over every listing`, test: (g) => g.releases + g.ipoReleases >= n })),
-  ...[100, 250, 500, 1000, 2500, 5000, 10000, 25000].map((n) => ({ id: `commit${n}`, fam: 'commit', name: `${fmtFull(n)} commits`, desc: `${fmtFull(n)} real commits paid in`, test: (g) => g.real.commits >= n })),
-  ...[1000, 2500, 5000, 10000, 25000, 50000, 100000].map((n) => ({ id: `real${n}`, fam: 'real', name: `${fmtFull(n)} turns`, desc: `${fmtFull(n)} real turns paid in`, test: (g) => g.real.turns >= n })),
-  ...[25000, 50000, 100000, 250000, 1000000, 10000000, 1e8, 1e9, 1e10].map((n) => ({ id: `click${n}`, fam: 'click', name: `${fmtMine(n)} clicks`, desc: `${fmtFull(n)} clicks`, test: (g) => g.clicks >= n })),
-  ...[10000, 100000, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e15, 1e18].map((n) => ({ id: `stars${n}`, fam: 'stars', name: `${fmtMine(n)} stars`, desc: `${fmtFull(n)} stars earned over every listing`, test: (g) => mineStarsLife(g) >= n })),
-  ...[25, 100, 500, 1000, 5000].map((n) => ({ id: `sprints${n}`, fam: 'sprint', name: `${fmtFull(n)} sprints`, desc: `${fmtFull(n)} sprints finished`, test: (g) => g.sprintsDone >= n })),
-  ...[30, 100, 365].map((n) => ({ id: `streak${n}`, fam: 'streak', name: n === 30 ? 'a month of sprints' : n === 100 ? 'a hundred clean days' : 'a year of sprints', desc: `all three sprints done ${n} days in a row`, test: (g) => g.streak >= n })),
-  ...[1, 7, 30, 100].map((n) => ({ id: `perfect${n}`, fam: 'perfect', name: n === 1 ? 'a perfect day' : `${n} perfect days`, desc: `the hard sprint and all three regular ones done in a day${n > 1 ? `, ${n} times` : ''}`, test: (g) => g.perfectDays >= n })),
-  ...[4, 12, 52].map((n) => ({ id: `weeks${n}`, fam: 'week', name: n === 4 ? 'a month of weeks' : n === 12 ? 'a quarter' : 'a year of weeks', desc: `${n} weekly sprints finished`, test: (g) => g.weeksDone >= n })),
-  ...[[1, 'ringing the bell'], [2, 'a second listing'], [3, 'serial founder'], [5, 'a conglomerate'], [10, 'the index fund'], [25, 'the whole exchange']].map(([n, name]) => ({ id: `ipo${n}`, fam: 'ipo', name, desc: `go public ${n === 1 ? 'once' : `${n} times`}`, test: (g) => g.ipo >= n })),
-  ...[10, 100, 1000, 10000, 100000].map((n) => ({ id: `shares${n}`, fam: 'shares', name: `${fmtFull(n)} shares`, desc: `hold ${fmtFull(n)} shares`, test: (g) => g.shares >= n })),
-  ...[[1, 'first trade'], [10, 'ten trades'], [100, 'day trader'], [1000, 'high frequency']].map(([n, name]) => ({ id: `trades${n}`, fam: 'trade', name, desc: `${fmtFull(n)} trade${n === 1 ? '' : 's'} on the exchange`, test: (g) => g.trades >= n })),
-  ...[[2, 'doubled since listing'], [10, 'a ten-bagger'], [100, 'a hundred-bagger'], [1000, 'a thousand-bagger'], [10000, 'the moon']].map(([n, name]) => ({ id: `px${n}`, fam: 'px', name, desc: `the share price at ${fmtFull(n)}× the first listing's`, test: (g) => g.pxIpo > 0 && g.px >= n * g.pxIpo })),
-  ...[[1e5, 'six figures of cap'], [1e6, 'a unicorn'], [1e7, 'a decacorn'], [1e8, 'a hectocorn'], [1e9, 'a billion-star company'], [1e12, 'a trillion-star company']].map(([n, name]) => ({ id: `cap${n}`, fam: 'cap', name, desc: `a market cap of ${fmtMine(n)} stars (shares × price)`, test: (g) => mineCap(g) >= n })),
-  ...[[2000, 'a metropolis'], [5000, 'a nation'], [10000, 'a planet'], [50000, 'a galaxy of agents'], [1e5, 'a hundred thousand agents'], [1e6, 'a million agents'], [1e7, 'ten million agents'], [1e8, 'a hundred million agents'], [1e9, 'a billion agents'], [1e12, 'a trillion agents']].map(([n, name]) => ({ id: `agents${n}`, fam: 'agents', name, desc: `${fmtFull(n)} agents at once`, test: (g) => mineAgents(g) >= n })),
-  ...[1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987].map((n) => ({ id: `beyond${n}`, fam: 'beyond', name: n === 1 ? 'past the fork' : `${fmtFull(n)} past the fork`, desc: `hire ${n === 1 ? 'the agent after the open-source fork' : `${fmtFull(n)} agents from past the fork`}`, test: (g) => Object.keys(g.units).filter((id) => id.startsWith('x') && g.units[id] > 0).length >= n })),
-  { id: 'coin', name: 'insert coin', desc: 'a game played in the arcade', test: (g) => Object.values(g.arcade).some((c) => (c.played || 0) > 0) },
-  ...[[2048, '2048'], [4096, '4096'], [8192, '8192'], [16384, '16384'], [32768, '32768']].map(([n, name]) => ({ id: `tile${n}`, fam: 'tile', name, desc: `a ${fmtFull(n)} tile in 2048`, test: (g) => ((g.arcade.t2048 || {}).bestTile || 0) >= n })),
-  ...[[10000, 'five figures in 2048'], [100000, 'six figures in 2048'], [1000000, 'a million in 2048']].map(([n, name]) => ({ id: `score${n}`, fam: 'score', name, desc: `a score of ${fmtFull(n)} in 2048`, test: (g) => ((g.arcade.t2048 || {}).best || 0) >= n })),
-  ...[[1, 'a clear board'], [10, 'ten boards'], [50, 'fifty boards'], [250, 'mahjong master']].map(([n, name]) => ({ id: `mj${n}`, fam: 'mj', name, desc: `${n === 1 ? 'clear a mahjong board' : `clear ${fmtFull(n)} mahjong boards`}`, test: (g) => ((g.arcade.mahjong || {}).wins || 0) >= n })),
-  ...[[1, 'the daily deal'], [7, 'a week of daily deals'], [30, 'a month of daily deals']].map(([n, name]) => ({ id: `mjd${n}`, fam: 'mjd', name, desc: `clear ${n === 1 ? 'the daily mahjong deal' : `${n} daily mahjong deals`}`, test: (g) => (((g.arcade.mahjong || {}).dailies || []).length || 0) >= n })),
+  ...MINE_WORDS.slice(5).map((w, i) => ms(`total_${w}`, `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w}`, `${fmtMine(1e21 * Math.pow(1000, i))} tokens mined all time`, (g) => g.total, 1e21 * Math.pow(1000, i), { fam: 'total' })),
+  ...Array.from({ length: 80 }, (_, i) => 66 + 3 * i).map((e) => ms(`total_e${e}`, e === 99 ? 'a googol, nearly' : `ten to the ${e}th`, `10^${e} tokens mined all time (${e >= 300 ? 'the edge of what a number can hold' : 'past the words'})`, (g) => g.total, Math.pow(10, e), { fam: 'total' })),
+  ...[[10, 'double digits'], [15, 'v15'], [20, 'a score of releases'], [30, 'thirty releases'], [50, 'fifty releases'], [75, 'seventy-five'], [100, 'a hundred releases'], [250, 'release 250'], [500, 'release 500'], [1000, 'release 1,000']].map(([n, name]) => ms(`rel${n}`, name, `cut ${fmtFull(n)} releases, over every listing`, (g) => g.releases + g.ipoReleases, n, { fam: 'rel' })),
+  ...[100, 250, 500, 1000, 2500, 5000, 10000, 25000].map((n) => ms(`commit${n}`, `${fmtFull(n)} commits`, `${fmtFull(n)} real commits paid in`, (g) => g.real.commits, n, { fam: 'commit' })),
+  ...[1000, 2500, 5000, 10000, 25000, 50000, 100000].map((n) => ms(`real${n}`, `${fmtFull(n)} turns`, `${fmtFull(n)} real turns paid in`, (g) => g.real.turns, n, { fam: 'real' })),
+  ...[25000, 50000, 100000, 250000, 1000000, 10000000, 1e8, 1e9, 1e10].map((n) => ms(`click${n}`, `${fmtMine(n)} clicks`, `${fmtFull(n)} clicks`, (g) => g.clicks, n, { fam: 'click' })),
+  ...[10000, 100000, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e15, 1e18].map((n) => ms(`stars${n}`, `${fmtMine(n)} stars`, `${fmtFull(n)} stars earned over every listing`, (g) => mineStarsLife(g), n, { fam: 'stars' })),
+  ...[25, 100, 500, 1000, 5000].map((n) => ms(`sprints${n}`, `${fmtFull(n)} sprints`, `${fmtFull(n)} sprints finished`, (g) => g.sprintsDone, n, { fam: 'sprint' })),
+  ...[30, 100, 365].map((n) => ms(`streak${n}`, n === 30 ? 'a month of sprints' : n === 100 ? 'a hundred clean days' : 'a year of sprints', `all three sprints done ${n} days in a row`, (g) => g.streak, n, { fam: 'streak', unit: 'days in a row' })),
+  ...[1, 7, 30, 100].map((n) => ms(`perfect${n}`, n === 1 ? 'a perfect day' : `${n} perfect days`, `the hard sprint and all three regular ones done in a day${n > 1 ? `, ${n} times` : ''}`, (g) => g.perfectDays, n, { fam: 'perfect' })),
+  ...[4, 12, 52].map((n) => ms(`weeks${n}`, n === 4 ? 'a month of weeks' : n === 12 ? 'a quarter' : 'a year of weeks', `${n} weekly sprints finished`, (g) => g.weeksDone, n, { fam: 'week' })),
+  ...[[1, 'ringing the bell'], [2, 'a second listing'], [3, 'serial founder'], [5, 'a conglomerate'], [10, 'the index fund'], [25, 'the whole exchange']].map(([n, name]) => ms(`ipo${n}`, name, `go public ${n === 1 ? 'once' : `${n} times`}`, (g) => g.ipo, n, { fam: 'ipo' })),
+  ...[10, 100, 1000, 10000, 100000].map((n) => ms(`shares${n}`, `${fmtFull(n)} shares`, `hold ${fmtFull(n)} shares`, (g) => g.shares, n, { fam: 'shares' })),
+  ...[[1, 'first trade'], [10, 'ten trades'], [100, 'day trader'], [1000, 'high frequency']].map(([n, name]) => ms(`trades${n}`, name, `${fmtFull(n)} trade${n === 1 ? '' : 's'} on the exchange`, (g) => g.trades, n, { fam: 'trade' })),
+  ...[[2, 'doubled since listing'], [10, 'a ten-bagger'], [100, 'a hundred-bagger'], [1000, 'a thousand-bagger'], [10000, 'the moon']].map(([n, name]) => ms(`px${n}`, name, `the share price at ${fmtFull(n)}× the first listing's`, (g) => (g.pxIpo > 0 ? g.px / g.pxIpo : 0), n, { fam: 'px', unit: 'the listing price', ratio: true })),
+  ...[[1e5, 'six figures of cap'], [1e6, 'a unicorn'], [1e7, 'a decacorn'], [1e8, 'a hectocorn'], [1e9, 'a billion-star company'], [1e12, 'a trillion-star company']].map(([n, name]) => ms(`cap${n}`, name, `a market cap of ${fmtMine(n)} stars (shares × price)`, (g) => mineCap(g), n, { fam: 'cap', unit: 'stars of market cap' })),
+  ...[[2000, 'a metropolis'], [5000, 'a nation'], [10000, 'a planet'], [50000, 'a galaxy of agents'], [1e5, 'a hundred thousand agents'], [1e6, 'a million agents'], [1e7, 'ten million agents'], [1e8, 'a hundred million agents'], [1e9, 'a billion agents'], [1e12, 'a trillion agents']].map(([n, name]) => ms(`agents${n}`, name, `${fmtFull(n)} agents at once`, mineAgents, n, { fam: 'agents' })),
+  ...[1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987].map((n) => ms(`beyond${n}`, n === 1 ? 'past the fork' : `${fmtFull(n)} past the fork`, `hire ${n === 1 ? 'the agent after the open-source fork' : `${fmtFull(n)} agents from past the fork`}`, (g) => Object.keys(g.units).filter((id) => id.startsWith('x') && g.units[id] > 0).length, n, { fam: 'beyond', unit: 'agents from past the fork' })),
+  flag('coin', 'insert coin', 'a game played in the arcade', (g) => Object.values(g.arcade).some((c) => (c.played || 0) > 0)),
+  ...[[2048, '2048'], [4096, '4096'], [8192, '8192'], [16384, '16384'], [32768, '32768']].map(([n, name]) => ms(`tile${n}`, name, `a ${fmtFull(n)} tile in 2048`, (g) => (g.arcade.t2048 || {}).bestTile || 0, n, { fam: 'tile', unit: 'best tile' })),
+  ...[[10000, 'five figures in 2048'], [100000, 'six figures in 2048'], [1000000, 'a million in 2048']].map(([n, name]) => ms(`score${n}`, name, `a score of ${fmtFull(n)} in 2048`, (g) => (g.arcade.t2048 || {}).best || 0, n, { fam: 'score', unit: 'best score' })),
+  ...[[1, 'a clear board'], [10, 'ten boards'], [50, 'fifty boards'], [250, 'mahjong master']].map(([n, name]) => ms(`mj${n}`, name, `${n === 1 ? 'clear a mahjong board' : `clear ${fmtFull(n)} mahjong boards`}`, (g) => (g.arcade.mahjong || {}).wins || 0, n, { fam: 'mj', unit: 'boards cleared' })),
+  ...[[1, 'the daily deal'], [7, 'a week of daily deals'], [30, 'a month of daily deals']].map(([n, name]) => ms(`mjd${n}`, name, `clear ${n === 1 ? 'the daily mahjong deal' : `${n} daily mahjong deals`}`, (g) => ((g.arcade.mahjong || {}).dailies || []).length || 0, n, { fam: 'mjd', unit: 'daily deals cleared' })),
 ];
+// a milestone's popup: what it takes, how far along the mine is (the bar and the count), what it pays once earned,
+// and for a family (the thousand clicks, the ten thousand, ...) which one comes after it
+const mineAchProg = (m, g) => { const [have, need] = m.prog ? m.prog(g) : [m.test(g) ? 1 : 0, 1]; return { have, need, pct: need > 0 ? Math.max(0, Math.min(100, have / need * 100)) : 0 }; };
+const fmtAch = (m, n) => (m.ratio ? `${(Number(n) || 0) < 10 ? (Number(n) || 0).toFixed(2) : fmtMine(n)}×` : fmtFull(n));
+function mineAchDialog(m) {
+  const g = mineLoad(); const on = g.ach.includes(m.id); const { have, need, pct } = mineAchProg(m, g); const pay = mineHas(g, 'pride') ? 3 : 2;
+  const fam = m.fam ? MINE_MILESTONES.filter((x) => x.fam === m.fam) : []; const at = fam.indexOf(m); const next = at >= 0 ? fam[at + 1] : null;
+  const count = m.flag ? (on || have >= need ? 'done' : 'not yet') : `${fmtAch(m, have)} of ${fmtAch(m, need)}${m.unit ? ` ${esc(m.unit)}` : ''}`;
+  const d = openDialog(`<h2>milestone<span class="spacer"></span><button data-x="close">✕</button></h2><div class="body cond-dlg mine-ach-dlg">
+    <div class="big">${esc(m.name)} <span class="${on ? 'on' : 'help plain'}">${on ? `earned · +${pay}% to the mine` : 'not yet'}</span></div>
+    <div class="label-h">to unlock</div>
+    <p class="plain">${esc(m.desc.charAt(0).toUpperCase() + m.desc.slice(1))}.</p>
+    <div class="label-h">progress</div>
+    <div class="mine-prog${on || pct >= 100 ? ' done' : ''}"><i style="width:${on ? 100 : pct.toFixed(1)}%"></i></div>
+    <div class="mine-prog-n"><span>${count}</span><span class="spacer"></span><b>${on ? 100 : Math.floor(pct)}%</b></div>
+    <p class="help plain">Every milestone earned lifts the mine ${pay}% for good${pay === 2 ? ' (3% with the trophy case from the star shop)' : ''}; it survives releases and listings.${next ? ` After this one: <b>${esc(next.name)}</b>, ${esc(next.desc)}.` : ''}${fam.length ? ` ${at + 1} of ${fam.length} in its run.` : ''}</p>
+  </div><div class="foot"><span class="help plain">${g.ach.length} of ${MINE_MILESTONES.length} milestones earned</span><span class="spacer" style="flex:1"></span><button class="primary" data-x="close">Done</button></div>`, 'milestone');
+  d.addEventListener('click', (e) => { if (e.target.closest('[data-x="close"]')) closeDialog(); });
+}
 const mineMilestonesShown = (g) => { const seen = new Set(); return MINE_MILESTONES.filter((m) => { if (!m.fam) return true; if (g.ach.includes(m.id)) return true; if (seen.has(m.fam)) return false; seen.add(m.fam); return true; }); };
 // the wire: one line of news under the banner, picked from what fits the mine right now (state lines count three times)
 const MINE_NEWS = [
@@ -4640,7 +4677,7 @@ function renderFunView() {
     $('#mine-btn').addEventListener('click', mineClick);
     if (!box.dataset.wired) box.addEventListener('click', async (e) => {   // once: the box outlives every rebuild, and a second listener would hire, buy and trade twice per click
       if (e.target.closest('[data-gold]')) { mineCatch(); return; }
-      const a = e.target.closest('[data-ach]'); if (a) { const m = MINE_MILESTONES.find((x) => x.id === a.dataset.ach); if (!m) return; const on = mineLoad().ach.includes(m.id); box.querySelectorAll('[data-ach].sel').forEach((x) => x.classList.remove('sel')); a.classList.add('sel'); $('#mine-ach-info').innerHTML = `<b>${esc(m.name)}</b> · ${esc(m.desc)} · <span class="${on ? 'on' : 'dim'}">${on ? `earned, +${mineHas(mineLoad(), 'pride') ? 3 : 2}% to the mine` : 'not yet'}</span>`; return; }
+      const a = e.target.closest('[data-ach]'); if (a) { const m = MINE_MILESTONES.find((x) => x.id === a.dataset.ach); if (!m) return; box.querySelectorAll('[data-ach].sel').forEach((x) => x.classList.remove('sel')); a.classList.add('sel'); mineAchDialog(m); return; }
       const q = e.target.closest('[data-qty]'); if (q) { mineQty = q.dataset.qty === 'max' ? 'max' : Number(q.dataset.qty); q.parentElement.querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x === q)); mineRefresh(); return; }
       if (e.target.closest('[data-mine="ups-all"]')) { mineBuy('ups-all'); return; }
       const b = e.target.closest('[data-buy]'); if (b) { mineBuy('unit', b.dataset.buy); return; }
