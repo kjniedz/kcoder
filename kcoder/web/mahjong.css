@@ -27,5 +27,5 @@
 .mj-tile.flo b { color: #C2185B; font-size: 19px; } .mj-tile.flo i { color: #C2185B; } .mj-tile.sea b { color: #B45309; font-size: 18px; } .mj-tile.sea i { color: #B45309; }
 .mj-over { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; padding: 12px; text-align: center; background: color-mix(in srgb, var(--bg) 80%, transparent); }
 .mj-over .t { font-size: 30px; font-weight: 800; color: var(--accent-text); } .mj-over .b { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 6px; }
-.mj-stats { margin-top: 10px; font-size: 11.5px; } .mj .ds { color: var(--fg-mute); font-size: 11px; margin-top: 10px; }
+.mj-stats { margin-top: 10px; font-size: 11.5px; min-height: 15px; } .mj .ds { color: var(--fg-mute); font-size: 11px; margin-top: 10px; }
 @media (max-width: 560px) { .mj-head { flex-direction: column; align-items: flex-start; } .mj-bar .mj-note { margin-left: 0; width: 100%; white-space: normal; } }

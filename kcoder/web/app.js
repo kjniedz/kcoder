@@ -805,8 +805,11 @@ function setLayout(which) {
 // ----------------------------------------------------------------------
 // wall
 // ----------------------------------------------------------------------
+// a session whose turn is over but whose background job (kcoder job run) is still going: not idle, not working
+function jobsRunning(s) { return (s.jobs || []).some((j) => j.status === 'running' || j.status === 'stopping'); }
 function paneStatus(s) {
   if (s.status === 'paused') return 'paused';
+  if (s.status === 'idle' && jobsRunning(s)) return 'job';
   if (state.stats.cap_reached && s.status === 'idle') return 'capped';
   if (s.status === 'idle') return (s.usage && s.usage.turns) ? 'done' : 'idle';
   return s.status;
@@ -876,7 +879,7 @@ function renderPaneChrome(pane, s, num) {
     (s.queue && s.queue.length ? `<span title="queued tasks">▶ ${s.queue.length} queued</span>` : '') +
     (git ? `<span class="git-line" title="git">${esc(git.branch || '')}${git.dirty ? ` <span class="dirty">±${git.dirty}</span>` : ''}${git.ahead ? ` ↑${git.ahead}` : ''}</span>` : '') +
     `<span class="spacer"></span>` +
-    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span class="waiting">PAUSED</span>` : st === 'capped' ? `<span>paused (cap)</span>` : st === 'error' ? `<span class="waiting errlabel">ERROR</span><button data-err="${esc(s.id)}" title="what happened, send again, copy a report">details</button>` : '') +
+    (st === 'waiting' ? `<span class="waiting">WAITING ON YOU</span>` : st === 'paused' ? `<span class="waiting">PAUSED</span>` : st === 'job' ? `<span class="jobl" title="a background job is still running; the agent gets its output when it ends">BACKGROUND JOB</span>` : st === 'capped' ? `<span>paused (cap)</span>` : st === 'error' ? `<span class="waiting errlabel">ERROR</span><button data-err="${esc(s.id)}" title="what happened, send again, copy a report">details</button>` : '') +
     `<span>${age(s.last_activity)} ago</span>`;
   // approval bar
   const bar = $('.approval-bar', pane);
@@ -1355,8 +1358,8 @@ function showArchived() { return localStorage.getItem('kcoder.showArchived') ===
 $('#btn-archived').addEventListener('click', () => { localStorage.setItem('kcoder.showArchived', showArchived() ? 'off' : 'on'); renderSidebar(); });
 function chatItemHtml(c) {
   const live = state.sessions.get(c.id);
-  const st = c.archived ? 'archived' : (live ? live.status : c.status);
-  const label = st === 'working' ? 'running' : st === 'waiting' ? (live && live.pending_approval ? 'needs approval' : 'needs you') : st === 'error' ? 'error' : st === 'idle' && live ? 'idle' : '';
+  const st = c.archived ? 'archived' : (live ? (live.status === 'idle' && jobsRunning(live) ? 'job' : live.status) : c.status);
+  const label = st === 'working' ? 'running' : st === 'waiting' ? (live && live.pending_approval ? 'needs approval' : 'needs you') : st === 'error' ? 'error' : st === 'job' ? 'job running' : st === 'idle' && live ? 'idle' : '';
   const inPane = state.layout.panes.indexOf(c.id);
   return `<div class="chat-item${c.archived ? ' archived' : ''}${c.id === state.sid ? ' current' : ''}${inPane >= 0 ? ' in-pane' : ''}" data-sid="${c.id}" draggable="true" title="${esc(c.name)} · ${esc(c.model || '')} · drag onto a pane"><span class="dot ${st}"></span><span class="title">${c.pinned ? '<span class="pin">📌 </span>' : ''}${esc(c.title || c.name)}</span>${st === 'working' ? `<span class="badge working">${statusLineHtml(c.id, true)}</span>` : st === 'error' ? `<button class="badge error" data-err="${c.id}" title="what happened, send again, copy a report">error · details</button>` : label ? `<span class="badge ${st}">${label}</span>` : ''}${inPane >= 0 ? `<span class="pane-no" title="open in pane ${inPane + 1}">${inPane + 1}</span>` : ''}<span class="age">${age(c.last_activity)}</span>${c.archived ? '' : `<button class="arch" data-archive="${c.id}" title="archive this chat (undo on the toast; it stays searchable and comes back from show archived)">✕</button>`}</div>`;
 }
@@ -3161,7 +3164,7 @@ function splitFocus(i) { if (i < 0 || i >= state.layout.panes.length) return; st
 function toggleZoom(i) { const idx = i == null ? state.layout.focus : i; state.layout.zoom = state.layout.zoom === idx ? null : idx; state.layout.focus = idx; saveLayout(); renderSplit(); focusComposer(); }
 async function pickSession(i) {
   const items = []; const seen = new Set();
-  const mark = (s) => (s.status === 'working' ? '● ' : s.status === 'waiting' ? '◐ ' : '○ ');
+  const mark = (s) => (s.status === 'working' ? '● ' : s.status === 'waiting' ? '◐ ' : s.status === 'idle' && jobsRunning(s) ? '◔ ' : '○ ');
   for (const s of visibleSessions()) { seen.add(s.id); items.push([s.id, `${mark(s)}${s.title || s.name} · ${(s.project || {}).name || shortHome(s.cwd)}`]); }
   for (const c of state.chats) if (!seen.has(c.id) && !c.archived) { seen.add(c.id); items.push([c.id, `○ ${c.title || c.name} · ${(c.project || {}).name || ''}`]); }
   items.push(['__new', '+ new session']);
@@ -3909,11 +3912,20 @@ async function exportStatsCsv() {
 // can cut a release: agents and bank go, stars stay (+10% each, forever). Progress lives in
 // localStorage (kcoder.mine) and is mirrored into the daemon's ui_state so the app window and a
 // browser tab share one mine; the mine keeps going up to eight hours while away.
-const MINE_WORDS = ['million', 'billion', 'trillion', 'quadrillion', 'quintillion', 'sextillion', 'septillion', 'octillion', 'nonillion', 'decillion', 'undecillion', 'duodecillion', 'tredecillion', 'quattuordecillion', 'quindecillion', 'sexdecillion', 'septendecillion', 'octodecillion', 'novemdecillion', 'vigintillion'];
+// million .. decillion, then the Latin names up to novemnonagintillion (1e300) and centillion (1e303): every number a
+// double can hold has a word, so the page never falls back to 1.34e80, which reads as nothing
+const MINE_WORDS = (() => {
+  const w = ['million', 'billion', 'trillion', 'quadrillion', 'quintillion', 'sextillion', 'septillion', 'octillion', 'nonillion', 'decillion'];
+  const ones = ['', 'un', 'duo', 'tre', 'quattuor', 'quin', 'sex', 'septen', 'octo', 'novem'];
+  const tens = ['', 'dec', 'vigint', 'trigint', 'quadragint', 'quinquagint', 'sexagint', 'septuagint', 'octogint', 'nonagint'];
+  for (let t = 1; t < 10; t++) for (let o = 0; o < 10; o++) if (t > 1 || o > 0) w.push(ones[o] + tens[t] + 'illion');
+  w.push('centillion');
+  return w;
+})();
 const fmtMine = (n) => {   // prices and rates: full up to a million, then "4.5 billion"
   n = Number(n) || 0; if (n < 1000) return Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10); if (n < 1e6) return fmtInt(Math.round(n));
   let v = n, i = -2; while (v >= 1000 && i < MINE_WORDS.length - 1) { v /= 1000; i++; }   // two divisions reach a million, the first word
-  if (v >= 1000) return n.toExponential(2).replace('e+', 'e');   // past a vigintillion the words run out
+  if (v >= 1000) return n.toExponential(2).replace('e+', 'e');   // past a centillion (above any double) the words run out
   return `${v < 10 ? v.toFixed(2) : v < 100 ? v.toFixed(1) : fmtInt(Math.round(v))} ${MINE_WORDS[i]}`;
 };
 const fmtFull = (n) => { n = Math.floor(Number(n) || 0); return n < 1e12 ? fmtInt(n) : fmtMine(n); };   // the bank and the totals: every digit up to a trillion, then "4.52 quadrillion" so the number never outgrows the card
@@ -4031,26 +4043,26 @@ const MINE_MILESTONES = [
   // families: one chip at a time shows until it is earned, then the next, so there is always a next one
   ...MINE_WORDS.slice(5).map((w, i) => ({ id: `total_${w}`, fam: 'total', name: `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w}`, desc: `${fmtMine(1e21 * Math.pow(1000, i))} tokens mined all time`, test: (g) => g.total >= 1e21 * Math.pow(1000, i) })),
   ...Array.from({ length: 80 }, (_, i) => 66 + 3 * i).map((e) => ({ id: `total_e${e}`, fam: 'total', name: e === 99 ? 'a googol, nearly' : `ten to the ${e}th`, desc: `10^${e} tokens mined all time (${e >= 300 ? 'the edge of what a number can hold' : 'past the words'})`, test: (g) => g.total >= Math.pow(10, e) })),
-  ...[[10, 'double digits'], [15, 'v15'], [20, 'a score of releases'], [30, 'thirty releases'], [50, 'fifty releases'], [75, 'seventy-five'], [100, 'a hundred releases'], [250, 'release 250'], [500, 'release 500'], [1000, 'release 1,000']].map(([n, name]) => ({ id: `rel${n}`, fam: 'rel', name, desc: `cut ${fmtInt(n)} releases, over every listing`, test: (g) => g.releases + g.ipoReleases >= n })),
-  ...[100, 250, 500, 1000, 2500, 5000, 10000, 25000].map((n) => ({ id: `commit${n}`, fam: 'commit', name: `${fmtInt(n)} commits`, desc: `${fmtInt(n)} real commits paid in`, test: (g) => g.real.commits >= n })),
-  ...[1000, 2500, 5000, 10000, 25000, 50000, 100000].map((n) => ({ id: `real${n}`, fam: 'real', name: `${fmtInt(n)} turns`, desc: `${fmtInt(n)} real turns paid in`, test: (g) => g.real.turns >= n })),
-  ...[25000, 50000, 100000, 250000, 1000000, 10000000, 1e8, 1e9, 1e10].map((n) => ({ id: `click${n}`, fam: 'click', name: `${fmtMine(n)} clicks`, desc: `${fmtInt(n)} clicks`, test: (g) => g.clicks >= n })),
-  ...[10000, 100000, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e15, 1e18].map((n) => ({ id: `stars${n}`, fam: 'stars', name: `${fmtMine(n)} stars`, desc: `${fmtInt(n)} stars earned over every listing`, test: (g) => mineStarsLife(g) >= n })),
-  ...[25, 100, 500, 1000, 5000].map((n) => ({ id: `sprints${n}`, fam: 'sprint', name: `${fmtInt(n)} sprints`, desc: `${fmtInt(n)} sprints finished`, test: (g) => g.sprintsDone >= n })),
+  ...[[10, 'double digits'], [15, 'v15'], [20, 'a score of releases'], [30, 'thirty releases'], [50, 'fifty releases'], [75, 'seventy-five'], [100, 'a hundred releases'], [250, 'release 250'], [500, 'release 500'], [1000, 'release 1,000']].map(([n, name]) => ({ id: `rel${n}`, fam: 'rel', name, desc: `cut ${fmtFull(n)} releases, over every listing`, test: (g) => g.releases + g.ipoReleases >= n })),
+  ...[100, 250, 500, 1000, 2500, 5000, 10000, 25000].map((n) => ({ id: `commit${n}`, fam: 'commit', name: `${fmtFull(n)} commits`, desc: `${fmtFull(n)} real commits paid in`, test: (g) => g.real.commits >= n })),
+  ...[1000, 2500, 5000, 10000, 25000, 50000, 100000].map((n) => ({ id: `real${n}`, fam: 'real', name: `${fmtFull(n)} turns`, desc: `${fmtFull(n)} real turns paid in`, test: (g) => g.real.turns >= n })),
+  ...[25000, 50000, 100000, 250000, 1000000, 10000000, 1e8, 1e9, 1e10].map((n) => ({ id: `click${n}`, fam: 'click', name: `${fmtMine(n)} clicks`, desc: `${fmtFull(n)} clicks`, test: (g) => g.clicks >= n })),
+  ...[10000, 100000, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e15, 1e18].map((n) => ({ id: `stars${n}`, fam: 'stars', name: `${fmtMine(n)} stars`, desc: `${fmtFull(n)} stars earned over every listing`, test: (g) => mineStarsLife(g) >= n })),
+  ...[25, 100, 500, 1000, 5000].map((n) => ({ id: `sprints${n}`, fam: 'sprint', name: `${fmtFull(n)} sprints`, desc: `${fmtFull(n)} sprints finished`, test: (g) => g.sprintsDone >= n })),
   ...[30, 100, 365].map((n) => ({ id: `streak${n}`, fam: 'streak', name: n === 30 ? 'a month of sprints' : n === 100 ? 'a hundred clean days' : 'a year of sprints', desc: `all three sprints done ${n} days in a row`, test: (g) => g.streak >= n })),
   ...[1, 7, 30, 100].map((n) => ({ id: `perfect${n}`, fam: 'perfect', name: n === 1 ? 'a perfect day' : `${n} perfect days`, desc: `the hard sprint and all three regular ones done in a day${n > 1 ? `, ${n} times` : ''}`, test: (g) => g.perfectDays >= n })),
   ...[4, 12, 52].map((n) => ({ id: `weeks${n}`, fam: 'week', name: n === 4 ? 'a month of weeks' : n === 12 ? 'a quarter' : 'a year of weeks', desc: `${n} weekly sprints finished`, test: (g) => g.weeksDone >= n })),
   ...[[1, 'ringing the bell'], [2, 'a second listing'], [3, 'serial founder'], [5, 'a conglomerate'], [10, 'the index fund'], [25, 'the whole exchange']].map(([n, name]) => ({ id: `ipo${n}`, fam: 'ipo', name, desc: `go public ${n === 1 ? 'once' : `${n} times`}`, test: (g) => g.ipo >= n })),
-  ...[10, 100, 1000, 10000, 100000].map((n) => ({ id: `shares${n}`, fam: 'shares', name: `${fmtInt(n)} shares`, desc: `hold ${fmtInt(n)} shares`, test: (g) => g.shares >= n })),
-  ...[[1, 'first trade'], [10, 'ten trades'], [100, 'day trader'], [1000, 'high frequency']].map(([n, name]) => ({ id: `trades${n}`, fam: 'trade', name, desc: `${fmtInt(n)} trade${n === 1 ? '' : 's'} on the exchange`, test: (g) => g.trades >= n })),
-  ...[[2, 'doubled since listing'], [10, 'a ten-bagger'], [100, 'a hundred-bagger'], [1000, 'a thousand-bagger'], [10000, 'the moon']].map(([n, name]) => ({ id: `px${n}`, fam: 'px', name, desc: `the share price at ${fmtInt(n)}× the first listing's`, test: (g) => g.pxIpo > 0 && g.px >= n * g.pxIpo })),
+  ...[10, 100, 1000, 10000, 100000].map((n) => ({ id: `shares${n}`, fam: 'shares', name: `${fmtFull(n)} shares`, desc: `hold ${fmtFull(n)} shares`, test: (g) => g.shares >= n })),
+  ...[[1, 'first trade'], [10, 'ten trades'], [100, 'day trader'], [1000, 'high frequency']].map(([n, name]) => ({ id: `trades${n}`, fam: 'trade', name, desc: `${fmtFull(n)} trade${n === 1 ? '' : 's'} on the exchange`, test: (g) => g.trades >= n })),
+  ...[[2, 'doubled since listing'], [10, 'a ten-bagger'], [100, 'a hundred-bagger'], [1000, 'a thousand-bagger'], [10000, 'the moon']].map(([n, name]) => ({ id: `px${n}`, fam: 'px', name, desc: `the share price at ${fmtFull(n)}× the first listing's`, test: (g) => g.pxIpo > 0 && g.px >= n * g.pxIpo })),
   ...[[1e5, 'six figures of cap'], [1e6, 'a unicorn'], [1e7, 'a decacorn'], [1e8, 'a hectocorn'], [1e9, 'a billion-star company'], [1e12, 'a trillion-star company']].map(([n, name]) => ({ id: `cap${n}`, fam: 'cap', name, desc: `a market cap of ${fmtMine(n)} stars (shares × price)`, test: (g) => mineCap(g) >= n })),
-  ...[[2000, 'a metropolis'], [5000, 'a nation'], [10000, 'a planet'], [50000, 'a galaxy of agents'], [1e5, 'a hundred thousand agents'], [1e6, 'a million agents'], [1e7, 'ten million agents'], [1e8, 'a hundred million agents'], [1e9, 'a billion agents'], [1e12, 'a trillion agents']].map(([n, name]) => ({ id: `agents${n}`, fam: 'agents', name, desc: `${fmtInt(n)} agents at once`, test: (g) => mineAgents(g) >= n })),
-  ...[1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987].map((n) => ({ id: `beyond${n}`, fam: 'beyond', name: n === 1 ? 'past the fork' : `${fmtInt(n)} past the fork`, desc: `hire ${n === 1 ? 'the agent after the open-source fork' : `${fmtInt(n)} agents from past the fork`}`, test: (g) => Object.keys(g.units).filter((id) => id.startsWith('x') && g.units[id] > 0).length >= n })),
+  ...[[2000, 'a metropolis'], [5000, 'a nation'], [10000, 'a planet'], [50000, 'a galaxy of agents'], [1e5, 'a hundred thousand agents'], [1e6, 'a million agents'], [1e7, 'ten million agents'], [1e8, 'a hundred million agents'], [1e9, 'a billion agents'], [1e12, 'a trillion agents']].map(([n, name]) => ({ id: `agents${n}`, fam: 'agents', name, desc: `${fmtFull(n)} agents at once`, test: (g) => mineAgents(g) >= n })),
+  ...[1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987].map((n) => ({ id: `beyond${n}`, fam: 'beyond', name: n === 1 ? 'past the fork' : `${fmtFull(n)} past the fork`, desc: `hire ${n === 1 ? 'the agent after the open-source fork' : `${fmtFull(n)} agents from past the fork`}`, test: (g) => Object.keys(g.units).filter((id) => id.startsWith('x') && g.units[id] > 0).length >= n })),
   { id: 'coin', name: 'insert coin', desc: 'a game played in the arcade', test: (g) => Object.values(g.arcade).some((c) => (c.played || 0) > 0) },
-  ...[[2048, '2048'], [4096, '4096'], [8192, '8192'], [16384, '16384'], [32768, '32768']].map(([n, name]) => ({ id: `tile${n}`, fam: 'tile', name, desc: `a ${fmtInt(n)} tile in 2048`, test: (g) => ((g.arcade.t2048 || {}).bestTile || 0) >= n })),
-  ...[[10000, 'five figures in 2048'], [100000, 'six figures in 2048'], [1000000, 'a million in 2048']].map(([n, name]) => ({ id: `score${n}`, fam: 'score', name, desc: `a score of ${fmtInt(n)} in 2048`, test: (g) => ((g.arcade.t2048 || {}).best || 0) >= n })),
-  ...[[1, 'a clear board'], [10, 'ten boards'], [50, 'fifty boards'], [250, 'mahjong master']].map(([n, name]) => ({ id: `mj${n}`, fam: 'mj', name, desc: `${n === 1 ? 'clear a mahjong board' : `clear ${fmtInt(n)} mahjong boards`}`, test: (g) => ((g.arcade.mahjong || {}).wins || 0) >= n })),
+  ...[[2048, '2048'], [4096, '4096'], [8192, '8192'], [16384, '16384'], [32768, '32768']].map(([n, name]) => ({ id: `tile${n}`, fam: 'tile', name, desc: `a ${fmtFull(n)} tile in 2048`, test: (g) => ((g.arcade.t2048 || {}).bestTile || 0) >= n })),
+  ...[[10000, 'five figures in 2048'], [100000, 'six figures in 2048'], [1000000, 'a million in 2048']].map(([n, name]) => ({ id: `score${n}`, fam: 'score', name, desc: `a score of ${fmtFull(n)} in 2048`, test: (g) => ((g.arcade.t2048 || {}).best || 0) >= n })),
+  ...[[1, 'a clear board'], [10, 'ten boards'], [50, 'fifty boards'], [250, 'mahjong master']].map(([n, name]) => ({ id: `mj${n}`, fam: 'mj', name, desc: `${n === 1 ? 'clear a mahjong board' : `clear ${fmtFull(n)} mahjong boards`}`, test: (g) => ((g.arcade.mahjong || {}).wins || 0) >= n })),
   ...[[1, 'the daily deal'], [7, 'a week of daily deals'], [30, 'a month of daily deals']].map(([n, name]) => ({ id: `mjd${n}`, fam: 'mjd', name, desc: `clear ${n === 1 ? 'the daily mahjong deal' : `${n} daily mahjong deals`}`, test: (g) => (((g.arcade.mahjong || {}).dailies || []).length || 0) >= n })),
 ];
 const mineMilestonesShown = (g) => { const seen = new Set(); return MINE_MILESTONES.filter((m) => { if (!m.fam) return true; if (g.ach.includes(m.id)) return true; if (seen.has(m.fam)) return false; seen.add(m.fam); return true; }); };
@@ -4079,7 +4091,7 @@ const MINE_NEWS = [
   [(g) => g.units.regulator >= 1, (g) => `${mineWho(g, 'regulator', 'the regulator')} fined the mine. the fine was paid in tokens. net positive.`],
   [(g) => g.units.agi >= 1, (g) => `${mineWho(g, 'agi', 'the AGI')} rewrote itself overnight. it is nicer now, and faster.`],
   [(g) => g.units.fork >= 1, (g) => `${mineWho(g, 'fork', 'the fork')} opened a pull request against the original. it was merged by mistake.`],
-  [(g) => g.ipo >= 1, (g) => `publicly traded, ${fmtInt(g.shares)} share${g.shares === 1 ? '' : 's'} outstanding. the analysts say "hold". the interns say "click".`],
+  [(g) => g.ipo >= 1, (g) => `publicly traded, ${fmtFull(g.shares)} share${g.shares === 1 ? '' : 's'} outstanding. the analysts say "hold". the interns say "click".`],
   [(g) => g.ipo >= 1, 'the ticker is KCDR. the quarterly call was all clicking.'],
   [(g) => mineLevel(g, 'vp') >= 1, (g) => `${mineLevel(g, 'vp')} VP${mineLevel(g, 'vp') === 1 ? '' : 's'} of engineering. each has a one-on-one with the mine.`],
   [(g) => g.rounds >= 1, 'a funding round closed. the valuation is in tokens. the investors are interns.'],
@@ -4097,16 +4109,16 @@ const MINE_NEWS = [
   [(g) => mineHas(g, 'ir'), 'investor relations has rebranded the commit log as "guidance".'],
   [(g) => g.bestRel > 0 && g.bestRel < 3600, (g) => `fastest release: ${fmtDurLong(g.bestRel)}. the changelog was written during the build.`],
   [(g) => g.weeksDone > 0, 'the weekly sprint is done. the retro is scheduled for next quarter.'],
-  [(g) => g.sprintsDone > 0, (g) => `${fmtInt(g.sprintsDone)} sprint${g.sprintsDone === 1 ? '' : 's'} finished. the retro was skipped.`],
+  [(g) => g.sprintsDone > 0, (g) => `${fmtFull(g.sprintsDone)} sprint${g.sprintsDone === 1 ? '' : 's'} finished. the retro was skipped.`],
   [(g) => g.streak >= 3, (g) => `${g.streak} days of clean sprints. the burndown chart goes up and to the right somehow.`],
   [(g) => mineHas(g, 'procurement'), 'procurement bought something. nobody asked. it was the right call.'],
   [(g) => mineHas(g, 'auto'), 'the cron clicker has not missed a second. it is unsettling.'],
   [(g) => Object.keys(g.names).length > 0, (g) => `${mineWho(g, 'intern', 'an intern')} asked to be called something else. request noted.`],
-  [(g) => g.spent > 0, (g) => `${fmtInt(g.spent)} star${g.spent === 1 ? '' : 's'} spent in the shop. the repo is down to ${fmtInt(g.stars)}. worth it.`],
+  [(g) => g.spent > 0, (g) => `${fmtFull(g.spent)} star${g.spent === 1 ? '' : 's'} spent in the shop. the repo is down to ${fmtFull(g.stars)}. worth it.`],
   [(g) => g.ups.includes('kbd'), 'the mechanical keyboard can be heard from the next building.'],
   [(g) => g.ups.includes('dictation'), 'dictation heard "git push" and did not. good dictation.'],
   [(g) => g.ups.includes('omni'), 'the command palette has a command for opening the command palette.'],
-  [(g) => g.real.commits > 0, (g) => `${fmtInt(g.real.commits)} real commit${g.real.commits === 1 ? '' : 's'} paid into the mine. the agents are impressed.`],
+  [(g) => g.real.commits > 0, (g) => `${fmtFull(g.real.commits)} real commit${g.real.commits === 1 ? '' : 's'} paid into the mine. the agents are impressed.`],
   [(g) => g.real.turns > 0, (g) => `${fmtFull(g.real.tokens)} tokens of this mine came from actual work. the rest is clicking.`],
   [(g) => g.stars > 0, (g) => `v${g.releases} shipped. the changelog says "improvements".`],
   [(g) => g.stars >= 10, 'ten stars on the repo. three of them are yours.'],
@@ -4215,7 +4227,7 @@ const mineAwayCap = (g) => [8, 16, 24, 48, 168][Math.min(4, mineLevel(g, 'shift'
 const mineShopCost = (it, lvl, g) => (typeof it.cost === 'function' ? it.cost(lvl, g || mine || mineLoad()) : Array.isArray(it.cost) ? it.cost[Math.min(lvl, it.cost.length - 1)] : it.cost);   // a perk with levels can price each one; a function prices from the mine (null: nothing to buy right now)
 const mineRepeatCost = (g, base, lvl) => Math.max(Math.ceil(base * Math.pow(2, lvl)), Math.ceil(g.starsEver * 0.02));   // repeatables: doubling, never under 2% of the stars earned on this listing
 const mineWallet = (g, it) => (it.cur === 'shares' ? g.shares : g.stars);
-const mineCurName = (it, n) => `${fmtInt(n)} ${it.cur === 'shares' ? 'share' : 'star'}${n === 1 ? '' : 's'}`;
+const mineCurName = (it, n) => `${fmtFull(n)} ${it.cur === 'shares' ? 'share' : 'star'}${n === 1 ? '' : 's'}`;
 const mineRatio = (g) => 1.15 - 0.01 * Math.min(3, mineLevel(g || mine || { shop: {} }, 'volume'));   // the price curve: each agent costs this much more than the last (volume pricing flattens it)
 const mineUpCost = (g, up) => Math.ceil(up.cost * (1 - 0.1 * Math.min(5, mineLevel(g, 'bulk'))));   // bulk licensing takes 10% off per level
 const mineComboWindow = (g) => mineHas(g, 'coach') ? 1500 : 900;
@@ -4298,13 +4310,13 @@ async function mineTrade(side, qty) {   // shares for stars at the ask, stars fo
   if (side === 'buy') {
     const ask = mineAsk(g); const n = qty === 'max' ? Math.floor(g.stars / ask) : qty; const cost = Math.ceil(n * ask); if (n < 1 || g.stars < cost) return;
     const dip = g.px <= g.fair * 0.95; g.basis = (g.basis * g.shares + cost) / (g.shares + n); g.shares += n; g.stars -= cost; g.invested += cost; g.bought += n; g.trades += 1; if (dip) g.dipBuys += 1;
-    mineNote(`bought ${fmtInt(n)} share${n === 1 ? '' : 's'} at ${fmtPx(ask)} for ${fmtInt(cost)} star${cost === 1 ? '' : 's'}${dip ? ' · on the dip' : ''}`);
+    mineNote(`bought ${fmtFull(n)} share${n === 1 ? '' : 's'} at ${fmtPx(ask)} for ${fmtFull(cost)} star${cost === 1 ? '' : 's'}${dip ? ' · on the dip' : ''}`);
   } else {
     if (g.shares < 1) return;
-    if (qty === 'all') { const got = Math.floor(g.shares * mineBid(g)); const ok = await confirmDialog(`Sell all ${fmtInt(g.shares)} share${g.shares === 1 ? '' : 's'}?`, `About ${fmtInt(got)} stars at the bid. The market cap goes to nothing until you buy back in, and the mine with it: from ×${fmtMine(Math.round(mineMult(g) * 100) / 100)} to ×${fmtMine(Math.round(mineMultWith({ ...g, shares: 0 }, g.stars + got) * 100) / 100)}.`); if (!ok) return; g = mineAccrue(); if (g.shares < 1) return; }
+    if (qty === 'all') { const got = Math.floor(g.shares * mineBid(g)); const ok = await confirmDialog(`Sell all ${fmtFull(g.shares)} share${g.shares === 1 ? '' : 's'}?`, `About ${fmtFull(got)} stars at the bid. The market cap goes to nothing until you buy back in, and the mine with it: from ×${fmtMine(Math.round(mineMult(g) * 100) / 100)} to ×${fmtMine(Math.round(mineMultWith({ ...g, shares: 0 }, g.stars + got) * 100) / 100)}.`); if (!ok) return; g = mineAccrue(); if (g.shares < 1) return; }
     const n = qty === 'all' ? g.shares : Math.min(qty, g.shares); const bid = mineBid(g); const got = Math.floor(n * bid); if (got < 1) return;
     const gain = got - n * g.basis; const had = g.basis > 0; g.shares -= n; g.stars += got; g.cashed += got; g.trades += 1; if (gain > 0) g.gains += gain; if (!g.shares) g.basis = 0;
-    mineNote(`sold ${fmtInt(n)} share${n === 1 ? '' : 's'} at ${fmtPx(bid)} for ${fmtInt(got)} stars${had ? ` (${gain >= 0 ? 'up' : 'down'} ${fmtInt(Math.round(Math.abs(gain)))} on what they cost)` : ''}`);
+    mineNote(`sold ${fmtFull(n)} share${n === 1 ? '' : 's'} at ${fmtPx(bid)} for ${fmtFull(got)} stars${had ? ` (${gain >= 0 ? 'up' : 'down'} ${fmtFull(Math.round(Math.abs(gain)))} on what they cost)` : ''}`);
   }
   mineSave(true); mineCheck(g); mineRefresh();
 }
@@ -4356,7 +4368,7 @@ function mineOnEvent(sid, ev) {
 }
 function mineBuy(kind, id) {
   const g = mineAccrue();
-  if (kind === 'unit') { const u = mineUnitsAll(g).find((x) => x.id === id); if (!u) return; const owned = g.units[u.id] || 0; const n = mineBuyCount(u, g); const cost = n ? mineUnitCostN(u, owned, n) : Infinity; if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = owned + n; g.hired += n; if (n >= 100) g.bigHires += 1; if (n > 1) mineNote(`hired ${fmtInt(n)} × ${u.name} for ${fmtFull(cost)} tokens`); }
+  if (kind === 'unit') { const u = mineUnitsAll(g).find((x) => x.id === id); if (!u) return; const owned = g.units[u.id] || 0; const n = mineBuyCount(u, g); const cost = n ? mineUnitCostN(u, owned, n) : Infinity; if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = owned + n; g.hired += n; if (n >= 100) g.bigHires += 1; if (n > 1) mineNote(`hired ${fmtFull(n)} × ${u.name} for ${fmtFull(cost)} tokens`); }
   else if (kind === 'ups-all') { const [bought, spent] = mineBuyAllUps(g); if (!bought) return; mineNote(`bought ${bought} upgrade${bought === 1 ? '' : 's'} for ${fmtFull(spent)} tokens`); }
   else { const up = mineUpById(g, id); const c = up ? mineUpCost(g, up) : Infinity; if (!up || g.ups.includes(up.id) || g.bank < c) return; g.bank -= c; g.ups.push(up.id); g.upsBought += 1; }
   mineSave(); mineCheck(g); mineRefresh();
@@ -4407,10 +4419,10 @@ function mineRunLog(g, kind, got) {   // the last six runs, and the best time
 async function mineRelease() {
   let g = mineAccrue(); const can = mineStarsDue(g); if (can < 1) return;
   const keep = mineHas(g, 'keep') && g.ups.includes(g.keepUp) && mineUpById(g, g.keepUp);
-  const ok = await confirmDialog(`Cut release v${g.releases + 1}?`, `Every agent, upgrade and banked token goes. You keep ${fmtInt(can)} new star${can === 1 ? '' : 's'} (the mine goes from ×${fmtMine(Math.round(mineMult(g) * 100) / 100)} to ×${fmtMine(Math.round(mineMultWith(g, g.stars + can) * 100) / 100)}, or spend them in the star shop), the milestones, the clicks and the real-work counters. This run took ${fmtDurLong(mineRunSecs(g))}${g.bestRel ? ` (best: ${fmtDurLong(g.bestRel)})` : ''}.${mineHas(g, 'head') ? ` Head start: ${10 + 10 * mineLevel(g, 'onboard')} interns and the keyboard come straight back.` : ''}${keep ? ` Keep one: ${keep.name} survives.` : ''}`);
+  const ok = await confirmDialog(`Cut release v${g.releases + 1}?`, `Every agent, upgrade and banked token goes. You keep ${fmtFull(can)} new star${can === 1 ? '' : 's'} (the mine goes from ×${fmtMine(Math.round(mineMult(g) * 100) / 100)} to ×${fmtMine(Math.round(mineMultWith(g, g.stars + can) * 100) / 100)}, or spend them in the star shop), the milestones, the clicks and the real-work counters. This run took ${fmtDurLong(mineRunSecs(g))}${g.bestRel ? ` (best: ${fmtDurLong(g.bestRel)})` : ''}.${mineHas(g, 'head') ? ` Head start: ${10 + 10 * mineLevel(g, 'onboard')} interns and the keyboard come straight back.` : ''}${keep ? ` Keep one: ${keep.name} survives.` : ''}`);
   if (!ok) return; g = mineAccrue(); const got = mineStarsDue(g); if (got < 1) return; g.stars += got; g.starsEver += got; g.releases += 1; mineFairBump(g, 0.03);
   mineRunLog(g, 'release', got); mineRunReset(g);
-  mineSave(true); mineCheck(g); mineNote(`v${g.releases} shipped: ${fmtInt(g.stars)} star${g.stars === 1 ? '' : 's'} on the repo`); mineRefresh();
+  mineSave(true); mineCheck(g); mineNote(`v${g.releases} shipped: ${fmtFull(g.stars)} star${g.stars === 1 ? '' : 's'} on the repo`); mineRefresh();
 }
 // going public: the layer above releases. with a thousand stars held, every star held becomes shares with a first-day pop
 // (the market cap starts 25% over the stars earned on the listing that became them, more with a secondary offering), and from
@@ -4425,14 +4437,14 @@ const mineIpoPx = (g, n) => (g.ipo && g.px > 0 ? g.px : mineIpoValue(g) / Math.m
 async function mineIpo() {
   let g = mineAccrue(); if (g.stars < MINE_IPO_MIN) return; const got = mineIpoShares(g); if (got < 1) return;
   const px = mineIpoPx(g, got); const after = { ...g, shares: g.shares + got, ipo: g.ipo + 1, stars: 0, px }; const pop = Math.round((minePop(g) - 1) * 100);
-  const ok = await confirmDialog(g.ipo ? `List ${MINE_TICKER} again (listing ${g.ipo + 1})?` : `Take the repo public as ${MINE_TICKER}?`, `All ${fmtInt(g.stars)} stars held become ${fmtInt(got)} share${got === 1 ? '' : 's'} at ${fmtPx(px)} stars a share (${fmtInt(after.shares)} in all), with a first-day pop of ${pop}% on the ${fmtInt(Math.min(g.stars, g.starsEver))} earned on this listing: the market cap starts at ${fmtMine(Math.round(after.shares * px))} stars and lifts the mine like stars held do. ${g.ipo ? '' : `From then on the price moves (up on its own, up for good on real commits and releases, knocked about by news for a while) and the exchange trades shares for stars either way; stars held past ${fmtInt(mineSoftKnee(after))} count by their square root, the market cap in full. `}Stars, releases and the release star count start over on the new listing; the rank, the milestones, the real-work counters and everything from the shop stay. The mine goes from ×${fmtMine(Math.round(mineMult(g) * 100) / 100)} to ×${fmtMine(Math.round(mineMultWith(after, 0) * 100) / 100)}. The run resets like a release.`);
+  const ok = await confirmDialog(g.ipo ? `List ${MINE_TICKER} again (listing ${g.ipo + 1})?` : `Take the repo public as ${MINE_TICKER}?`, `All ${fmtFull(g.stars)} stars held become ${fmtFull(got)} share${got === 1 ? '' : 's'} at ${fmtPx(px)} stars a share (${fmtFull(after.shares)} in all), with a first-day pop of ${pop}% on the ${fmtFull(Math.min(g.stars, g.starsEver))} earned on this listing: the market cap starts at ${fmtMine(Math.round(after.shares * px))} stars and lifts the mine like stars held do. ${g.ipo ? '' : `From then on the price moves (up on its own, up for good on real commits and releases, knocked about by news for a while) and the exchange trades shares for stars either way; stars held past ${fmtFull(mineSoftKnee(after))} count by their square root, the market cap in full. `}Stars, releases and the release star count start over on the new listing; the rank, the milestones, the real-work counters and everything from the shop stay. The mine goes from ×${fmtMine(Math.round(mineMult(g) * 100) / 100)} to ×${fmtMine(Math.round(mineMultWith(after, 0) * 100) / 100)}. The run resets like a release.`);
   if (!ok) return; g = mineAccrue(); if (g.stars < MINE_IPO_MIN) return; const n = mineIpoShares(g); if (n < 1) return; const p = mineIpoPx(g, n);
   mineRunLog(g, 'ipo', n); g.basis = (g.basis * g.shares + g.stars) / (g.shares + n);   // what the shares cost: the stars that became them
   if (!g.ipo) { g.px = g.fair = g.pxIpo = g.pxOpen = g.pxHigh = p; g.fairAt = Date.now(); g.pxDay = mineDay(); g.shock = 0; g.noise = 0; g.event = null; g.hist = [[Date.now(), Math.round(p * 100) / 100]]; }
   g.ipoStars += g.starsEver; g.ipoReleases += g.releases; g.ipo += 1; g.shares += n; g.stars = 0; g.starsEver = 0; g.starsBonus = 0; g.releases = 0; g.totalIpo = g.total; g.mined = 0;
   mineRunReset(g); mineSave(true); mineCheck(g); mineApplyCosmetics(); mineNews(g);
   const b = $('#fun-body'); if (b) { delete b.dataset.built; renderFunView(); }
-  toast(`${MINE_TICKER} ${g.ipo > 1 ? 'listed again' : 'is public'}: ${fmtInt(n)} share${n === 1 ? '' : 's'} at ${fmtPx(p)}, ${fmtInt(g.shares)} outstanding`, 'ok'); if (mineHas(g, 'confetti') && g.cos.confetti) confettiBurst();
+  toast(`${MINE_TICKER} ${g.ipo > 1 ? 'listed again' : 'is public'}: ${fmtFull(n)} share${n === 1 ? '' : 's'} at ${fmtPx(p)}, ${fmtFull(g.shares)} outstanding`, 'ok'); if (mineHas(g, 'confetti') && g.cos.confetti) confettiBurst();
 }
 async function mineShopBuy(id) {   // a star (or a share) for a perk or a cosmetic; the star and its 10% go for good
   const g = mineAccrue(); const it = MINE_SHOP.find((x) => x.id === id); if (!it) return;
@@ -4492,10 +4504,10 @@ function confettiBurst() {
 // push the next release star further away. a day with all three done extends the streak; a missed day resets it.
 const mineDailyAvg = (g, n) => n / Math.max(1, Math.min(90, (Date.now() - g.started) / 86400000));   // a counter's average per day since the mine started (over at most ninety days)
 const MINE_SPRINTS = [   // the goals scale with the mine: clicks, hires, turns and commits off how much you usually do in a day, the rest off the run
-  { id: 'clicks', k: 'clicks', n: (g) => Math.max(100, Math.min(5000, Math.round(Math.max(250, mineDailyAvg(g, g.clicks) * 0.6) / 10) * 10)), w: 1, text: (n) => `click ${fmtInt(n)} times` },
+  { id: 'clicks', k: 'clicks', n: (g) => Math.max(100, Math.min(5000, Math.round(Math.max(250, mineDailyAvg(g, g.clicks) * 0.6) / 10) * 10)), w: 1, text: (n) => `click ${fmtFull(n)} times` },
   { id: 'mine', k: 'mined', n: (g) => Math.max(1000, Math.round(mineBaseRate(g) * 7200)), w: 2, text: (n) => `mine ${fmtMine(n)} tokens` },
   { id: 'catch', k: 'caught', n: 2, w: 2, text: (n) => `catch ${n} surprises` },
-  { id: 'hire', k: 'hired', n: (g) => Math.max(30, Math.round(mineAgents(g) * 0.25 / 10) * 10), w: 1, text: (n) => `hire ${fmtInt(n)} agents` },
+  { id: 'hire', k: 'hired', n: (g) => Math.max(30, Math.round(mineAgents(g) * 0.25 / 10) * 10), w: 1, text: (n) => `hire ${fmtFull(n)} agents` },
   { id: 'ups', k: 'upsBought', n: 1, w: 2, text: () => 'buy an upgrade' },
   { id: 'turns', k: (g) => g.real.turns, n: (g) => Math.max(5, Math.min(200, Math.round(mineDailyAvg(g, g.real.turns) * 0.5))), w: 2, text: (n) => `pay in ${n} real turns` },
   { id: 'commits', k: (g) => g.real.commits, n: (g) => Math.max(2, Math.min(50, Math.round(mineDailyAvg(g, g.real.commits) * 0.5))), w: 3, text: (n) => `pay in ${n} real commits` },
@@ -4505,7 +4517,7 @@ const MINE_SPRINTS = [   // the goals scale with the mine: clicks, hires, turns 
   { id: 'release', k: 'releases', n: 1, w: 3, text: () => 'cut a release' },
   { id: 'speed', k: 'fastRel', n: (g) => (g.bestRel ? Math.max(600, Math.round(g.bestRel * 1.25 / 60) * 60) : 7200), w: 3, text: (n) => `cut a release inside ${fmtDurLong(n)} of the last`, one: true },   // n is the target in seconds; counted when a release lands inside it
   { id: 'frenzy', k: 'frenzies', n: 1, w: 2, text: () => 'catch a timed boost' },
-  { id: 'spend', k: 'spent', n: (g) => Math.max(1, Math.round(g.stars * 0.01)), w: 1, text: (n) => `spend ${fmtInt(n)} star${n === 1 ? '' : 's'} in the shop` },
+  { id: 'spend', k: 'spent', n: (g) => Math.max(1, Math.round(g.stars * 0.01)), w: 1, text: (n) => `spend ${fmtFull(n)} star${n === 1 ? '' : 's'} in the shop` },
   { id: 'rtokens', k: (g) => g.real.tokens, n: (g) => Math.max(10000, Math.round(Math.max(20000, mineDailyAvg(g, g.real.tokens) * 0.5) / 1000) * 1000), w: 2, text: (n) => `pay in ${fmtMine(n)} tokens from real turns` },
   { id: 'bighire', k: 'bigHires', n: 1, w: 1, text: () => 'hire a hundred agents in one go' },
 ];
@@ -4536,12 +4548,12 @@ function mineWeekSprint(g) {   // one goal for the week, seven days of a daily o
 function mineSprintPayOut(g, goal, how) {   // a goal done: its stars into the bank of stars (counted as bonus so the next release star stays where it was)
   const s = MINE_SPRINTS.find((x) => x.id === goal.id); goal.done = true; const stars = mineSprintPay(g, goal);
   g.stars += stars; g.starsEver += stars; g.starsBonus += stars; g.sprintsDone += 1; if (goal.hard) g.hardDone += 1; if (goal.week) g.weeksDone += 1;
-  toast(`${goal.week ? 'weekly sprint' : goal.hard ? 'hard sprint' : 'sprint'} ${how || 'done'}: ${s.text(goal.n)} (+${fmtInt(stars)} star${stars === 1 ? '' : 's'})`, 'ok');
+  toast(`${goal.week ? 'weekly sprint' : goal.hard ? 'hard sprint' : 'sprint'} ${how || 'done'}: ${s.text(goal.n)} (+${fmtFull(stars)} star${stars === 1 ? '' : 's'})`, 'ok');
   return stars;
 }
 function mineAward(stars, why) {   // stars earned outside the mine (the arcade): into the bank of stars as bonus, so the next release star stays where it was; the toast says why
   const g = mineAccrue(); stars = Math.max(1, Math.round(stars)); g.stars += stars; g.starsEver += stars; g.starsBonus += stars;
-  mineSave(); mineCheck(g); if (state.view === 'fun') mineRefresh(); toast(`${why}: +${fmtInt(stars)} star${stars === 1 ? '' : 's'} to the mine`, 'ok'); return stars;
+  mineSave(); mineCheck(g); if (state.view === 'fun') mineRefresh(); toast(`${why}: +${fmtFull(stars)} star${stars === 1 ? '' : 's'} to the mine`, 'ok'); return stars;
 }
 function mineSprintCheck(g) {   // a goal reached pays its stars; all three regular ones in a day extend the streak, the hard one on top makes a perfect day
   const sp = mineSprintToday(g); let paid = 0;
@@ -4551,7 +4563,7 @@ function mineSprintCheck(g) {   // a goal reached pays its stars; all three regu
   const regular = sp.goals.filter((x) => !x.hard);
   if (paid && regular.every((x) => x.done) && !sp.clean) {
     sp.clean = true; g.sprintDays += 1; g.streak += 1; let extra = '';
-    if (mineHas(g, 'dividend') && mineCap(g) > 0) { const d = Math.max(1, Math.round(mineCap(g) * 0.01 * mineLevel(g, 'dividend'))); g.stars += d; g.starsEver += d; g.starsBonus += d; extra = ` · dividends: +${fmtInt(d)} star${d === 1 ? '' : 's'}`; }
+    if (mineHas(g, 'dividend') && mineCap(g) > 0) { const d = Math.max(1, Math.round(mineCap(g) * 0.01 * mineLevel(g, 'dividend'))); g.stars += d; g.starsEver += d; g.starsBonus += d; extra = ` · dividends: +${fmtFull(d)} star${d === 1 ? '' : 's'}`; }
     mineFairBump(g, 0.02);
     toast(`a clean sprint: all three done today${g.streak > 1 ? `, ${g.streak} days in a row` : ''}${extra}`, 'ok');
   }
@@ -4650,34 +4662,34 @@ function mineRefresh() {
   set('rate', fmtMine(Math.round(rate * 10) / 10)); set('click', fmtMine(Math.round(mineClickValue(g) * 10) / 10));
   set('combo', now - mineCombo.at < mineComboWindow(g) && mineCombo.n >= 5 ? ` · combo ×${mineComboMult(mineCombo.n, g).toFixed(2)}` : '');
   const boosts = [g.boost, g.clickBoost].filter((b) => mineBoostOn(b, now)).map((b) => `${b.name}: ${b.id === 'stash' ? 'clicks' : 'the mine'} ×${b.mult} for ${Math.ceil((b.until - now) / 1000)} s`); set('boost', boosts.join(' · '));
-  set('turns', fmtInt(g.real.turns)); set('rtokens', g.real.tokens ? fmtFull(g.real.tokens) + ' tokens from them' : ''); set('commits', fmtInt(g.real.commits)); set('bonus', g.real.bonus ? fmtFull(g.real.bonus) + ' in bonuses' : '');
-  set('total', fmtFull(g.total)); set('clicks', fmtInt(g.clicks)); set('bestcombo', g.bestCombo ? `×${g.bestCombo.toFixed(2)}` : '×1'); set('caught', fmtInt(g.caught)); set('since', 'since ' + fmtDate(new Date(g.started).toISOString().slice(0, 10)));
-  set('stars', fmtInt(g.stars)); set('starsever', g.ipo ? `${fmtInt(g.starsEver)} on this listing · ${fmtInt(mineStarsLife(g))} ever` : fmtInt(g.starsEver)); set('rank', mineRankLine(g) || 'none yet'); set('releases', g.ipo ? `${fmtInt(g.releases)} on this listing · ${fmtInt(g.releases + g.ipoReleases)} ever` : fmtInt(g.releases)); set('mult', `×${fmtMine(Math.round(mineMult(g) * 100) / 100)}${g.rounds ? ` · agents ×${fmtMine(Math.pow(2, g.rounds))} this run` : ''}`);
+  set('turns', fmtFull(g.real.turns)); set('rtokens', g.real.tokens ? fmtFull(g.real.tokens) + ' tokens from them' : ''); set('commits', fmtFull(g.real.commits)); set('bonus', g.real.bonus ? fmtFull(g.real.bonus) + ' in bonuses' : '');
+  set('total', fmtFull(g.total)); set('clicks', fmtFull(g.clicks)); set('bestcombo', g.bestCombo ? `×${g.bestCombo.toFixed(2)}` : '×1'); set('caught', fmtFull(g.caught)); set('since', 'since ' + fmtDate(new Date(g.started).toISOString().slice(0, 10)));
+  set('stars', fmtFull(g.stars)); set('starsever', g.ipo ? `${fmtFull(g.starsEver)} on this listing · ${fmtFull(mineStarsLife(g))} ever` : fmtFull(g.starsEver)); set('rank', mineRankLine(g) || 'none yet'); set('releases', g.ipo ? `${fmtFull(g.releases)} on this listing · ${fmtFull(g.releases + g.ipoReleases)} ever` : fmtFull(g.releases)); set('mult', `×${fmtMine(Math.round(mineMult(g) * 100) / 100)}${g.rounds ? ` · agents ×${fmtMine(Math.pow(2, g.rounds))} this run` : ''}`);
   set('run', `${fmtDurLong(mineRunSecs(g, now))}${g.bestRel ? ` · best ${fmtDurLong(g.bestRel)}` : ''}`);
   const can = mineStarsDue(g); const rel = box.querySelector('[data-m="rel"]'); const nextStar = Math.pow(g.starsEver - g.starsBonus + 1, 3) * 1e6;
   const relKey = can > 0 ? `go:${can}:${g.stars}` : `next:${nextStar}:${mineEta(g, g.bank + nextStar - g.mined)}`;
-  if (rel.dataset.key !== relKey) { rel.dataset.key = relKey; rel.innerHTML = can > 0 ? `<button data-mine="release">cut release v${g.releases + 1}: +${fmtInt(can)} star${can === 1 ? '' : 's'}</button><div class="ds">agents and bank reset; stars stay: the mine would run at ×${fmtMine(Math.round(mineMultWith(g, g.stars + can) * 100) / 100)}, or spend them in the shop</div>` : `<div class="ds">next star at ${fmtFull(nextStar)} tokens mined${g.ipo ? ' on this listing' : ' all time'} (${fmtFull(g.mined)} so far) · ${esc(mineEta(g, g.bank + nextStar - g.mined))}</div>`; }
+  if (rel.dataset.key !== relKey) { rel.dataset.key = relKey; rel.innerHTML = can > 0 ? `<button data-mine="release">cut release v${g.releases + 1}: +${fmtFull(can)} star${can === 1 ? '' : 's'}</button><div class="ds">agents and bank reset; stars stay: the mine would run at ×${fmtMine(Math.round(mineMultWith(g, g.stars + can) * 100) / 100)}, or spend them in the shop</div>` : `<div class="ds">next star at ${fmtFull(nextStar)} tokens mined${g.ipo ? ' on this listing' : ' all time'} (${fmtFull(g.mined)} so far) · ${esc(mineEta(g, g.bank + nextStar - g.mined))}</div>`; }
   // the exchange: before the listing, what going public does and the button for it; after, the quote, an hour of tape, the cap, the position, the news and the trade buttons
   const mk = $('#mine-market'); const canList = g.stars >= MINE_IPO_MIN && mineIpoShares(g) >= 1; const pop = Math.round((minePop(g) - 1) * 100);
   const mkKey = `${g.ipo}|${canList ? 1 : 0}|${mineLevel(g, 'analyst')}|${mineSoftKnee(g)}|${pop}`;
   if (mk.dataset.key !== mkKey) {
     mk.dataset.key = mkKey;
     const listBtn = canList ? `<div class="mine-rel"><button data-mine="ipo"><span data-m="mkt-list"></span></button><div class="ds">${g.ipo ? `a new listing: the stars held become shares at today's price, with the ${pop}% pop on the ones earned on this listing; stars and releases start over on it` : `the stars become shares with a ${pop}% first-day pop; stars and releases start over on the listing, everything else stays`}</div></div>` : '';
-    mk.innerHTML = !g.ipo ? `<div class="mine-market-cols"><div class="ds">with ${fmtInt(MINE_IPO_MIN)} stars held the repo can go public as ${MINE_TICKER}: every star held becomes shares with a ${pop}% first-day pop, so the market cap (shares × price) starts above the stars it replaced and lifts the mine the same way. from then on the price moves: up on its own, up for good on real commits and releases, knocked about by news for a while. shares trade for stars either way here, and buy the perks priced in shares.</div><div>${listBtn}</div></div>` :
+    mk.innerHTML = !g.ipo ? `<div class="mine-market-cols"><div class="ds">with ${fmtFull(MINE_IPO_MIN)} stars held the repo can go public as ${MINE_TICKER}: every star held becomes shares with a ${pop}% first-day pop, so the market cap (shares × price) starts above the stars it replaced and lifts the mine the same way. from then on the price moves: up on its own, up for good on real commits and releases, knocked about by news for a while. shares trade for stars either way here, and buy the perks priced in shares.</div><div>${listBtn}</div></div>` :
       `<div class="mine-market-cols"><div><div class="mine-quote"><b>${MINE_TICKER}</b><b class="px" data-m="mkt-px"></b><span class="chg" data-m="mkt-chg"></span></div><svg class="mine-spark" viewBox="0 0 200 40" preserveAspectRatio="none" aria-hidden="true"><polyline data-m="mkt-line" points=""/></svg>
       <div class="row"><span title="shares × price; what it is worth to the mine by itself, before stars held and milestones">market cap</span><b data-m="mkt-cap"></b></div><div class="row"><span>shares</span><b data-m="mkt-shares"></b></div><div class="row"><span>since listing</span><b data-m="mkt-since"></b></div>${mineHas(g, 'analyst') ? '<div class="row"><span>fair value</span><b data-m="mkt-fair"></b></div>' : ''}<div class="row"><span>the tape</span><b data-m="mkt-news"></b></div></div>
       <div><div class="mine-trade"><span class="dim">buy at <span data-m="mkt-ask"></span></span>${[1, 10, 100, 'max'].map((q) => `<button data-trade="buy:${q}">${q === 'max' ? 'max' : `×${q}`}</button>`).join('')}</div>
       <div class="mine-trade"><span class="dim">sell at <span data-m="mkt-bid"></span></span>${[1, 10, 100, 'all'].map((q) => `<button data-trade="sell:${q}">${q === 'all' ? 'all' : `×${q}`}</button>`).join('')}</div>${listBtn}
-      <div class="ds">shares × price is the market cap; every star of it lifts the mine like a star held, in full (stars held past ${fmtInt(mineSoftKnee(g))} count by their square root). the price drifts up on its own, jumps for good on real commits and releases, and news knocks it about for ten minutes or so: buy the dips with stars, sell the pops for stars to spend in the shop. shares also buy the perks priced in shares.</div></div></div>`;
+      <div class="ds">shares × price is the market cap; every star of it lifts the mine like a star held, in full (stars held past ${fmtFull(mineSoftKnee(g))} count by their square root). the price drifts up on its own, jumps for good on real commits and releases, and news knocks it about for ten minutes or so: buy the dips with stars, sell the pops for stars to spend in the shop. shares also buy the perks priced in shares.</div></div></div>`;
   }
   set('mkt-h', g.ipo ? `${MINE_TICKER} · listing ${g.ipo}` : 'not listed yet');
-  if (canList) { const n = mineIpoShares(g); set('mkt-list', `${g.ipo ? 'list again' : `go public as ${MINE_TICKER}`}: ${fmtInt(g.stars)} stars → +${fmtInt(n)} share${n === 1 ? '' : 's'} at ${fmtPx(mineIpoPx(g, n))}`); }
+  if (canList) { const n = mineIpoShares(g); set('mkt-list', `${g.ipo ? 'list again' : `go public as ${MINE_TICKER}`}: ${fmtFull(g.stars)} stars → +${fmtFull(n)} share${n === 1 ? '' : 's'} at ${fmtPx(mineIpoPx(g, n))}`); }
   if (g.ipo) {
-    const cap = mineCap(g); const chg = g.pxOpen > 0 ? g.px / g.pxOpen - 1 : 0; const pct = (x, sign = true) => `${sign ? (x >= 0 ? '+' : '-') : ''}${Math.abs(x * 100) < 10 ? Math.abs(x * 100).toFixed(1) : fmtInt(Math.round(Math.abs(x * 100)))}%`;
+    const cap = mineCap(g); const chg = g.pxOpen > 0 ? g.px / g.pxOpen - 1 : 0; const pct = (x, sign = true) => `${sign ? (x >= 0 ? '+' : '-') : ''}${Math.abs(x * 100) < 10 ? Math.abs(x * 100).toFixed(1) : fmtFull(Math.round(Math.abs(x * 100)))}%`;
     set('mkt-px', fmtPx(g.px)); const chgEl = mk.querySelector('[data-m="mkt-chg"]'); const chgTxt = `${chg >= 0 ? '▲' : '▼'} ${pct(chg)} today`; if (chgEl.textContent !== chgTxt) chgEl.textContent = chgTxt; const chgCls = `chg ${chg >= 0 ? 'up' : 'down'}`; if (chgEl.className !== chgCls) chgEl.className = chgCls;
     const svg = mk.querySelector('.mine-spark'); const line = mk.querySelector('[data-m="mkt-line"]'); const pts = mineSpark(g.hist); if (line.getAttribute('points') !== pts) line.setAttribute('points', pts); const dir = `mine-spark ${g.hist.length > 1 && g.hist[g.hist.length - 1][1] < g.hist[0][1] ? 'down' : 'up'}`; if (svg.getAttribute('class') !== dir) svg.setAttribute('class', dir);
     set('mkt-cap', `${fmtMine(Math.round(cap))} stars · ×${fmtMine(Math.round((1 + mineStarPct(g) * cap) * 100) / 100)} on its own`);
-    set('mkt-shares', `${fmtInt(g.shares)}${g.shares && g.basis ? ` · cost ${fmtPx(g.basis)} each · ${pct(g.px / g.basis - 1)}` : ''}`);
+    set('mkt-shares', `${fmtFull(g.shares)}${g.shares && g.basis ? ` · cost ${fmtPx(g.basis)} each · ${pct(g.px / g.basis - 1)}` : ''}`);
     set('mkt-since', `${g.pxIpo ? pct(g.px / g.pxIpo - 1) : 'n/a'}${g.pxHigh ? ` · high ${fmtPx(g.pxHigh)}` : ''}`);
     if (mineHas(g, 'analyst')) set('mkt-fair', `${fmtPx(g.fair)} · ${Math.abs(g.px / g.fair - 1) < 0.005 ? 'at fair' : g.px < g.fair ? `${pct(1 - g.px / g.fair, false)} under fair${g.px <= g.fair * 0.95 ? ': a dip' : ''}` : `${pct(g.px / g.fair - 1, false)} over fair`}`);
     const ev = g.event && now - g.event.at < 1800000 ? g.event : null; set('mkt-news', ev ? `${ev.name}: ${pct(ev.pct)}${Math.abs(g.shock) >= 0.01 ? ` · ${pct(g.shock)} still to fade` : ' · faded'}` : 'quiet trading');
@@ -4685,16 +4697,16 @@ function mineRefresh() {
     for (const b of mk.querySelectorAll('[data-trade]')) { const [side, q] = b.dataset.trade.split(':'); const off = side === 'buy' ? g.stars < (q === 'max' ? ask : Math.ceil(Number(q) * ask)) : g.shares < (q === 'all' ? 1 : Number(q)); if (b.disabled !== off) b.disabled = off; }
   }
   const runsEl = box.querySelector('[data-m="runs"]'); const runsKey = g.runs.map((r) => r.at).join(',');
-  if (runsEl.dataset.key !== runsKey) { runsEl.dataset.key = runsKey; runsEl.innerHTML = g.runs.length ? `<span class="dim">runs</span>${g.runs.slice().reverse().map((r) => `<span title="${esc(new Date(r.at).toLocaleString())}">${r.kind === 'ipo' ? 'went public' : `v${r.v}`} · ${fmtDurLong(r.secs)} · +${fmtInt(r.got)} ${r.kind === 'ipo' ? 'share' : 'star'}${r.got === 1 ? '' : 's'}</span>`).join('')}` : ''; }
+  if (runsEl.dataset.key !== runsKey) { runsEl.dataset.key = runsKey; runsEl.innerHTML = g.runs.length ? `<span class="dim">runs</span>${g.runs.slice().reverse().map((r) => `<span title="${esc(new Date(r.at).toLocaleString())}">${r.kind === 'ipo' ? 'went public' : `v${r.v}`} · ${fmtDurLong(r.secs)} · +${fmtFull(r.got)} ${r.kind === 'ipo' ? 'share' : 'star'}${r.got === 1 ? '' : 's'}</span>`).join('')}` : ''; }
   const unitsEl = $('#mine-units'); const ukey = `${mineUnitsOpen(g).map((u) => u.id).join(',')}|${JSON.stringify(g.names)}|${mineHas(g, 'names') ? 1 : 0}`;
   if (unitsEl.dataset.key !== ukey) { unitsEl.dataset.key = ukey; unitsEl.innerHTML = mineUnitsOpen(g).map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${mineHas(g, 'names') ? `<span class="rn" data-rename="${u.id}" title="rename">${esc(mineUnitName(g, u))}</span>` : esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join(''); }
   const um = mineUpsMult(g);
   for (const u of mineUnitsOpen(g)) {
     const row = box.querySelector(`[data-unit="${u.id}"]`); const n = g.units[u.id] || 0; const cost = mineUnitCost(u, n);
     row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.classList.toggle('owned', n > 0); row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * um * mineMult(g) * mineAgentMult(g) * 10) / 10)}/s` : '';
-    const fl = row.querySelector('[data-m="floor"]'); const floor = n ? u.glyph.repeat(Math.min(n, 60)) + (n > 60 ? ` +${fmtInt(n - 60)}` : '') : ''; if (fl.textContent !== floor) fl.textContent = floor;
+    const fl = row.querySelector('[data-m="floor"]'); const floor = n ? u.glyph.repeat(Math.min(n, 60)) + (n > 60 ? ` +${fmtFull(n - 60)}` : '') : ''; if (fl.textContent !== floor) fl.textContent = floor;
     const k = mineBuyCount(u, g); const costK = k ? mineUnitCostN(u, n, k) : cost;
-    row.querySelector('[data-m="cost"]').textContent = k > 1 ? `×${fmtInt(k)} · ${fmtMine(costK)} tokens` : `${fmtMine(costK)} tokens`; row.querySelector('button').disabled = !k || g.bank < costK;
+    row.querySelector('[data-m="cost"]').textContent = k > 1 ? `×${fmtFull(k)} · ${fmtMine(costK)} tokens` : `${fmtMine(costK)} tokens`; row.querySelector('button').disabled = !k || g.bank < costK;
   }
   const open = mineUpgradesOpen(g); const key = `${open.map((u) => u.id).join(',')}|${mineLevel(g, 'bulk')}`;
   const ups = $('#mine-ups');
@@ -4705,7 +4717,7 @@ function mineRefresh() {
   const sp = mineSprintToday(g); const wk = mineWeekSprint(g);
   const rowOf = (goal) => { const s = MINE_SPRINTS.find((x) => x.id === goal.id); const have = s.one ? (goal.done ? 1 : 0) : Math.min(goal.n, Math.max(0, mineCounter(g, s.k) - goal.base)); return [s, goal, have]; };
   const rows = sp.goals.map(rowOf); const wrow = rowOf(wk.goal);
-  const rowHtml = ([s, goal, have]) => { const stars = mineSprintPay(g, goal); const tag = goal.week ? 'this week' : goal.hard ? 'hard' : ''; return `<div class="mine-sprint${goal.done ? ' on' : ''}${goal.hard ? ' hard' : ''}${goal.week ? ' week' : ''}"><div><b>${tag ? `<span class="tag">${tag}</span>` : ''}${esc(s.text(goal.n))}</b><div class="ds">${goal.done ? 'done' : s.one ? 'not yet' : `${fmtMine(have)} of ${fmtMine(goal.n)}`} · ${fmtInt(stars)} star${stars === 1 ? '' : 's'}</div></div>${goal.done ? '<span class="owned">done</span>' : `<div class="bar" title="${esc(s.one ? 'not yet' : `${fmtMine(have)} of ${fmtMine(goal.n)}`)}"><i style="width:${s.one ? 0 : Math.round(100 * have / goal.n)}%"></i></div>`}</div>`; };
+  const rowHtml = ([s, goal, have]) => { const stars = mineSprintPay(g, goal); const tag = goal.week ? 'this week' : goal.hard ? 'hard' : ''; return `<div class="mine-sprint${goal.done ? ' on' : ''}${goal.hard ? ' hard' : ''}${goal.week ? ' week' : ''}"><div><b>${tag ? `<span class="tag">${tag}</span>` : ''}${esc(s.text(goal.n))}</b><div class="ds">${goal.done ? 'done' : s.one ? 'not yet' : `${fmtMine(have)} of ${fmtMine(goal.n)}`} · ${fmtFull(stars)} star${stars === 1 ? '' : 's'}</div></div>${goal.done ? '<span class="owned">done</span>' : `<div class="bar" title="${esc(s.one ? 'not yet' : `${fmtMine(have)} of ${fmtMine(goal.n)}`)}"><i style="width:${s.one ? 0 : Math.round(100 * have / goal.n)}%"></i></div>`}</div>`; };
   const spKey = `${sp.day}|${rows.map(([, goal, have]) => `${goal.id}:${goal.n}:${have}:${goal.done ? 1 : 0}`).join(',')}|${mineSprintUnit(g)}`; const spEl = $('#mine-sprints');
   if (spEl.dataset.key !== spKey) { spEl.dataset.key = spKey; spEl.innerHTML = rows.map(rowHtml).join(''); }
   const wkKey = `${wk.key}|${wrow[1].id}:${wrow[1].n}:${wrow[2]}:${wrow[1].done ? 1 : 0}|${mineSprintUnit(g)}`; const wkEl = $('#mine-week');
@@ -4717,14 +4729,14 @@ function mineRefresh() {
   const sprintOpen = sp.goals.find((x) => !x.done); const shopKey = `${g.stars}|${g.shares}|${g.ipo}|${g.rounds}|${g.starsEver}|${sprintOpen ? sprintOpen.id : ''}|${JSON.stringify(g.shop)}|${g.keepUp}|${JSON.stringify(g.cos)}|${g.ups.includes(g.keepUp)}`; const shopEl = $('#mine-shop-perk');
   if (shopEl.dataset.key !== shopKey) {
     shopEl.dataset.key = shopKey;
-    const row = (it) => { const lvl = mineLevel(g, it.id), max = it.max || 1, cost = mineShopCost(it, lvl, g); return `<button class="mine-tile" data-star="${it.id}" title="${esc(it.desc)}${cost == null ? '' : ` · ${mineCurName(it, cost)}`}" ${cost == null || mineWallet(g, it) < cost ? 'disabled' : ''}><b>${esc(it.name)}</b><span>${max === Infinity ? (lvl ? `<i>lvl ${fmtInt(lvl)}</i>` : '') : max > 1 ? `<i>${lvl}/${max}</i>` : ''}${cost == null ? 'none open' : `${fmtInt(cost)} ${it.cur === 'shares' ? 'sh' : '★'}`}</span></button>`; };   // a tile is the buy button: the name and the price, the blurb as the tooltip and in the confirm
+    const row = (it) => { const lvl = mineLevel(g, it.id), max = it.max || 1, cost = mineShopCost(it, lvl, g); return `<button class="mine-tile" data-star="${it.id}" title="${esc(it.desc)}${cost == null ? '' : ` · ${mineCurName(it, cost)}`}" ${cost == null || mineWallet(g, it) < cost ? 'disabled' : ''}><b>${esc(it.name)}</b><span>${max === Infinity ? (lvl ? `<i>lvl ${fmtFull(lvl)}</i>` : '') : max > 1 ? `<i>${lvl}/${max}</i>` : ''}${cost == null ? 'none open' : `${fmtFull(cost)} ${it.cur === 'shares' ? 'sh' : '★'}`}</span></button>`; };   // a tile is the buy button: the name and the price, the blurb as the tooltip and in the confirm
     const open = (it) => !it.need || mineHas(g, it.need); const done = (it) => mineLevel(g, it.id) >= (it.max || 1);
     const group = (name) => { const items = MINE_SHOP.filter((it) => it.group === name && open(it)); const owned = items.filter(done); return (owned.length ? `<div class="mine-owned"><span class="dim">owned</span>${owned.map((it) => esc(it.name)).join(' · ')}</div>` : '') + items.filter((it) => !done(it)).map(row).join(''); };   // what is owned folds into one line so the rows left are the ones still to buy
     shopEl.innerHTML = group('perk');
     $('#mine-shop-kcoder').innerHTML = group('kcoder');
     $('#mine-shop-shares').innerHTML = g.ipo ? group('shares') : `<div class="dim">opens when the repo goes public: shares buy four more agents, an analyst, a prime broker, dividends, a second wire and more</div>`;
-    set('sharesn', g.ipo ? `${fmtInt(g.shares)} share${g.shares === 1 ? '' : 's'} to spend` : '');
-    set('shopn', `${fmtInt(g.stars)} star${g.stars === 1 ? '' : 's'} to spend · ${fmtInt(g.spent)} spent`);
+    set('sharesn', g.ipo ? `${fmtFull(g.shares)} share${g.shares === 1 ? '' : 's'} to spend` : '');
+    set('shopn', `${fmtFull(g.stars)} star${g.stars === 1 ? '' : 's'} to spend · ${fmtFull(g.spent)} spent`);
     const pick = (k, cur, opts) => `<span class="mine-qty">${opts.map(([v, label]) => `<button data-cos="${k}" data-val="${esc(v)}" class="${cur === v ? 'sel' : ''}">${esc(label)}</button>`).join('')}</span>`;
     const lines = [];
     const skins = Object.entries(MINE_SKINS).filter(([id]) => mineHas(g, `skin-${id}`)); if (skins.length) lines.push(`<div class="row"><span>banner</span>${pick('skin', mineHas(g, `skin-${g.cos.skin}`) ? g.cos.skin : '', [['', 'kcoder blue'], ...skins])}</div>`);

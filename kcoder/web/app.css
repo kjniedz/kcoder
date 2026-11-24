@@ -167,6 +167,9 @@ a { color: var(--accent-text); }
 .dot.error { background: var(--red); }
 .dot.capped, .dot.archived { background: var(--fg-mute); }
 .dot.paused { background: var(--yellow); }
+.dot.job { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }   /* the turn is over, a background job is still running */
+.pane.st-job { border-color: var(--yellow); }
+.pane-status .jobl { color: var(--yellow); }
 .pane-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 8px; font-size: 11.5px; }
 .pane-body.term { white-space: pre-wrap; word-break: break-word; }
 .pane-body .chat-log { padding: 0; }
@@ -457,6 +460,7 @@ select:hover { border-color: var(--accent); }
 .badge.working { background: rgba(251,146,60,.18); color: var(--running); }
 .badge.waiting { background: var(--accent-soft); color: var(--accent-text); }
 .badge.idle { color: var(--fg-mute); }
+.badge.job { background: rgba(251,191,36,.16); color: var(--yellow); }
 .badge.error { background: rgba(248,113,113,.18); color: var(--red); }
 .approval.review { border-color: var(--accent); }
 .approval.connector { border-color: var(--accent); }
@@ -657,6 +661,7 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .funview { flex-direction: column; }
 .fun-tabs { display: flex; align-items: center; gap: 10px; padding: 3px 18px; border-bottom: 1px solid var(--line); background: var(--bg-2); flex: 0 0 auto; font-size: 11.5px; } .fun-tabs .fun-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fun-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 28px; }
+.fun-game { display: flex; flex-direction: column; padding-bottom: 14px; } .fun-game > :first-child { margin: auto; width: 100%; }   /* a game shorter than the pane sits in the middle of it; a taller one scrolls from the top (auto margins, not justify-content, so nothing is cut off above) */
 .mine { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; position: relative; }
 .mine-head { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; position: relative; padding-top: 6px; }
 .mine-btn { background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 14px 18px; cursor: pointer; user-select: none; -webkit-user-select: none; transition: transform .06s; }
@@ -667,12 +672,15 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .mine-btn:hover { box-shadow: 0 0 28px rgba(127, 197, 255, .18); }
 @media (max-width: 700px) { .mine-btn .banner { font-size: 9px; } }
 .mine-nums { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.mine-bank { font-size: 44px; line-height: 1.1; font-weight: 700; color: var(--accent-text); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.mine-bank { font-size: 44px; line-height: 1.1; font-weight: 700; color: var(--accent-text); font-variant-numeric: tabular-nums; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.mine-nums > .dim { overflow-wrap: anywhere; }
+@media (max-width: 700px) { .mine-bank { font-size: 30px; } }
 .mine-nums .dim, .mine .dim { color: var(--fg-mute); }
 .mine-note { min-height: 16px; font-size: 12px; color: var(--green); }
+.mine-note, .mine-boost, .mine-ach-info { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* one line each, so a note coming and going never moves the page */
 .mine-combo { color: var(--yellow); font-weight: 600; }
 .mine-boost { min-height: 16px; font-size: 12px; color: var(--yellow); font-variant-numeric: tabular-nums; }
-.mine-ticker { font-size: 12px; color: var(--fg-dim); padding: 6px 10px; border: 1px dashed var(--line-2); border-radius: 6px; }
+.mine-ticker { font-size: 12px; color: var(--fg-dim); padding: 6px 10px; border: 1px dashed var(--line-2); border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mine-ticker .dim { text-transform: uppercase; letter-spacing: .05em; font-size: 10px; margin-right: 8px; }
 .mine-gold { position: fixed; z-index: 3; cursor: pointer; background: var(--bg-2); border: 1px solid var(--yellow); color: var(--yellow); border-radius: 20px; padding: 6px 14px; font-weight: 600; font-size: 12.5px; box-shadow: 0 0 16px rgba(251, 191, 36, .35); animation: minegold 1.1s ease-in-out infinite alternate; user-select: none; -webkit-user-select: none; }
 @keyframes minegold { from { transform: scale(1); } to { transform: scale(1.1); } }
@@ -707,9 +715,9 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .mine-unit .nm { font-weight: 600; } .mine-unit .nm b { color: var(--accent-text); margin-left: 6px; } .mine-unit .nm span { color: var(--fg-mute); font-weight: 400; margin-left: 6px; }
 .mine-unit .ds { color: var(--fg-mute); font-size: 11px; }
 .mine-unit .nm, .mine-unit .ds, .mine-unit .fl { grid-column: 1; }
-.mine-unit .fl { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; line-height: 1.2; color: var(--accent-text); word-break: break-all; }
+.mine-unit .fl { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; line-height: 1.2; color: var(--accent-text); overflow-wrap: anywhere; }   /* the glyph run breaks anywhere, the "+1,074" after it stays whole */
 .mine-unit .fl:empty { display: none; }
-.mine-unit button { grid-column: 2; grid-row: 1 / span 4; min-width: 116px; }
+.mine-unit button { grid-column: 2; grid-row: 1 / span 4; min-width: 116px; max-width: 170px; white-space: normal; line-height: 1.25; }   /* "57.2 quattuorvigintillion tokens" wraps inside the button instead of squeezing the row */
 .mine-unit button:disabled { opacity: .45; cursor: default; }
 .mine-ups { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .mine-up { display: flex; align-items: center; gap: 10px; }

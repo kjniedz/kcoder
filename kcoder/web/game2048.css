@@ -35,5 +35,5 @@
 .g2048-over .t { font-size: 30px; font-weight: 800; color: var(--accent-text); } .g2048-over .b { display: flex; gap: 6px; margin-top: 6px; }
 .g2048-foot { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 11.5px; } .g2048-foot button { white-space: nowrap; } .g2048-foot .dim { margin-left: auto; text-align: right; }
 .g2048-foot button:disabled { opacity: .45; cursor: default; }
-.g2048-stats { margin-top: 8px; font-size: 11.5px; } .g2048 .ds { color: var(--fg-mute); font-size: 11px; margin-top: 10px; }
+.g2048-stats { margin-top: 8px; font-size: 11.5px; min-height: 15px; } .g2048 .ds { color: var(--fg-mute); font-size: 11px; margin-top: 10px; }
 @media (max-width: 560px) { .g2048 { --cell: calc((100vw - 36px - 5 * var(--gap)) / 4); } .g2048-head { flex-direction: column; align-items: flex-start; } .g2048-foot { flex-wrap: wrap; } .g2048-foot .dim { margin-left: 0; text-align: left; width: 100%; } }

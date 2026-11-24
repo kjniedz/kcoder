@@ -488,7 +488,9 @@ error details, and an "approve all" button answers every approval at once.
   with every upgrade bought earns the "beat the mine" milestone (the total
   family still runs on past a vigintillion by powers of ten). Every count
   shows its digits up to a trillion and reads as words from there (4.52
-  quadrillion), so the bank never outgrows its card.
+  quadrillion, 1.34 sexvigintillion, on up to a centillion, which is past
+  what a number can hold), never as 1.34e80 or forty digits, and the long
+  words wrap inside their buttons and cards so the page keeps its shape.
   The rank (token miner, foreman, pit boss, token baron... the multiverse,
   the omniverse, the simulation, the heat death, the reboot and on by
   powers of ten) follows stars ever earned over every listing, with a
