@@ -716,7 +716,9 @@ html[data-cond="moon"] { --bg: #0B0E15; --bg-2: #10151F; --bg-3: #141C28; --line
 .mine-unit:first-child { border-top: none; padding-top: 2px; }
 .mine-unit .nm { font-weight: 600; } .mine-unit .nm b { color: var(--accent-text); margin-left: 6px; } .mine-unit .nm span { color: var(--fg-mute); font-weight: 400; margin-left: 6px; }
 .mine-unit .ds { color: var(--fg-mute); font-size: 11px; }
-.mine-unit .nm, .mine-unit .ds, .mine-unit .fl { grid-column: 1; }
+.mine-unit .nm, .mine-unit .ds, .mine-unit .ul, .mine-unit .fl { grid-column: 1; }
+.mine-unit .ul { color: var(--accent-text); font-size: 11px; }   /* the agent's unlocks: a thousand hired and every hundred more double it */
+.mine-unit .ul:empty { display: none; }
 .mine-unit .fl { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; line-height: 1.2; color: var(--accent-text); overflow-wrap: anywhere; }   /* the glyph run breaks anywhere, the "+1,074" after it stays whole */
 .mine-unit .fl:empty { display: none; }
 .mine-unit button { grid-column: 2; grid-row: 1 / span 4; min-width: 116px; max-width: 170px; white-space: normal; line-height: 1.25; }   /* "57.2 quattuorvigintillion tokens" wraps inside the button instead of squeezing the row */

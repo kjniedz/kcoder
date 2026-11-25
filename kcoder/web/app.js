@@ -3936,7 +3936,8 @@ async function exportStatsCsv() {
 // Click the banner for tokens and spend them on agents that mine on their own. Real work feeds it:
 // every finished turn pays its output tokens into the bank and every commit a session makes pays a
 // bonus. Fast clicking builds a combo, surprises pop up now and then (catch one for a lump or a
-// timed boost), milestones each add 2% to the mine, and once enough has been mined all time you
+// timed boost), milestones each add 2% to the mine, an agent kind with a thousand hired unlocks ×2
+// (and again at every hundred more), and once enough has been mined all time you
 // can cut a release: agents and bank go, stars stay (+10% each, forever). Progress lives in
 // localStorage (kcoder.mine) and is mirrored into the daemon's ui_state so the app window and a
 // browser tab share one mine; the mine keeps going up to eight hours while away.
@@ -4007,6 +4008,13 @@ const MINE_SURPRISES = [
   { id: 'stash', name: 'the intern found a stash', weight: 10, kind: 'clicks', mult: 50, sec: 13 },
 ];
 const mineAgents = (g) => Object.values(g.units).reduce((s, n) => s + (Number(n) || 0), 0);
+// unlocks: an agent kind with a thousand hired mines twice as fast, and again at every hundred more (1,100, 1,200...)
+// with no last one. Nothing to buy and nothing saved: it follows the count, so a release takes it with the agents
+const MINE_UNLOCK_AT = 1000, MINE_UNLOCK_EVERY = 100;
+const mineUnlocks = (n) => (n >= MINE_UNLOCK_AT ? 1 + Math.floor((n - MINE_UNLOCK_AT) / MINE_UNLOCK_EVERY) : 0);
+const mineUnlockMult = (n) => Math.pow(2, mineUnlocks(n));
+const mineUnlockNext = (n) => MINE_UNLOCK_AT + mineUnlocks(n) * MINE_UNLOCK_EVERY;   // the count the next unlock lands at
+const mineUnlocksAll = (g) => MINE_UNITS.reduce((s, u) => s + mineUnlocks(g.units[u.id] || 0), 0);
 // every milestone knows how far along it is: ms() builds one from a counter and a target (the target may
 // depend on the mine, as "one of every agent" does), test is counter >= target and prog is [counter, target]
 // for the popup's bar; flag() is a yes-or-no milestone, whose bar is empty or full
@@ -4049,6 +4057,9 @@ const MINE_MILESTONES = [
   ms('daemon1', 'self-hosted', 'hire the daemon', (g) => g.units.daemon || 0, 1),
   ms('mythos1', 'approved organisation', 'hire Mythos', (g) => g.units.mythos || 0, 1),
   ms('agents1k', 'a city', 'a thousand agents at once', mineAgents, 1000),
+  ms('unlock1', 'levelled up', 'a thousand of one kind of agent: its first unlock', mineUnlocksAll, 1, { unit: 'unlocks' }),
+  ms('unlock17', 'everyone levelled', 'an unlock on every one of the seventeen agents', (g) => MINE_UNITS.filter((u) => mineUnlocks(g.units[u.id] || 0) >= 1).length, () => MINE_UNITS.length, { unit: 'agents with an unlock' }),
+  ms('unlock100', 'a hundred unlocks', 'a hundred unlocks across the agents at once', mineUnlocksAll, 100, { unit: 'unlocks' }),
   ms('total1q', 'a quadrillion', '1,000,000,000,000,000 tokens mined all time', (g) => g.total, 1e15),
   ms('total1qi', 'a quintillion', '1,000,000,000,000,000,000 tokens mined all time', (g) => g.total, 1e18),
   ms('stars100', 'a hundred stars', 'a hundred stars earned', (g) => g.starsEver, 100),
@@ -4374,7 +4385,7 @@ async function mineTrade(side, qty) {   // shares for stars at the ask, stars fo
   mineSave(true); mineCheck(g); mineRefresh();
 }
 const mineAgentMult = (g) => (1 + 0.25 * mineLevel(g, 'vp')) * Math.pow(2, g.rounds);   // the agents only: VPs of engineering and this run's funding rounds
-function mineBaseRate(g) { let r = 0; for (const u of mineUnitsAll(g)) r += (g.units[u.id] || 0) * u.rate; return r * mineUpsMult(g) * mineMult(g) * mineAgentMult(g); }
+function mineBaseRate(g) { let r = 0; for (const u of mineUnitsAll(g)) { const n = g.units[u.id] || 0; r += n * u.rate * mineUnlockMult(n); } return r * mineUpsMult(g) * mineMult(g) * mineAgentMult(g); }
 const mineBoostOn = (b, now = Date.now()) => !!(b && b.until > now && b.mult > 1);
 function mineRate(g) { return mineBaseRate(g) * (mineBoostOn(g.boost) ? g.boost.mult : 1); }
 function mineClickValue(g) { let v = 1, sec = 0; for (const id of g.ups) { const up = mineUpById(g, id); if (!up) continue; if (up.click) v *= up.click; if (up.clickSec) sec += up.clickSec; } return v * mineMult(g) * (1 + 0.25 * mineLevel(g, 'ergo')) * (mineBoostOn(g.clickBoost) ? g.clickBoost.mult : 1) + mineRate(g) * sec; }
@@ -4421,7 +4432,8 @@ function mineOnEvent(sid, ev) {
 }
 function mineBuy(kind, id) {
   const g = mineAccrue();
-  if (kind === 'unit') { const u = mineUnitsAll(g).find((x) => x.id === id); if (!u) return; const owned = g.units[u.id] || 0; const n = mineBuyCount(u, g); const cost = n ? mineUnitCostN(u, owned, n) : Infinity; if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = owned + n; g.hired += n; if (n >= 100) g.bigHires += 1; if (n > 1) mineNote(`hired ${fmtFull(n)} × ${u.name} for ${fmtFull(cost)} tokens`); }
+  if (kind === 'unit') { const u = mineUnitsAll(g).find((x) => x.id === id); if (!u) return; const owned = g.units[u.id] || 0; const n = mineBuyCount(u, g); const cost = n ? mineUnitCostN(u, owned, n) : Infinity; if (g.bank < cost) return; g.bank -= cost; g.units[u.id] = owned + n; g.hired += n; if (n >= 100) g.bigHires += 1; if (n > 1) mineNote(`hired ${fmtFull(n)} × ${u.name} for ${fmtFull(cost)} tokens`);
+    const ul = mineUnlocks(owned + n); if (ul > mineUnlocks(owned)) toast(`unlock ${ul}: ${fmtFull(owned + n)} × ${mineUnitName(g, u)}, every one of them mines ×${fmtMine(mineUnlockMult(owned + n))}`); }
   else if (kind === 'ups-all') { const [bought, spent] = mineBuyAllUps(g); if (!bought) return; mineNote(`bought ${bought} upgrade${bought === 1 ? '' : 's'} for ${fmtFull(spent)} tokens`); }
   else { const up = mineUpById(g, id); const c = up ? mineUpCost(g, up) : Infinity; if (!up || g.ups.includes(up.id) || g.bank < c) return; g.bank -= c; g.ups.push(up.id); g.upsBought += 1; }
   mineSave(); mineCheck(g); mineRefresh();
@@ -4752,11 +4764,12 @@ function mineRefresh() {
   const runsEl = box.querySelector('[data-m="runs"]'); const runsKey = g.runs.map((r) => r.at).join(',');
   if (runsEl.dataset.key !== runsKey) { runsEl.dataset.key = runsKey; runsEl.innerHTML = g.runs.length ? `<span class="dim">runs</span>${g.runs.slice().reverse().map((r) => `<span title="${esc(new Date(r.at).toLocaleString())}">${r.kind === 'ipo' ? 'went public' : `v${r.v}`} · ${fmtDurLong(r.secs)} · +${fmtFull(r.got)} ${r.kind === 'ipo' ? 'share' : 'star'}${r.got === 1 ? '' : 's'}</span>`).join('')}` : ''; }
   const unitsEl = $('#mine-units'); const ukey = `${mineUnitsOpen(g).map((u) => u.id).join(',')}|${JSON.stringify(g.names)}|${mineHas(g, 'names') ? 1 : 0}`;
-  if (unitsEl.dataset.key !== ukey) { unitsEl.dataset.key = ukey; unitsEl.innerHTML = mineUnitsOpen(g).map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${mineHas(g, 'names') ? `<span class="rn" data-rename="${u.id}" title="rename">${esc(mineUnitName(g, u))}</span>` : esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join(''); }
+  if (unitsEl.dataset.key !== ukey) { unitsEl.dataset.key = ukey; unitsEl.innerHTML = mineUnitsOpen(g).map((u) => `<div class="mine-unit" data-unit="${u.id}"><div class="nm">${mineHas(g, 'names') ? `<span class="rn" data-rename="${u.id}" title="rename">${esc(mineUnitName(g, u))}</span>` : esc(u.name)}<b data-m="n"></b><span data-m="urate"></span></div><div class="ds">${esc(u.desc)}</div><div class="ul" data-m="unlock"></div><div class="fl" data-m="floor"></div><button data-buy="${u.id}" title="${fmtMine(u.rate)} tokens per second each"><span data-m="cost"></span></button></div>`).join(''); }
   const um = mineUpsMult(g);
   for (const u of mineUnitsOpen(g)) {
     const row = box.querySelector(`[data-unit="${u.id}"]`); const n = g.units[u.id] || 0; const cost = mineUnitCost(u, n);
-    row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.classList.toggle('owned', n > 0); row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * um * mineMult(g) * mineAgentMult(g) * 10) / 10)}/s` : '';
+    row.querySelector('[data-m="n"]').textContent = n ? `× ${n}` : ''; row.classList.toggle('owned', n > 0); row.querySelector('[data-m="urate"]').textContent = n ? `${fmtMine(Math.round(n * u.rate * mineUnlockMult(n) * um * mineMult(g) * mineAgentMult(g) * 10) / 10)}/s` : '';
+    const ulN = mineUnlocks(n); const ulTxt = ulN ? `unlock ${ulN}: every one mines ×${fmtMine(mineUnlockMult(n))} · the next at ${fmtFull(mineUnlockNext(n))} hired` : n >= MINE_UNLOCK_AT / 2 ? `first unlock at ${fmtFull(MINE_UNLOCK_AT)} hired: every one mines ×2, and again every ${MINE_UNLOCK_EVERY} more` : ''; const ulEl = row.querySelector('[data-m="unlock"]'); if (ulEl.textContent !== ulTxt) ulEl.textContent = ulTxt;
     const fl = row.querySelector('[data-m="floor"]'); const floor = n ? u.glyph.repeat(Math.min(n, 60)) + (n > 60 ? ` +${fmtFull(n - 60)}` : '') : ''; if (fl.textContent !== floor) fl.textContent = floor;
     const k = mineBuyCount(u, g); const costK = k ? mineUnitCostN(u, n, k) : cost;
     row.querySelector('[data-m="cost"]').textContent = k > 1 ? `×${fmtFull(k)} · ${fmtMine(costK)} tokens` : `${fmtMine(costK)} tokens`; row.querySelector('button').disabled = !k || g.bank < costK;

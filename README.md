@@ -434,8 +434,12 @@ error details, and an "approve all" button answers every approval at once.
   mechanical keyboard to a thousand hands, that multiply clicks or add
   seconds of the mine to each), with a ×1 / ×10 / ×100 / max buy amount on
   the agents card and a "buy all affordable" button on the upgrades
-  (unaffordable ones say how long they take at the current rate). Fast
-  clicks in a
+  (unaffordable ones say how long they take at the current rate). An agent
+  kind with a thousand hired gets an **unlock**: every one of them mines
+  twice as fast, and again at every hundred more (1,100, 1,200...) with no
+  last one; the agent's row says which unlock it is on and where the next
+  lands, a toast marks each, and a release takes the unlocks with the
+  agents. Fast clicks in a
   row build a combo up to ×5. Surprises pop up now and then in the part of
   the tab that is on screen (a free retry, a prompt cache hit, a rate limit
   lifted, the intern's stash): click one before it goes for a lump of tokens
