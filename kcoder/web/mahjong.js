@@ -145,7 +145,9 @@ function fit() {   // the board has a fixed size per layout; on a narrow pane it
   const W = geo.w * TW / 2 + geo.zmax * OFF + 2 * PAD + 4, H = geo.h * TH / 2 + geo.zmax * OFF + 2 * PAD + 6, s = Math.min(1, Math.max(200, pane.clientWidth - 36) / W), b = wrap.firstElementChild;
   b.style.width = `${W}px`; b.style.height = `${H}px`; b.style.transform = s < 1 ? `scale(${s})` : ''; wrap.style.width = `${Math.round(W * s)}px`; wrap.style.height = `${Math.round(H * s)}px`;
 }
-function overlay(title, sub, buttons) { const el = pane.querySelector('[data-mj="over"]'); el.hidden = false; el.innerHTML = `<div class="t">${esc(title)}</div><div class="dim">${esc(sub)}</div><div class="b">${buttons.map(([k, l]) => `<button data-mj="${k}">${esc(l)}</button>`).join('')}</div>`; }
+// the overlay is rewritten only when its words change: render runs on every daemon message, and a button replaced between
+// mousedown and mouseup never gets its click, so with sessions streaming the cleared and no-moves panels could not be clicked
+function overlay(title, sub, buttons) { const el = pane.querySelector('[data-mj="over"]'); el.hidden = false; const html = `<div class="t">${esc(title)}</div><div class="dim">${esc(sub)}</div><div class="b">${buttons.map(([k, l]) => `<button data-mj="${k}">${esc(l)}</button>`).join('')}</div>`; if (el.dataset.key !== html) { el.dataset.key = html; el.innerHTML = html; } }
 function render() {
   if (!pane) return; const g = load(), L = layoutOf(g), geo = geom(L), p = alive(g), fr = freeList(g, p), frS = new Set(fr), c = career(), today = mineDay();
   const left = p.filter(Boolean).length, pairs = groups(g, fr).reduce((n, x) => n + Math.floor(x.length / 2), 0), best = c.bestTime[L.id] || 0, D = diffOf(L);
