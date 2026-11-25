@@ -16,7 +16,7 @@ const SLASH = [
   ['/title', 'set the chat title'], ['/name', 'rename the session'], ['/queue', 'add a follow-up task'],
   ['/fork', 'fork this chat'], ['/compact', 'summarise history to free context'], ['/export', 'download as markdown'], ['/recap', 'where we left off (/recap new rewrites it)'],
   ['/archive', 'archive this chat'], ['/shell', 'toggle the shell pane'], ['/grid', 'sessions: the grid'],
-  ['/panes', 'sessions: 1 to 3 panes (/panes 2)'], ['/terminal', 'toggle this pane between chat and terminal view'],
+  ['/panes', 'sessions: 1 to 4 panes (/panes 2)'], ['/terminal', 'toggle this pane between chat and terminal view'],
 ];
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -149,9 +149,10 @@ matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { i
 // full screen with a back arrow, the composer above the keyboard, dialogs edge to edge); CSS keys on data-phone
 const PHONE_MQ = matchMedia('(max-width: 640px)');
 function isPhone() { return PHONE_MQ.matches; }
-function applyPhone() { document.documentElement.toggleAttribute('data-phone', isPhone()); if (isPhone() && state.view === 'chat') setView('wall'); }
-PHONE_MQ.addEventListener('change', () => { applyPhone(); renderAll(); });
-applyPhone();
+// at load the view is only set (setView would sync and render before the rest of the script exists, and a saved chat view on a narrow window took the whole app down with it); once the window changes size setView does the full switch
+function applyPhone(live) { document.documentElement.toggleAttribute('data-phone', isPhone()); if (isPhone() && state.view === 'chat') { if (live) setView('wall'); else { state.view = 'wall'; localStorage.setItem('kcoder.view', 'wall'); } } }
+PHONE_MQ.addEventListener('change', () => { applyPhone(true); renderAll(); });
+applyPhone(false);
 
 // ----------------------------------------------------------------------
 // connection
@@ -318,7 +319,7 @@ function applyUrlParams() {
   const ref = q.get('sid');
   if (ref) { const s = Array.from(state.sessions.values()).find((x) => x.id === ref || x.name === ref) || state.chats.find((x) => x.id === ref || x.name === ref); if (s) { state.sid = s.id; localStorage.setItem('kcoder.sid', s.id); } }
   if (q.get('focus') && state.sid) state.focus = state.sid;
-  if (q.get('panes')) { const find = (r) => { const s = Array.from(state.sessions.values()).find((x) => x.id === r || x.name === r) || state.chats.find((x) => x.id === r || x.name === r); return s ? s.id : null; }; state.layout.panes = q.get('panes').split(',').slice(0, 3).map(find); state.layout.focus = 0; state.layout.zoom = null; saveLayout(); }
+  if (q.get('panes')) { const find = (r) => { const s = Array.from(state.sessions.values()).find((x) => x.id === r || x.name === r) || state.chats.find((x) => x.id === r || x.name === r); return s ? s.id : null; }; state.layout.panes = q.get('panes').split(',').slice(0, MAX_PANES).map(find); state.layout.focus = 0; state.layout.zoom = null; saveLayout(); }
   if (q.get('pin')) { state.pins = q.get('pin').split(',').map((r) => { const s = Array.from(state.sessions.values()).find((x) => x.id === r || x.name === r); return s ? s.id : r; }); savePins(); }
   renderViews();
 }
@@ -789,11 +790,12 @@ function renderViews() {
   for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === tabOf(state.view));
   renderSessionsBar();
 }
-// the sessions tab: the grid of every live session, or 1 to 3 panes side by side
+// the sessions tab: the grid of every live session, or 1 to 4 panes side by side
+const MAX_PANES = 4;
 function openSessions() { if (state.view === 'wall' || state.view === 'chat') return; setView(localStorage.getItem('kcoder.sessionsView') === 'chat' ? 'chat' : 'wall'); }
 function setLayout(which) {
   if (which === 'grid') { if (state.view !== 'wall') setView('wall'); else renderSessionsBar(); return; }
-  const n = isPhone() ? 1 : Math.max(1, Math.min(3, Number(which) || 1));
+  const n = isPhone() ? 1 : Math.max(1, Math.min(MAX_PANES, Number(which) || 1));
   const L = state.layout;
   if (!Array.isArray(L.panes) || !L.panes.length) L.panes = [null];
   while (L.panes.length < n) L.panes.push(null);
@@ -1805,7 +1807,7 @@ async function slashCommand(sid, line) {
       case '/archive': await request('archive', { sid }); return true;
       case '/shell': setPaneView(sid, paneViewOf(sid) === 'shell' ? 'chat' : 'shell'); if (state.view !== 'wall') { setView('wall'); } focusPane(sid); return true;
       case '/wall': case '/grid': setLayout('grid'); return true;
-      case '/chat': case '/panes': setLayout(arg && /^[123]$/.test(arg) ? arg : (state.view === 'chat' ? String(state.layout.panes.length) : '1')); return true;
+      case '/chat': case '/panes': setLayout(arg && /^[1234]$/.test(arg) ? arg : (state.view === 'chat' ? String(state.layout.panes.length) : '1')); return true;
       case '/terminal': { const p = state.view === 'chat' ? $$('#split .cpane').find((x) => x.dataset.sid === sid) : null; if (p) toggleCpaneView(p); else { setPaneView(sid, paneViewOf(sid) === 'term' ? 'chat' : 'term'); if (state.view !== 'wall') setView('wall'); focusPane(sid); } return true; }
       default: return false;
     }
@@ -3056,6 +3058,7 @@ const SHORTCUTS = [
   { id: 'l-1', palette: 'sessions: 1 pane', run: () => setLayout('1') },
   { id: 'l-2', palette: 'sessions: 2 panes', run: () => setLayout('2') },
   { id: 'l-3', palette: 'sessions: 3 panes', run: () => setLayout('3') },
+  { id: 'l-4', palette: 'sessions: 4 panes', run: () => setLayout('4') },
   { id: 'about', palette: 'about kcoder', run: () => aboutDialog() },
   { id: 'fullscreen', palette: 'full screen', run: () => toggleFullscreen() },
   { id: 'new', palette: 'new session', run: () => openNewSession() },
@@ -3151,7 +3154,7 @@ setInterval(() => { renderHeader(); if (state.view === 'wall') for (const p of $
 window.addEventListener('resize', () => { for (const sid of state.shells.keys()) fitShell(sid); });
 
 // ----------------------------------------------------------------------
-// split view: 1 to 3 session panes side by side, each fully independent
+// split view: 1 to 4 session panes side by side, each fully independent
 // ----------------------------------------------------------------------
 function saveLayout() { localStorage.setItem('kcoder.layout', JSON.stringify(state.layout)); syncUiState(); }
 function paneSid(i) { return state.layout.panes[i] || null; }
@@ -3174,7 +3177,7 @@ function assignPane(i, sid) {
   renderSplit(); renderSidebar(); renderTitlebars(); focusComposer();
 }
 function splitAdd(sid) {
-  if (state.layout.panes.length >= 3) { toast('up to 3 panes side by side', 'warn'); return; }
+  if (state.layout.panes.length >= MAX_PANES) { toast(`up to ${MAX_PANES} panes side by side`, 'warn'); return; }
   state.layout.panes.push(sid || null); state.layout.focus = state.layout.panes.length - 1; state.layout.zoom = null; saveLayout();
   if (sid) loadEvents(sid, -1);
   renderSplit(); renderSidebar();
@@ -3204,7 +3207,7 @@ function renderSplit() {
   const split = $('#split'); if (!split) return;
   const L = state.layout;
   if (!Array.isArray(L.panes) || !L.panes.length) L.panes = [null];
-  L.panes = L.panes.slice(0, 3);
+  L.panes = L.panes.slice(0, MAX_PANES);
   L.focus = Math.max(0, Math.min(L.focus || 0, L.panes.length - 1));
   if (L.zoom != null && L.zoom >= L.panes.length) L.zoom = null;
   split.dataset.n = L.panes.length;

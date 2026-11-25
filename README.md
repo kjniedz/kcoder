@@ -28,7 +28,7 @@ them in one window. Developed by Kyle Niedzwiecki.
 
 <table>
 <tr>
-<td width="33%"><img src="docs/sessions.png" alt="The sessions grid: every live session as a pane"><br><sub><b>Sessions</b>: every live session as a pane, or 1 to 3 side by side</sub></td>
+<td width="33%"><img src="docs/sessions.png" alt="The sessions grid: every live session as a pane"><br><sub><b>Sessions</b>: every live session as a pane, or 1 to 4 side by side</sub></td>
 <td width="33%"><img src="docs/changes.png" alt="Diff review: accept, edit or reject each hunk, then approve, merge or open a draft PR"><br><sub><b>Diff review</b>: accept, edit or reject each hunk, then approve, merge or open a PR</sub></td>
 <td width="33%"><img src="docs/stats.png" alt="Stats: tokens, lines of code, commits, sessions, cache use and more"><br><sub><b>Stats</b>: tokens, lines of code, commits, cache use, activity</sub></td>
 </tr>
@@ -177,8 +177,8 @@ place.
 
 ### Sessions
 
-The sessions tab shows every live session as a **grid** of panes, or **1, 2 or
-3 sessions side by side** with the project sidebar. The `grid / 1 / 2 / 3`
+The sessions tab shows every live session as a **grid** of panes, or **1, 2, 3
+or 4 sessions side by side** with the project sidebar. The `grid / 1 / 2 / 3 / 4`
 picker above the sessions switches layouts (the palette does too). Drag a chat from
 the sidebar onto a pane, or click the pane's name to pick one. The layout is
 remembered.
@@ -204,7 +204,7 @@ review, merge, PR and discard, preview, the instructions file, export,
 archive), and ✕ in the corner closes it; the composer sits above the
 keyboard, the status bar fits the active, token and commit counts beside the
 plan button, the search field becomes a button that opens the palette,
-dialogs run edge to edge, the sidebar and the 2 and 3 pane layouts fold
+dialogs run edge to edge, the sidebar and the 2, 3 and 4 pane layouts fold
 away, and stats, the inbox, the mine and the games go single column; the
 stats tables keep their name and token columns (the rest come back on a
 wider screen) and the commits list is a card per commit with its subject on
