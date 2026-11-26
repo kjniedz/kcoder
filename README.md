@@ -168,8 +168,8 @@ want built, and watch it work.
 
 **Header**, left to right: the KCODER banner (click it for About), the
 **sessions / stats / fun** tabs, a **search or run a command**
-field (the command palette, ⌘K), the **inbox** with a badge for everything
-waiting on you, and **+ new**. That is all the header ever holds. Everything
+field (the command palette, ⌘K) and **+ new**. That is all the header ever
+holds. Everything
 informational sits in the one-line **status bar** at the bottom: daemon
 status, active sessions, tokens and commits today, your Claude plan status
 and the version. Each item clicks through to the right
@@ -393,7 +393,9 @@ accent with its live readings. All of the look is per browser. The day
 moon calendar.
 
 **The inbox.** Everything waiting on you is one list: approvals, questions,
-changes to review, errors. "Next item waiting on you" in the palette shows
+changes to review, errors. It opens from the palette ("approval inbox"); there
+is no button for it in the header, since with the default trust nothing waits
+for an approval. "Next item waiting on you" in the palette shows
 the next one; yes / no on a pane answers it and the next comes up by itself.
 In the inbox: <kbd>↑</kbd>/<kbd>↓</kbd> move, yes / no answer and the
 selection moves on, <kbd>↩</kbd> opens a question, the changes view or the
@@ -401,9 +403,10 @@ error details, and an "approve all" button answers every approval at once.
 
 ### Inbox, stats, settings
 
-- **Inbox**: every pending tool approval and every session waiting for an
-  answer, from all sessions, in one list. Yes / no answer, "approve all"
-  approves all. Sessions in error show here too, with details.
+- **Inbox** (⌘K → approval inbox): every pending tool approval and every
+  session waiting for an answer, from all sessions, in one list. Yes / no
+  answer, "approve all" approves all. Sessions in error show here too, with
+  details.
 - **Stats**: pick the period at the top (today, 7, 30 or 90 days, all
   time, or any single day from the date picker, the daily table or the
   calendar) and every number on the page follows it, with today, 7-day,
@@ -565,8 +568,9 @@ error details, and an "approve all" button answers every approval at once.
   milestones count boards cleared (one to 250) and daily deals (one, a
   week, a month). Deals, boards cleared, best time and daily deals show on
   the stats page next to the mine.
-- **Settings** (⌘,): sound, default trust, model routing, effort, review
-  policy, auto-publish, daily spend cap, the weekly plan limit (token
+- **Settings** (⌘,): sound, default trust, model routing, effort,
+  auto-publish, CI auto-fix, handoff, the plan price, daily spend cap, the
+  weekly plan limit (token
   limit, reset day and hour, quota shift), plus links to your Claude plan,
   providers, GitHub and the phone, the short list of keyboard
   shortcuts, updates, restart and uninstall. About (banner click, or the
@@ -644,7 +648,8 @@ work as a checkpoint on the branch; resuming recreates the worktree.
 
 **Diff review.** The **changes** view shows everything the session changed:
 accept, reject (undone in the worktree) or edit each hunk, then **approve**.
-The review policy (Settings) says when approval is required: before `push`
+The review policy (⌘K → set review policy, or `review_required` in
+`~/.config/kcoder/config.json`) says when approval is required: before `push`
 (default; covers merges and PRs even with trust `auto`), before every
 `commit`, or `none`. It is enforced by git hooks in every worktree, so it
 applies to the agent's own `git push` too. When the agent pushes something
@@ -744,8 +749,8 @@ waits for your approval first, with the exact call shown ("Gmail · send_email:
 to=sam@example.com, subject=…") on the pane, in the inbox and on your phone.
 Approve within about four minutes and it goes through; otherwise the agent is
 told to wait, and a later approval lets the same call through without asking
-again. Unknown connector tools ask. Off switch in Settings ("Connector
-approvals").
+again. Unknown connector tools ask. Off switch: ⌘K → toggle connector
+approvals (`connector_approvals` in the config file).
 
 **One `claude` process per session.** A Claude session keeps its `claude`
 process up between turns and hands it each new message over stdin, so the
@@ -798,9 +803,8 @@ every rule it understood and what it does; the pane chip shows the count.
 
 - **Morning brief**: the first time you open kcoder each day it shows what
   every session did since yesterday (what you asked, its last reply, commits
-  with files and lines, PR and checks, running jobs), what is waiting on you
-  (approvals, questions, errors) and what is in review (changes, open PRs
-  with their checks), plus your plan usage. Every item
+  with files and lines, PR and checks, running jobs) and what is in review
+  (changes, open PRs with their checks), plus your plan usage. Every item
   opens the session. Any time: ⌘K → brief, or `kcoder brief` (`--since 72`
   for three days); **copy** gives it as markdown.
 - **Auto-fix on CI failure**: kcoder polls the checks of every open PR a

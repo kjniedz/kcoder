@@ -308,12 +308,21 @@ def install_status_item(api, url: str):
             def openBrowser_(self, sender):
                 webbrowser.open(self.url)
 
+            def js_(self, script):
+                """Run a line of JS in the page from a menu action. pywebview's evaluate_js schedules the
+                script on the main thread and then blocks on a semaphore until it has run; a menu action
+                is already on the main thread, so calling it there waits on itself forever and the app
+                goes "not responding" (About kcoder did exactly that). Hand it to a worker thread."""
+                def go():
+                    try:
+                        self.api.window.evaluate_js(script)
+                    except Exception:  # noqa: BLE001
+                        pass
+                threading.Thread(target=go, name="menu-js", daemon=True).start()
+
             def newSession_(self, sender):
                 self.showWindow_(sender)
-                try:
-                    self.api.window.evaluate_js("openNewSession()")
-                except Exception:  # noqa: BLE001
-                    pass
+                self.js_("openNewSession()")
 
             def quit_(self, sender):
                 AppKit.NSApp.terminate_(None)
@@ -321,10 +330,7 @@ def install_status_item(api, url: str):
             def about_(self, sender):
                 """kcoder > About kcoder: the About panel inside the app, not the stock one."""
                 self.showWindow_(sender)
-                try:
-                    self.api.window.evaluate_js("aboutDialog()")
-                except Exception:  # noqa: BLE001
-                    pass
+                self.js_("aboutDialog()")
 
             def patchAbout_(self, sender):
                 """Point the application menu's About item at about: (main thread only)."""

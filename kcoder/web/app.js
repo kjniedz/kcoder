@@ -709,11 +709,9 @@ function renderHeader() {
   // header: navigation and actions only; everything informational is in the status bar
   $('#banner').textContent = BANNER;
   const big = $('#wall-empty .banner'); if (big && !big.textContent) big.textContent = BANNER;
+  // no inbox button: with trust auto nothing waits for an approval, so the list lives in the palette (approval inbox, next item waiting on you) and on the panes; the count stays in the window title
   const st = state.stats || {};
-  const n = (st.pending_approvals || []).length;
-  const needs = Math.max(n, st.waiting || 0);   // approvals + sessions waiting on an answer
-  const c = $('#inbox-count'); c.hidden = !needs; c.textContent = needs;
-  $('#btn-inbox').title = needs ? `${needs} waiting on you: approvals and questions` : 'Inbox: approvals and sessions waiting on you';
+  const needs = Math.max((st.pending_approvals || []).length, st.waiting || 0);   // approvals + sessions waiting on an answer
   for (const b of $$('.views button')) b.classList.toggle('active', b.dataset.view === tabOf(state.view));
   renderSessionsBar();
   renderStatusBar();
@@ -2192,7 +2190,7 @@ async function openNewSession(pre = {}) {
 function paletteItems() {
   const items = SHORTCUTS.filter((sc) => sc.palette).map((sc) => [sc.palette, () => sc.run({ key: '' }), shortcutKeys(sc)]);
   items.push(
-    ['brief: what every session did, what waits on you, what is in review', () => briefDialog()],
+    ['brief: what every session did, what is in review', () => briefDialog()],
     ['search transcripts with filters (repo, date, who)', () => searchDialog($('#search').value.trim())],
     ['settings', () => settingsDialog()], ['customize (theme, style, colours, conditions)', () => customizeDialog()], ['about kcoder', () => aboutDialog()], ['your Claude plan (connect, limits)', () => claudeDialog()],
     ['connect your AI (sign in to a provider)', () => setupDialog()], ['connect GitHub (commit identity)', () => setupDialog()], 
@@ -2207,6 +2205,7 @@ function paletteItems() {
     ['phone (pair a phone, notifications, the relay)', phoneDialog],
     ['toggle model routing (auto = cheap for small tasks, strong for large)', async () => { const on = !(state.config && state.config.routing && state.config.routing.enabled !== false); const r = await request('config', { routing_enabled: !on }); state.config = r.config; toast('model routing: ' + (!on ? 'on' : 'off'), 'ok'); }],
     ['set review policy (when the changes view must approve)', async () => { const v = await chooseDialog('Review required before…', [['push', 'push - PRs, pushes and merges need an approved review (default)'], ['commit', 'commit - every commit needs an approved review'], ['none', 'none - review is optional']]); if (v) { const r = await request('config', { review_required: v }); state.config = r.config; toast('review required before: ' + v, 'ok'); } }],
+    ['toggle connector approvals (sends and changes through Gmail, Calendar, Drive, Linear… wait for a yes)', async () => { const on = !(state.config && state.config.connector_approvals === false); const r = await request('config', { connector_approvals: !on }); state.config = r.config; toast('connector approvals: ' + (!on ? 'on' : 'off'), 'ok'); }],
     ['check for new commits', checkUpdates], ['pull + rebuild + restart kcoderd', updateNow], ['restart kcoderd', restartDaemon],
     ['uninstall kcoder…', uninstallDialog],
   );
@@ -2336,7 +2335,7 @@ function toggleVoice(comp) {
   comp._rec = rec; if (mic) { mic.classList.add('listening'); mic.title = 'Listening… click to stop'; }
 }
 
-// ---- the morning brief: what every session did, what waits on you, what is in review ----
+// ---- the morning brief: what every session did and what is in review (approvals are not listed: with trust auto there are none) ----
 async function briefDialog(opts = {}) {
   let r; try { r = await request('brief', { since: opts.since || null }); } catch (e) { toast(e.message, 'err'); return; }
   const b = r.brief, t = b.totals;
@@ -2351,7 +2350,6 @@ async function briefDialog(opts = {}) {
   const d = openDialog(`<h2>brief <span class="help">since ${esc(when(b.since))}</span><span class="spacer"></span><button data-b="24">24h</button><button data-b="72">3 days</button><button data-b="168">week</button><button data-b="copy" title="copy as markdown">copy</button><button data-x="close">✕</button></h2>
     <div class="body brief">
       <div class="status"><span><b>${t.sessions}</b> session(s)</span><span><b>${t.turns}</b> turn(s)</span><span><b>${fmtTokens(t.tokens)}</b> tokens</span><span><b>${t.commits}</b> commit(s) · ${t.files} file(s) · <span class="add">+${t.added}</span> <span class="del">-${t.removed}</span></span>${t.cost ? `<span>${fmtUsd(t.cost)} on API keys</span>` : ''}${(b.plan || []).map((p) => `<span>${esc(p.label)} <b>${Math.round(p.utilization * 100)}%</b></span>`).join('')}</div>
-      <div class="label-h">waiting on you · ${b.waiting.length}</div><div class="list">${b.waiting.map(item).join('') || '<div class="empty-row">nothing</div>'}</div>
       <div class="label-h">in review · ${b.review.length}</div><div class="list">${b.review.map(item).join('') || '<div class="empty-row">nothing</div>'}</div>
       <div class="label-h">sessions · ${b.sessions.length}</div>${b.sessions.map(sess).join('') || '<div class="empty-row">no session was active</div>'}
     </div>`, 'brief');
@@ -2369,7 +2367,7 @@ function maybeMorningBrief() {
   const seen = Number(localStorage.getItem('kcoder.brief.seen') || 0);
   if (seen && new Date(seen).toDateString() === new Date().toDateString()) return;
   if (state.dialog) return;
-  request('brief', {}).then((r) => { const b = r.brief; if (!b.sessions.length && !b.waiting.length && !b.review.length) { localStorage.setItem('kcoder.brief.seen', String(Date.now())); return; } if (!state.dialog) briefDialog(); }).catch(() => {});
+  request('brief', {}).then((r) => { const b = r.brief; if (!b.sessions.length && !b.review.length) { localStorage.setItem('kcoder.brief.seen', String(Date.now())); return; } if (!state.dialog) briefDialog(); }).catch(() => {});
 }
 
 // ---- what went wrong: the last error of a session, with send-again and a copyable report ----
@@ -2509,9 +2507,7 @@ async function settingsDialog() {
     ${sel('default_trust', cfg.default_trust || 'auto', 'Default trust for new sessions', [['auto', 'auto - never ask'], ['write', 'write - gate shell'], ['read', 'read - gate writes + shell'], ['none', 'none - ask for everything']])}
     ${chk('routing_enabled', !(cfg.routing && cfg.routing.enabled === false), 'Model routing', 'auto picks a cheap model for small turns, a strong one for large')}
     ${sel('effort', cfg.effort || 'medium', 'Effort (Claude sessions)', [['default', 'default - Claude Code\'s own'], ['low', 'low - quickest, least of the plan'], ['medium', 'medium - the everyday setting'], ['high', 'high - harder tasks'], ['xhigh', 'xhigh'], ['max', 'max - the most thinking, the most of the plan']])}
-    ${sel('review_required', cfg.review_required || 'push', 'Review required before', [['push', 'push - PRs, pushes and merges'], ['commit', 'commit - every commit'], ['none', 'none - review is optional']])}
     ${chk('auto_publish', cfg.auto_publish === true, 'Auto-publish local folders to GitHub', 'a private repo is created and pushed for folders with no remote')}
-    ${chk('connector_approvals', cfg.connector_approvals !== false, 'Connector approvals', 'reads (Gmail, Calendar, Drive, Linear…) run by themselves; sends and changes wait for your approval')}
     ${chk('ci_autofix', cfg.ci_autofix !== false, 'Auto-fix on CI failure', 'a red check on a session\'s PR sends the failing log to that session; its fix is pushed through the usual review gate (at most three rounds per PR)')}
     ${chk('handoff', cfg.handoff !== false, 'Automatic handoff', 'at the compaction point the session writes a handoff summary and continues as a fresh session in the same worktree (off: the history is summarised in place)')}
     <label class="setting"><span>Claude plan price (USD / month) <span class="help">the stats page's "paid for itself" badges compare API-equivalent usage with it</span></span><input type="number" min="0" step="1" data-set="plan_price_usd" value="${Number(cfg.plan_price_usd == null ? 200 : cfg.plan_price_usd)}"></label>
@@ -3113,7 +3109,6 @@ document.addEventListener('keydown', (e) => {
 
 // header buttons
 for (const b of $$('.views button')) b.addEventListener('click', () => (b.dataset.view === 'wall' ? openSessions() : setView(b.dataset.view)));
-$('#btn-inbox').addEventListener('click', openInbox);
 $('#btn-new').addEventListener('click', () => openNewSession());
 $('#btn-search').addEventListener('click', () => openPalette());
 $('#status-items').addEventListener('click', (e) => { if (e.target.closest('[data-phone]')) phoneDialog(); });
